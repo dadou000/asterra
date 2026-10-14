@@ -31,6 +31,7 @@
 #include <orbit/lighting/MaterialEmission.hpp>
 #include <orbit/path_geometry/PathDerived.hpp>
 #include <orbit/path_geometry/PathSource.hpp>
+#include <orbit/path_geometry/RoadCatalog.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
 #include <orbit/path_routing/RoutePlanner.hpp>
 #include <orbit/paths/PathNetwork.hpp>
@@ -745,6 +746,27 @@ void StudioViewportPanel::Register()
                 viewportEndWasDown =
                     endDown;
 
+                if(infrastructureDrawMode && viewportRadialOpen)
+                {
+                    // Right click finishes the current continuous chain,
+                    // but leaves the chosen construction tool armed.
+                    lastPlacedPathNode.reset();
+                    viewportRadialOpen=false;
+                    infrastructureLastAction=
+                        "Chain finished. Left-click to start a new road.";
+                    infrastructurePlacementError.clear();
+                }
+                if(infrastructureDrawMode && interaction.hovered &&
+                   context.KeyPressed(orbit::editor_ui::UiKey::Escape))
+                {
+                    // Escape exits construction entirely. The authored
+                    // network is never discarded or rewritten.
+                    pathPlacementMode=false;
+                    infrastructureDrawMode=false;
+                    lastPlacedPathNode.reset();
+                    infrastructureLastAction="Road construction exited.";
+                    infrastructurePlacementError.clear();
+                }
                 const bool hasAuthoredBody =
                     bodyObject.IsValid() &&
                     bodyId.IsValid() &&
@@ -753,7 +775,8 @@ void StudioViewportPanel::Register()
 
                 if (!hasAuthoredBody)
                 {
-                    pathPlacementMode = false;
+                    pathPlacementMode=false;
+                    infrastructureDrawMode=false;
                     lastPlacedPathNode.reset();
                     context.Text(
                         "No celestial body is authored in this world.");
@@ -937,6 +960,267 @@ void StudioViewportPanel::Register()
                     }
                 }
 
+                // Elevation shortcuts are edge-triggered, never per-frame
+                // auto-repeat. Shift moves in five-metre increments.
+                const bool pageUp=window.KeyDown(
+                    orbit::platform::Key::PageUp);
+                const bool pageDown=window.KeyDown(
+                    orbit::platform::Key::PageDown);
+                if(infrastructureDrawMode && pathPlacementMode &&
+                   interaction.hovered)
+                {
+                    const double delta=window.KeyDown(
+                        orbit::platform::Key::LeftShift)?5.0:1.0;
+                    if(pageUp && !infrastructurePageUpWasDown)
+                        infrastructureElevationMeters=std::min(100000.0,
+                            infrastructureElevationMeters+delta);
+                    if(pageDown && !infrastructurePageDownWasDown)
+                        infrastructureElevationMeters=std::max(-10000.0,
+                            infrastructureElevationMeters-delta);
+                }
+                infrastructurePageUpWasDown=pageUp;
+                infrastructurePageDownWasDown=pageDown;
+                // Cities-style live construction preview: use the exact
+                // same surface ray, semantic network and snap radius that
+                // the committed click will use. No authored state is touched.
+                std::optional<orbit::paths::PathNodeRecord> previewSnap;
+                std::optional<orbit::math::Double3> previewPoint;
+                infrastructureHoverValid=false;
+                infrastructurePreviewSnapped=false;
+                infrastructurePreviewLengthMeters=0.0;
+                if(infrastructureDrawMode && pathPlacementMode &&
+                   interaction.hovered)
+                {
+                    const auto* activeBody=bodies().FindBody(bodyId);
+                    const auto ray=orbit::render_view::ViewportRay(
+                        primaryView->Camera(),primaryView->Width(),
+                        primaryView->Height(),interaction.u,interaction.v);
+                    if(activeBody && ray)
+                        previewPoint=orbit::universe::IntersectReferenceSurfaceRay(
+                            activeBody->shape,ray->origin,ray->direction);
+                    if(previewPoint)
+                    {
+                        // Explicit body-fixed reference-elevation offset.
+                        // Never mistake this for a terrain-height query.
+                        *previewPoint=*previewPoint+
+                            orbit::math::Normalize(*previewPoint)*
+                                infrastructureElevationMeters;
+                        infrastructureHoverValid=true;
+                        auto& service=studioSession.PathNetwork().Service();
+                        std::optional<orbit::paths::NetworkId> network;
+                        if(activePathNetwork &&
+                           service.FindNetwork(*activePathNetwork))
+                            network=activePathNetwork;
+                        // Existing Explorer selection is a fallback only.
+                        if(!network && selection().Ordered().size()==1U)
+                        {
+                            const auto selected=objects().Find(
+                                selection().Ordered().front());
+                            if(selected)
+                            {
+                                if(selected->type==orbit::paths::kPathNetworkType)
+                                    network=orbit::paths::NetworkId{
+                                        selected->id.high,selected->id.low};
+                                else if(selected->type==orbit::paths::kPathNodeType &&
+                                        selected->parent)
+                                    network=orbit::paths::NetworkId{
+                                        selected->parent->high,selected->parent->low};
+                            }
+                        }
+                        if(network && infrastructureSnapNodes)
+                        {
+                            if(infrastructureSnapCacheRevision!=objects().Revision() ||
+                               infrastructureSnapCacheNetwork!=*network ||
+                               infrastructureSnapCacheFrame!=activeBody->frame)
+                            {
+                                infrastructureSnapCache.clear();
+                                const orbit::scene::ObjectId parent{
+                                    network->high,network->low};
+                                for(const auto& child:objects().Children(parent))
+                                {
+                                    if(child.type!=orbit::paths::kPathNodeType)
+                                        continue;
+                                    const auto node=service.FindNode(child.id);
+                                    if(!node)continue;
+                                    const auto* fixed=std::get_if<
+                                        orbit::paths::FramePointAnchor>(
+                                            &node->anchor);
+                                    if(!fixed || fixed->frame!=activeBody->frame)
+                                        continue;
+                                    infrastructureSnapCache.emplace_back(
+                                        node->id,fixed->localMeters);
+                                }
+                                infrastructureSnapCacheRevision=objects().Revision();
+                                infrastructureSnapCacheNetwork=*network;
+                                infrastructureSnapCacheFrame=activeBody->frame;
+                            }
+                            orbit::scene::ObjectId closest{};
+                            double distance=infrastructureNodeSnapMeters;
+                            for(const auto& candidate:infrastructureSnapCache)
+                            {
+                                const double d=orbit::math::Length(
+                                    candidate.second-*previewPoint);
+                                if(d<distance)
+                                {
+                                    distance=d;
+                                    closest=candidate.first;
+                                }
+                            }
+                            if(closest)
+                            {
+                                previewSnap=service.FindNode(closest);
+                                if(previewSnap)
+                                {
+                                    const auto* fixed=std::get_if<
+                                        orbit::paths::FramePointAnchor>(
+                                            &previewSnap->anchor);
+                                    if(fixed)
+                                    {
+                                        previewPoint=fixed->localMeters;
+                                        infrastructurePreviewSnapped=true;
+                                    }
+                                }
+                            }
+                        }
+
+                        const auto scale=scaledRender ?
+                            std::min(available.width/
+                                std::max(imageSize.width,1.0F),
+                                available.height/
+                                std::max(imageSize.height,1.0F)) : 1.0F;
+                        const float previewWidth=imageSize.width*scale;
+                        const float previewHeight=imageSize.height*scale;
+                        const auto screen=[&](const orbit::math::Double3 point)
+                            ->std::optional<orbit::math::Float2>
+                        {
+                            const auto uv=orbit::render_view::ProjectToViewport(
+                                primaryView->Camera(),primaryView->Width(),
+                                primaryView->Height(),point);
+                            if(!uv || uv->u<0.0F || uv->u>1.0F ||
+                               uv->v<0.0F || uv->v>1.0F)
+                                return std::nullopt;
+                            return orbit::math::Float2{
+                                uv->u*previewWidth,uv->v*previewHeight};
+                        };
+                        std::vector<orbit::editor_ui::OverlaySegment> strokes;
+                        std::vector<orbit::editor_ui::OverlayDisc> markers;
+                        const auto pointColor=infrastructureAlignmentMode==2 ?
+                            orbit::math::Float4{1.0F,0.77F,0.38F,1.0F} :
+                            infrastructurePreviewSnapped ?
+                            orbit::math::Float4{0.35F,0.92F,0.65F,1.0F} :
+                            orbit::math::Float4{0.48F,0.77F,1.0F,1.0F};
+                        if(const auto pointer=screen(*previewPoint))
+                            markers.push_back({*pointer,
+                                infrastructurePreviewSnapped?9.0F:5.0F,
+                                pointColor,false});
+
+                        if(lastPlacedPathNode)
+                        {
+                            const auto last=service.FindNode(*lastPlacedPathNode);
+                            const auto* fixed=last ?
+                                std::get_if<orbit::paths::FramePointAnchor>(
+                                    &last->anchor):nullptr;
+                            if(fixed && fixed->frame==activeBody->frame)
+                            {
+                                const auto start=fixed->localMeters;
+                                const auto end=*previewPoint;
+                                const auto delta=end-start;
+                                const auto length=orbit::math::Length(delta);
+                                infrastructurePreviewLengthMeters=length;
+                                if(length>0.05 && length<200000.0)
+                                {
+                                    const auto* catalog=orbit::path_geometry::
+                                        FindRoadCatalog(infrastructureCatalogId);
+                                    const double halfWidth=catalog?
+                                        catalog->pavedWidthMeters*0.5:
+                                        infrastructureCatalogId=="ballasted-rail"?
+                                            2.0175:0.0;
+                                    const auto curveSide=orbit::math::Cross(
+                                        orbit::math::Normalize(end),delta)*
+                                        infrastructureCurveBias;
+                                    const auto p1=start+delta*0.33+curveSide;
+                                    const auto p2=end-delta*0.33+curveSide;
+                                    auto centerPrevious=screen(start);
+                                    std::optional<orbit::math::Float2> leftPrevious;
+                                    std::optional<orbit::math::Float2> rightPrevious;
+                                    for(int segment=0;segment<=24;++segment)
+                                    {
+                                        const double t=static_cast<double>(
+                                            segment)/24.0;
+                                        const double inv=1.0-t;
+                                        orbit::math::Double3 point=start+delta*t;
+                                        orbit::math::Double3 tangent=delta;
+                                        if(infrastructureAlignmentMode==1)
+                                        {
+                                            point=start*(inv*inv*inv)+
+                                                p1*(3.0*inv*inv*t)+
+                                                p2*(3.0*inv*t*t)+end*(t*t*t);
+                                            tangent=(p1-start)*(3.0*inv*inv)+
+                                                (p2-p1)*(6.0*inv*t)+
+                                                (end-p2)*(3.0*t*t);
+                                        }
+                                        const auto center=screen(point);
+                                        if(segment>0 && centerPrevious && center &&
+                                           (infrastructureAlignmentMode!=2 ||
+                                            segment%3!=0))
+                                            strokes.push_back({
+                                                *centerPrevious,*center,
+                                                pointColor,2.4F});
+                                        centerPrevious=center;
+                                        if(halfWidth>0.0 &&
+                                           infrastructureAlignmentMode!=2)
+                                        {
+                                            // Reference-ellipsoid tangent
+                                            // shoulders are a geometric guide,
+                                            // not a terrain-conformance claim.
+                                            const auto lateral=orbit::math::Cross(
+                                                orbit::math::Normalize(point),
+                                                tangent);
+                                            const auto lateralLength=orbit::math::
+                                                Length(lateral);
+                                            if(lateralLength>1.0e-5)
+                                            {
+                                                const auto offset=lateral*
+                                                    (halfWidth/lateralLength);
+                                                const auto left=screen(point+offset);
+                                                const auto right=screen(point-offset);
+                                                const orbit::math::Float4 rim{
+                                                    0.82F,0.92F,0.99F,0.9F};
+                                                if(leftPrevious && left)
+                                                    strokes.push_back({
+                                                        *leftPrevious,*left,
+                                                        rim,1.4F});
+                                                if(rightPrevious && right)
+                                                    strokes.push_back({
+                                                        *rightPrevious,*right,
+                                                        rim,1.4F});
+                                                leftPrevious=left;
+                                                rightPrevious=right;
+                                            }
+                                        }
+                                    }
+                                    if(const auto startScreen=screen(start))
+                                        markers.push_back({
+                                            *startScreen,5.0F,
+                                            {1.0F,0.92F,0.62F,1.0F},true});
+                                }
+                            }
+                        }
+                        if(!strokes.empty() || !markers.empty())
+                            context.OverlayShapesOnLastItem(strokes,markers);
+                        context.OverlayLabelOnLastItem(
+                            {12.0F,12.0F},pointColor,
+                            lastPlacedPathNode ?
+                                std::format("{}  |  {:.1f} m{}",
+                                    infrastructureAlignmentMode==0?"Straight":
+                                    infrastructureAlignmentMode==1?"Curve":"Route chord",
+                                    infrastructurePreviewLengthMeters,
+                                    infrastructurePreviewSnapped?"  |  node snap":"") :
+                                (infrastructurePreviewSnapped?
+                                    "Start from existing node":"Click to set first point"));
+                    }
+                }
+
                 if (interaction.clicked &&
                     pathPlacementMode)
                 {
@@ -987,6 +1271,10 @@ void StudioViewportPanel::Register()
                                 "Path placement could not resolve the body surface coordinate.");
                         }
 
+                        const auto authoredPoint=*hit+
+                            orbit::math::Normalize(*hit)*
+                                (infrastructureDrawMode ?
+                                    infrastructureElevationMeters:0.0);
                         auto& pathService =
                             studioSession.PathNetwork().Service();
 
@@ -1063,8 +1351,10 @@ void StudioViewportPanel::Register()
                                 activePathNetwork;
                         }
 
-                        commandService().
-                            BeginTransaction(
+                        commandService().BeginTransaction(
+                            infrastructureDrawMode ?
+                                (lastPlacedPathNode ?
+                                    "Build Road Segment" : "Start Road Chain") :
                                 "Place Path Node");
 
                         try
@@ -1078,7 +1368,7 @@ void StudioViewportPanel::Register()
                                             infrastructureDrawMode ?
                                                 infrastructureCatalogId=="ballasted-rail" ?
                                                     "Rail Network" :
-                                                infrastructureCatalogId=="rural-road" ?
+                                                !infrastructureCatalogId.empty() ?
                                                     "Road Network" : "Path Network" :
                                                 "Path Network",
                                             bodyObject);
@@ -1115,31 +1405,9 @@ void StudioViewportPanel::Register()
                             // Snap to the SAME semantic network, not to any
                             // nearby but topologically unrelated road.
                             if(infrastructureDrawMode &&
-                               infrastructureSnapNodes)
-                            {
-                                f64 best=infrastructureNodeSnapMeters;
-                                for(const auto& child:
-                                    objects().Children(networkObject))
-                                {
-                                    if(child.type!=orbit::paths::kPathNodeType)
-                                        continue;
-                                    const auto existing=pathService.FindNode(
-                                        child.id);
-                                    if(!existing)continue;
-                                    const auto* anchor=std::get_if<
-                                        orbit::paths::FramePointAnchor>(
-                                            &existing->anchor);
-                                    if(!anchor || anchor->frame!=body->frame)
-                                        continue;
-                                    const f64 meters=orbit::math::Length(
-                                        anchor->localMeters-*hit);
-                                    if(meters<best)
-                                    {
-                                        best=meters;
-                                        node=*existing;
-                                    }
-                                }
-                            }
+                               previewSnap &&
+                               previewSnap->network==*targetNetwork)
+                                node=*previewSnap;
                             if(!node.id)
                             {
                                 node=pathService.CreateNode(
@@ -1149,7 +1417,7 @@ void StudioViewportPanel::Register()
                                         orbit::paths::PathAnchor{
                                             orbit::paths::FramePointAnchor{
                                                 .frame=body->frame,
-                                                .localMeters=*hit}} :
+                                                .localMeters=authoredPoint}} :
                                         orbit::paths::PathAnchor{
                                             orbit::paths::SurfaceAnchor{
                                                 .body=bodyId,
@@ -1159,6 +1427,38 @@ void StudioViewportPanel::Register()
                                                     0.0}}});
                             }
 
+                            // Re-clicking the current snapped endpoint is a
+                            // selection/no-op, not a degenerate zero-length
+                            // road or an empty undo-history transaction.
+                            if(infrastructureDrawMode && lastPlacedPathNode &&
+                               *lastPlacedPathNode==node.id)
+                            {
+                                commandService().RollbackTransaction();
+                                infrastructureLastAction=
+                                    "Same endpoint: move the cursor to extend the road, or right-click to start another chain.";
+                                return;
+                            }
+                            // Road meshes require a finite nondegenerate
+                            // chord. Reject short segments before committing.
+                            if(infrastructureDrawMode && lastPlacedPathNode)
+                            {
+                                const auto previous=pathService.FindNode(
+                                    *lastPlacedPathNode);
+                                const auto* a=previous?
+                                    std::get_if<orbit::paths::FramePointAnchor>(
+                                        &previous->anchor):nullptr;
+                                const auto* b=std::get_if<
+                                    orbit::paths::FramePointAnchor>(&node.anchor);
+                                if(a && b && a->frame==b->frame &&
+                                   orbit::math::Length(
+                                       a->localMeters-b->localMeters)<0.5)
+                                {
+                                    throw std::invalid_argument(
+                                        "Road segment is under 0.5 m. Move the endpoint further away.");
+                                }
+                            }
+
+                            orbit::scene::ObjectId newBuiltEdge{};
                             // City-builder construction is opt-in: the
                             // ordinary Path Tool continues to place nodes.
                             // One undo transaction contains the new node,
@@ -1184,7 +1484,7 @@ void StudioViewportPanel::Register()
                                                 &previous->anchor);
                                             fixed && fixed->frame==body->frame)
                                         {
-                                            direction=(*hit-fixed->localMeters)*0.33;
+                                            direction=(authoredPoint-fixed->localMeters)*0.33;
                                         }
                                         else if(const auto* anchor=std::get_if<
                                             orbit::paths::SurfaceAnchor>(
@@ -1196,10 +1496,10 @@ void StudioViewportPanel::Register()
                                                     anchor->coordinate.x,
                                                     anchor->coordinate.y,
                                                     anchor->coordinate.z});
-                                            direction=(*hit-from)*0.33;
+                                            direction=(authoredPoint-from)*0.33;
                                         }
                                         const auto side=orbit::math::Cross(
-                                            orbit::math::Normalize(*hit),
+                                            orbit::math::Normalize(authoredPoint),
                                             direction)*infrastructureCurveBias;
                                         connected=pathService.ConnectBezier(
                                             previous->id,node.id,
@@ -1218,9 +1518,26 @@ void StudioViewportPanel::Register()
                                             infrastructureConstructionMode,
                                             infrastructureDesignSpeedKmh,
                                             infrastructureEaseTurns);
+                                    newBuiltEdge=connected.id;
                                 }
                             }
                             commandService().CommitTransaction();
+                            infrastructurePlacementError.clear();
+                            if(infrastructureDrawMode)
+                            {
+                                if(newBuiltEdge)
+                                {
+                                    infrastructureLastEdge=newBuiltEdge;
+                                    ++infrastructureBuiltEdges;
+                                    infrastructureLastAction=std::format(
+                                        "Built segment {} - {} committed this session.",
+                                        newBuiltEdge.ToString(),
+                                        infrastructureBuiltEdges);
+                                }
+                                else
+                                    infrastructureLastAction=
+                                        "Starting point placed. Click the next point to construct a segment.";
+                            }
 
                             activePathNetwork =
                                 targetNetwork;
@@ -1290,8 +1607,12 @@ void StudioViewportPanel::Register()
                     catch (const std::exception&
                                exception)
                     {
-                        orbit::log::Warning(
-                            exception.what());
+                        if(infrastructureDrawMode)
+                        {
+                            infrastructurePlacementError=exception.what();
+                            infrastructureLastAction.clear();
+                        }
+                        orbit::log::Warning(exception.what());
                     }
                 }
                 else if (

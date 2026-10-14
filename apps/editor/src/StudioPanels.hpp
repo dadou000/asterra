@@ -288,6 +288,24 @@ public:
     f64 infrastructureCurveBias = 0.25;
     bool infrastructureSnapNodes = true;
     f64 infrastructureNodeSnapMeters = 10.0;
+    f64 infrastructureElevationMeters = 0.0;
+    bool infrastructurePageUpWasDown = false;
+    bool infrastructurePageDownWasDown = false;
+    // Live placement readout shared with the Procedurals dock panel.
+    std::string infrastructureLastAction;
+    std::string infrastructurePlacementError;
+    scene::ObjectId infrastructureLastEdge{};
+    u64 infrastructureBuiltEdges{0U};
+    f64 infrastructurePreviewLengthMeters{0.0};
+    bool infrastructurePreviewSnapped{false};
+    bool infrastructureHoverValid{false};
+    // Revision-fenced node snap cache: never scan a large network on each
+    // mouse-motion event. The source scene remains the only authority.
+    u64 infrastructureSnapCacheRevision{~u64{0}};
+    paths::NetworkId infrastructureSnapCacheNetwork{};
+    frames::FrameId infrastructureSnapCacheFrame{};
+    std::vector<std::pair<scene::ObjectId,math::Double3>>
+        infrastructureSnapCache;
     bool pathDebugVisualization = true;
     std::optional<orbit::paths::NetworkId>
         activePathNetwork;

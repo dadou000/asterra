@@ -736,3 +736,7 @@ The same Studio dispatcher provides infrastructure.vehicle_world with action sta
 ## Road-building palette parity
 
 Build → Procedurals → Procedural Paths & Roads is the visual entry to existing PathNetworkService operations and path geometry RPC. Its viewport construction mode calls CreateNetwork, CreateNode, ConnectDirect/ConnectBezier/ConnectRouted and SetInfrastructureIntent under the same CommandService transactions used by agents. Nodes can reuse an existing same-network, same-frame point within configured endpoint snap distance. These low-level operations remain scriptable through the relevant path authoring RPC; a dedicated high-level palette selection/viewport pointer action RPC is **not** yet available. See editor-builder.md for interaction semantics and acceptance.
+
+## Road-builder command parity
+
+The palette's construction actions call the existing PathNetworkService CreateNetwork, CreateNode, ConnectDirect, ConnectBezier, ConnectRouted and SetInfrastructureIntent functions within CommandService transactions. Changing an existing road section also calls SetInfrastructureIntent, preserving the authored edge and alignment. Live ghost, snap cache and elevation are editor-only presentation state. Source and built geometry remain inspectable with path.geometry, path.engineering and junction RPCs. A high-level editor-pointer/MCP construction-brush action has not yet been implemented; do not claim complete remote brush parity.
