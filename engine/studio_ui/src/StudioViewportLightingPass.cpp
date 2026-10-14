@@ -1322,6 +1322,7 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 [this,
                  lightingDepth,
                  shadowGpu,
+                 shadowSource = cloudFound->second.field.get(),
                  shadowLayer,
                  shadowReferenceRadius,
                  shadowView,
@@ -1338,7 +1339,7 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                         unifiedCloudRenderer_->DrawReceiverShadow(
                             commands, *lightingDepth, *shadowGpu,
                             *shadowTexture, shadowReferenceRadius,
-                            shadowLayer, shadowView);
+                            *shadowSource, shadowView, sharedStormCloudExport_);
                     }
                     else
                     {
