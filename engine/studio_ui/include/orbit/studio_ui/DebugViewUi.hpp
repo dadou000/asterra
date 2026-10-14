@@ -46,5 +46,6 @@ private:
     std::vector<scene::ObjectRecord> engineeringEdges_;
     rpc::Value engineeringData_;
     bool engineeringError_{false};
+    std::size_t engineeringSelectedFinding_{0U};
 };
 } // namespace orbit::studio_ui
