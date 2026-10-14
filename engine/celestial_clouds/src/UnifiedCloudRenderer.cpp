@@ -459,6 +459,11 @@ void UnifiedCloudRenderer::DrawMedium(
         base = std::min(base, layer.parameters.baseAltitudeMeters);
         top = std::max(top, layer.parameters.topAltitudeMeters);
     }
+    // The weather_gpu domain exports 40 levels at 500 m spacing in the
+    // current Studio integration. Do not truncate an active convective
+    // storm just because the procedural layer stops near 6 km. This broad
+    // bound is conservative; actual sim extinction is zero outside its grid.
+    if (stormExport != nullptr) top = std::max(top, 21000.0);
     if (!(top > base)) return;
     const std::array<u32, 24> constants{
         Bits(static_cast<f32>(view.cameraPositionMeters.x)),
