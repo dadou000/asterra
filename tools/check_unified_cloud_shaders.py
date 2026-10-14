@@ -19,7 +19,12 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "engine" / "celestial_clouds" / "src" / "UnifiedCloudRenderer.cpp"
-PATTERN = re.compile(r'constexpr const char\* (kVertex|kMedium|kComposite) = R"\((.*?)\)";', re.S)
+# Fragmented to avoid MSVC C2026; the tool must compile the identical
+# shader that the runtime assembles (never a different hand-maintained copy).
+PATTERN = re.compile(
+    r'constexpr const char\* (kVertex|kMediumPart[1-4]|kComposite) = R"\((.*?)\)";',
+    re.S,
+)
 
 
 def main() -> int:
@@ -29,11 +34,19 @@ def main() -> int:
         return 2
     text = SOURCE.read_text(encoding="utf-8")
     blocks = dict(PATTERN.findall(text))
-    required = {"kVertex", "kMedium", "kComposite"}
+    required = {"kVertex", "kComposite"} | {
+        f"kMediumPart{i}" for i in range(1, 5)
+    }
     if set(blocks) != required:
         print(f"Could not extract B shader strings: expected {required}, got {set(blocks)}",
               file=sys.stderr)
         return 1
+    chunks = [blocks[f"kMediumPart{i}"] for i in range(1, 5)]
+    if any(len(part.encode("utf-8")) >= 12000 for part in chunks):
+        print("System B shader fragment exceeds MSVC-safe 12 KiB limit",
+              file=sys.stderr)
+        return 1
+    blocks["kMedium"] = "".join(chunks)
     variants = [
         ("vertex", "kVertex", "vert", "main"),
         ("march", "kMedium", "frag", "March"),
