@@ -49,4 +49,9 @@ struct CorridorEngineeringReport
     const std::vector<PathStation>& stations,
     const CorridorEngineeringRules& rules,
     const std::vector<f64>& actualBankRadians = {});
+// Generate bounded, transition-limited advisory bank/cant values. Caller
+// explicitly decides whether to apply these to authored corridor geometry.
+[[nodiscard]] std::vector<f64> SuggestCorridorBankProfile(
+    const CorridorEngineeringReport& report,
+    const CorridorEngineeringRules& rules);
 } // namespace orbit::path_geometry
