@@ -253,6 +253,29 @@ int main()
         regenerated.buildSignature ==
         product.buildSignature);
 
+    // A very long direct edge must fail BEFORE an unbounded station
+    // allocation, even though its source contains only two samples.
+    auto longEdge=source;
+    longEdge.samples.back().position.x=1.0e9;
+    bool bounded=false;
+    try
+    {
+        static_cast<void>(BuildPathDerived(
+            longEdge,profile,
+            {.sampleSpacingMeters=1.0,.maximumStations=32U}));
+    }
+    catch(const std::length_error&){bounded=true;}
+    ORBIT_TEST_CHECK(bounded);
+    bounded=false;
+    try
+    {
+        static_cast<void>(BuildPathDerived(
+            source,profile,
+            {.sampleSpacingMeters=1.0,.maximumStations=1U}));
+    }
+    catch(const std::invalid_argument&){bounded=true;}
+    ORBIT_TEST_CHECK(bounded);
+
     auto changedProfile = profile;
     changedProfile.widthMeters = 14.0;
 

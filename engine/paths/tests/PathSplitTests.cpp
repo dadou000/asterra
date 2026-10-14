@@ -17,6 +17,7 @@ int main()
     const auto root=std::filesystem::temp_directory_path() /
         ("orbit-split-" + documents::ProjectId::Random().ToString());
     std::filesystem::remove_all(root);
+    scene::ObjectId persistedFirst{},persistedSecond{},persistedJunction{};
     {
         auto project=documents::ProjectDocument::Create(root,"Path Split Test");
         documents::WorldDatabase world(project.StartupWorldPath());
@@ -103,6 +104,31 @@ int main()
         try{static_cast<void>(service.SplitEdge(routed.id,0.5));}
         catch(const std::invalid_argument&){rejected=true;}
         CHECK(rejected);
+        persistedFirst=split.firstEdge.id;
+        persistedSecond=split.secondEdge.id;
+        persistedJunction=split.junctionNode.id;
+        project.Save();
+        world.Checkpoint();
+    }
+    // Verify that command-produced identities, metadata and junction anchors
+    // survive actual database checkpoint and project reopening.
+    {
+        auto reopened=documents::ProjectDocument::Open(root/"Project.orbit.toml");
+        documents::WorldDatabase reopenedWorld(reopened.StartupWorldPath());
+        schema::SchemaRegistry schema2;
+        paths::RegisterSchemas(schema2);
+        scene::ObjectStore reopenedObjects(reopenedWorld);
+        commands::CommandService cmd2(reopenedObjects,schema2);
+        paths::PathNetworkService reopenedPaths(reopenedObjects,cmd2);
+        const auto first=reopenedPaths.FindEdge(persistedFirst);
+        const auto second=reopenedPaths.FindEdge(persistedSecond);
+        const auto junction=reopenedPaths.FindNode(persistedJunction);
+        CHECK(first.has_value() && second.has_value() && junction.has_value());
+        CHECK(first->endNode==persistedJunction);
+        CHECK(second->startNode==persistedJunction);
+        CHECK(second->constructionMode=="bridge");
+        CHECK(second->infrastructureCatalogId=="ballasted-rail");
+        CHECK(second->designSpeedKmh==85.0);
     }
     std::filesystem::remove_all(root);
     return 0;

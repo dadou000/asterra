@@ -93,3 +93,9 @@ Status legend: **DOMAIN** = functional CPU/domain API present, not necessarily i
 3. Corridor seam/junction patch trimming + collision/nav, then true rail turnout with locked branch.
 4. Ship/vehicle moving support-frame collision contract and real bridge/tunnel contact.
 5. Streaming/LOD, hydrology/material condition, traffic/train simulation and full Debug/MCP parity.
+
+## Additional allocation and persistence regression coverage
+
+A single authored edge is not permitted to allocate an unbounded source or derived polyline. PathSourceRequest.maximumSamples (default 16384, allowed 2..131072) controls source Bézier/routed evaluation; PathBuildOptions.maximumStations (default 16384, allowed 2..131072) controls the subsequent distance-resampled corridor and lane/reference products. On overflow or excessive input, the builder produces a clear exception/error; it must not truncate geometry and inadvertently connect unrelated endpoints. The budgets are per edge, not planet-global. Actual chunk boundary handling and LOD remain unimplemented.
+
+The expanded Orbit.PathSplit test includes project database checkpoint/reopen and verifies that split identities, the new junction anchor, bridge construction mode and design speed persist. CI execution is still required; test code existence is not proof of a passing persistence gate.
