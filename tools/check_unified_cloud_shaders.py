@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import struct
 import shutil
 import subprocess
 import sys
@@ -60,18 +61,50 @@ def main() -> int:
         temporary = pathlib.Path(directory)
         for label, key, stage, entry in variants:
             shader = temporary / f"{label}.hlsl"
-            prefix = "#define B3_WRITE_CACHE 1\n" if label in ("sun-cache", "sun-clear") else ""
+            # Mirror the exact B shader entrypoint renaming and verify
+            # SPIR-V, not just that the HLSL compiles.
+            prefix = ""
+            if label in ("sun-cache", "sun-clear"):
+                prefix += "#define B3_WRITE_CACHE 1\n"
+            if entry != "main":
+                prefix += f"#define {entry} main\n"
             shader.write_text(prefix + blocks[key], encoding="utf-8")
+            output = temporary / f"{label}.spv"
             command = [
-                validator, "-D", "-V", "-S", stage,
-                "-e", entry, "--target-env", "vulkan1.3",
-                "-o", str(temporary / f"{label}.spv"), str(shader)
+                validator, "-D", "-V", "-S", stage, "-e", "main",
+                "--target-env", "vulkan1.3", "-o", str(output), str(shader)
             ]
             result = subprocess.run(command, capture_output=True, text=True, check=False)
-            print(f"{label:12s} {'ok' if result.returncode == 0 else 'FAILED'}")
-            if result.returncode:
+            ok = result.returncode == 0
+            if ok:
+                data = output.read_bytes()
+                ok = len(data) >= 20 and len(data) % 4 == 0
+                if ok:
+                    words = struct.unpack(f"<{len(data)//4}I", data)
+                    ok = words[0] == 0x07230203
+                    index = 5
+                    entries = []
+                    while ok and index < len(words):
+                        word = words[index]
+                        count, opcode = word >> 16, word & 0xFFFF
+                        if count == 0 or index + count > len(words):
+                            ok = False
+                            break
+                        if opcode == 15 and count >= 4:  # OpEntryPoint
+                            raw = struct.pack(
+                                f"<{count-3}I", *words[index+3:index+count]
+                            )
+                            entries.append(raw.split(b"\0", 1)[0])
+                        index += count
+                    if entries != [b"main"]:
+                        ok = False
+                        print(f"{label}: unexpected SPIR-V entrypoints: {entries}",
+                              file=sys.stderr)
+            print(f"{label:12s} {'ok' if ok else 'FAILED'}")
+            if not ok:
                 failures += 1
-                print((result.stdout + "\n" + result.stderr)[-4000:], file=sys.stderr)
+                print((result.stdout + "\n" + result.stderr)[-4000:],
+                      file=sys.stderr)
     return 1 if failures else 0
 
 
