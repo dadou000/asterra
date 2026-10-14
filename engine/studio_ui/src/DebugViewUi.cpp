@@ -2,6 +2,7 @@
 #include <cmath>
 #include <format>
 #include <exception>
+#include <stdexcept>
 
 namespace orbit::studio_ui
 {
@@ -87,8 +88,8 @@ void DebugViewUi::Draw(
 
     context.Heading("Road / Railway engineering");
     context.MutedText("Inspect an authored path edge using the existing path.engineering RPC. Read-only.");
-    context.InputText("Edge UUID##dbg-road-edge", engineeringEdgeId_);
-    context.InputDouble("Design speed (m/s)##dbg-road-speed", engineeringSpeedMps_);
+    static_cast<void>(context.InputText("Edge UUID##dbg-road-edge", engineeringEdgeId_));
+    static_cast<void>(context.InputDouble("Design speed (m/s)##dbg-road-speed", engineeringSpeedMps_));
     if (context.Button("Analyze edge##dbg-road-analyze"))
     {
         engineeringError_ = false;
