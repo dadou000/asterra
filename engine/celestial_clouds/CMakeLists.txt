@@ -3,6 +3,7 @@ add_library(OrbitCelestialClouds STATIC
     src/CloudField.cpp
     src/CloudRenderer.cpp
     src/UnifiedCloudRenderer.cpp
+    src/UnifiedCloudNoise.cpp
     src/StormSchedule.cpp
     src/WeatherModel.cpp
 )
