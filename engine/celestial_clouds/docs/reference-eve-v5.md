@@ -35,7 +35,7 @@ All source snippets in these documents are new **PROPOSED-PORT** code unless sta
 
 ## Actual archive inventory
 
-The ZIP has 87 entries (including folders), approximately 66.7 MB uncompressed. Its clouds.cfg defines **19 V5 cloud-layer objects, 70 cloud-type entries, 27 painter tiles** on five planets: Kerbin 6 layers, Duna 3, Eve 2, Jool 4, Laythe 4. The configs refer to **75 distinct texture/sound resource paths** not supplied in this ZIP. These must be validated individually. Any generated replacement is a visibly labeled SYNTHETIC TEST ASSET and cannot prove visual equivalence.
+The ZIP has 87 entries (including folders), approximately 66.7 MB uncompressed. Its clouds.cfg defines **19 V5 cloud-layer objects, 70 cloud-type entries, 27 painter tiles** on five planets: Kerbin 6 layers, Duna 3, Eve 2, Jool 4, Laythe 4. The configs refer to **103 distinct texture/sound resource paths** not supplied in this ZIP. These must be validated individually. Any generated replacement is a visibly labeled SYNTHETIC TEST ASSET and cannot prove visual equivalence.
 
 ## Ownership and dataflow
 
