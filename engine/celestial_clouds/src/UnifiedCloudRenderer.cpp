@@ -42,7 +42,7 @@ struct Config
     float4 shell;        // planet radius, cloud base and top, cubemap face size
     float4 material;     // layer count, receiver-shadow flag, reserved, irradiance
     float4 cacheAnchor;  // body-fixed unit tangent anchor xyz, generation w
-    float4 cacheState;   // slab phase [0,16), active flag, other reserved
+    float4 cacheState;   // slice phase, cache active, reserved, stellar half-angle (rad)
 };
 [[vk::push_constant]] Config g;
 [[vk::binding(0,0)]] ByteAddressBuffer g_weather;
@@ -469,23 +469,56 @@ float4 March(V input) : SV_Target0
         float4 mediumAtPoint = Density(p,false);
         float sigma = mediumAtPoint.x;
         if (sigma < 1.e-8) continue;
-        float upSun = saturate(dot(normalize(p), sun)*0.5+0.5);
-        float angle = dot(direction, sun);
-        float meanG = clamp(mediumAtPoint.z/max(mediumAtPoint.y,1.e-7),-0.95,0.95);
-        float d = max(1.+meanG*meanG-2.*meanG*angle,0.02);
-        float phase = (1.-meanG*meanG)/(d*sqrt(d));
-        float albedo = saturate(mediumAtPoint.y/max(sigma,1.e-8));
+        // Solar elevation measured against the horizon of the spherical
+        // reference body, not a perpetual (mu*0.5+0.5) daylight term.
+        // A cloud above the surface can see slightly below its local
+        // tangent horizon: account for this geometric horizon depression.
+        const float radius = length(p);
+        const float sunMu = dot(p/max(radius,1.),sun);
+        const float planetOverRadius =
+            saturate(g.shell.x/max(radius,1.));
+        const float horizonMu =
+            -sqrt(max(0.,1.-planetOverRadius*planetOverRadius));
+        const float solarHalfAngle =
+            clamp(g.cacheState.w,0.0005,0.20);
+        const float sunDisc = smoothstep(
+            horizonMu-solarHalfAngle,
+            horizonMu+solarHalfAngle,sunMu);
+        const float angle = dot(direction,sun);
+        const float meanG = clamp(
+            mediumAtPoint.z/max(mediumAtPoint.y,1.e-7),-0.95,0.95);
+        const float d = max(1.+meanG*meanG-2.*meanG*angle,0.02);
+        // Proper solid-angle normalization of Henyey-Greenstein.
+        // Without 1/(4*pi), forward scattering was ~12.6x too bright.
+        const float phase =
+            (1.-meanG*meanG)/(12.5663706144*d*sqrt(d));
+        const float albedo =
+            saturate(mediumAtPoint.y/max(sigma,1.e-8));
         float tauSun=0.;
         if(!CachedSunDepth(p,tauSun))
-            // Keep misses bounded, especially in far-field pixels where
-            // a local cache is intentionally not resident.
             tauSun=SunDepthDirect(p,6u);
-        float sunlight = max(0., g.material.w) * upSun * phase *
-            albedo * exp(-tauSun);
-        float ambient = (0.13 + 0.20 * upSun) * albedo;
-        float alpha = 1. - exp(-sigma * dt);
-        float3 source = float3(1.0,0.96,0.91) * sunlight +
-            float3(0.42,0.57,0.83) * ambient;
+        const float irradiance = max(0.,g.material.w);
+        const float sunlight = irradiance*sunDisc*phase*
+            albedo*exp(-tauSun);
+
+        // Temporary bounded skylight proxy until B owns an atmosphere-LUT
+        // driven hemispherical irradiance / multiple-scattering cache.
+        // Crucially: no permanent light on the unlit hemisphere, and no
+        // unoccluded 0.13+0.20 source injected into opaque cloud interiors.
+        const float twilight = smoothstep(
+            -0.14,0.10,sunMu-horizonMu);
+        const float height01 = saturate(
+            (radius-g.shell.x-g.shell.y)/
+            max(g.shell.z-g.shell.y,1.));
+        const float skyAccess =
+            (0.12+0.88*height01*height01)*
+            exp(-0.20*min(tauSun,24.));
+        const float skyAmbient =
+            irradiance*0.055*twilight*skyAccess*albedo;
+        const float alpha = 1.-exp(-sigma*dt);
+        const float3 source =
+            float3(1.0,0.96,0.91)*sunlight +
+            float3(0.42,0.57,0.83)*skyAmbient;
         L += T * alpha * source;
         T *= 1. - alpha;
     }
@@ -715,7 +748,7 @@ namespace
         Bits(cache ? static_cast<f32>(cache->generation) : 0.0F),
         Bits(cache ? static_cast<f32>(cache->phase) : 0.0F),
         Bits(cache && cache->active?1.0F:0.0F),
-        0U,0U
+        0U,Bits(view.sunAngularRadiusRadians)
     };
 }
 } // namespace
