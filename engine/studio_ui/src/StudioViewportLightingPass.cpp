@@ -1244,7 +1244,7 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         !cloudFound->second.field->layers.empty() &&
         logicalTarget->target.has_value() &&
         cloudFound->second.body == logicalTarget->target->body &&
-        (info.layers.fullClipmap || !info.layers.macroGlobe) &&
+        (info.layers.cloudBPreview || info.layers.fullClipmap || !info.layers.macroGlobe) &&
         studioDirectLight.direct.has_value() &&
         logicalTarget->mode != studio_session::ViewportMode::Debug &&
         (!info.layers.cloudBPreview ||
