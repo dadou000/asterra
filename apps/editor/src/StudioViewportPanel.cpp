@@ -337,7 +337,7 @@ void StudioViewportPanel::Register()
                 // compare (clouds.split_set compares two A variants).
                 auto cloudBackendLayers = studioViews.TerrainLayers("studio.primary");
                 if (context.Button(cloudBackendLayers.cloudBPreview
-                        ? "Cloud renderer: B3 PREVIEW##cloud-backend"
+                        ? "Cloud renderer: B3M PREVIEW##cloud-backend"
                         : "Cloud renderer: A (reference)##cloud-backend"))
                 {
                     cloudBackendLayers.cloudBPreview = !cloudBackendLayers.cloudBPreview;
@@ -412,8 +412,8 @@ void StudioViewportPanel::Register()
                     else
                     {
                         context.Text(
-                            "B3 preview: multilayer weather and cached Sun extinction; "
-                            "temporal and ambient cache pending.");
+                            "B3M preview: multiscale 3D cloud density and cached sunlight; "
+                            "temporal reconstruction and full skylight pending.");
                     }
                 }
 
