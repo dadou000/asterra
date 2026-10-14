@@ -1256,6 +1256,10 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         {
             const u32 shadowWidth = std::max(1U, (width + 1U) / 2U);
             const u32 shadowHeight = std::max(1U, (height + 1U) / 2U);
+            if (!info.layers.cloudBPreview ||
+                celestial_clouds::unified::ResourceBudget{}.
+                    FitsPreviewTarget(shadowWidth, shadowHeight))
+            {
             auto& shadowTarget = info.layers.cloudBPreview
                 ? unifiedCloudShadowTargets_[info.id] : cloudShadowTargets_[info.id];
             if (shadowTarget == nullptr ||
@@ -1349,6 +1353,7 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 .texture = shadowHandle,
                 .state = rhi::ResourceState::ShaderResource,
                 .access = render_graph::Access::Read};
+            }
         }
     }
 
