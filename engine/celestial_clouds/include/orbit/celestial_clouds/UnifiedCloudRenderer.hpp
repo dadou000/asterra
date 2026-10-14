@@ -8,6 +8,7 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <memory>
+#include <cstdint>
 
 namespace orbit::celestial_clouds::unified
 {
@@ -25,6 +26,32 @@ public:
     UnifiedCloudRenderer(const UnifiedCloudRenderer&) = delete;
     UnifiedCloudRenderer& operator=(const UnifiedCloudRenderer&) = delete;
 
+    // B3 cache belongs to exactly one viewport, never to A's light volume.
+    // First cascade: 32x32 columns at 2km and 16 vertical slabs; one
+    // altitude slab is refreshed each frame (bounded GPU work).
+    struct SunCache
+    {
+        std::unique_ptr<rhi::Buffer> buffer;
+        math::Double3 anchor{};
+        bool anchored{false};
+        u32 generation{1U};
+        u32 phase{0U};
+        u64 sourceFingerprint{0U};
+        const rhi::Buffer* lastStorm{nullptr};
+        f64 lastRadius{0.0};
+        bool active{false};
+    };
+
+    [[nodiscard]] std::unique_ptr<SunCache> CreateSunCache(rhi::Device& device) const;
+    void UpdateSunCache(
+        rhi::CommandList& commands,
+        SunCache& cache,
+        GpuCloudFieldProduct& field,
+        const CloudFieldProduct& source,
+        f64 referenceRadiusMeters,
+        const celestial_atmosphere::AtmosphereRenderView& view,
+        rhi::Buffer* stormExport);
+
     void Draw(
         rhi::CommandList& commands,
         rhi::Texture& depth,
@@ -33,7 +60,8 @@ public:
         f64 bodyRadiusMeters,
         const CloudFieldProduct& source,
         const celestial_atmosphere::AtmosphereRenderView& view,
-        rhi::Buffer* stormExport);
+        rhi::Buffer* stormExport,
+        const SunCache* sunCache = nullptr);
 
     void DrawReceiverShadow(
         rhi::CommandList& commands,
@@ -57,12 +85,15 @@ private:
         rhi::Texture& depth, GpuCloudFieldProduct& field, rhi::Texture& target,
         f64 bodyRadiusMeters, const CloudFieldProduct& source,
         const celestial_atmosphere::AtmosphereRenderView& view,
-        rhi::Buffer* stormExport);
+        rhi::Buffer* stormExport,
+        const SunCache* sunCache);
 
+    std::unique_ptr<rhi::ComputePipeline> sunCachePipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> march_;
     std::unique_ptr<rhi::GraphicsPipeline> receiverShadow_;
     std::unique_ptr<rhi::GraphicsPipeline> composite_;
     // B-owned inactive placeholder; never reuses A's mutable storm binding.
     std::unique_ptr<rhi::Buffer> emptyStorm_;
+    std::unique_ptr<rhi::Buffer> emptySunCache_;
 };
 } // namespace orbit::celestial_clouds::unified
