@@ -167,6 +167,33 @@ StudioSession::StudioSession(
                 {"dirty_count", static_cast<i64>(pathProducts_.DirtyCount())}
             });
         });
+    rpc_.Dispatcher().Register(
+        {.name="infrastructure.junction_pipeline_status",
+         .description="Read production CPU junction packet counts, generation and diagnostics.",
+         .mutating=false},
+        [this](const rpc::Value&)->rpc::Value
+        {
+            rpc::Value::Array packets;
+            for(const auto* packet:roadJunctionPipeline_.Packets())
+                packets.emplace_back(rpc::Value::Object{
+                    {"frame",packet->frame.ToString()},
+                    {"world_generation",static_cast<i64>(packet->worldGeneration)},
+                    {"build_signature",std::to_string(packet->buildSignature)},
+                    {"edges",static_cast<i64>(packet->edges.size())},
+                    {"patches",static_cast<i64>(packet->patches.size())},
+                    {"connections",static_cast<i64>(packet->connections.size())}
+                });
+            return rpc::Value::Object{
+                {"revision",static_cast<i64>(roadJunctionPipeline_.Revision())},
+                {"junction_count",static_cast<i64>(
+                    roadJunctionPipeline_.ActiveJunctions())},
+                {"last_error",roadJunctionPipeline_.LastError()},
+                {"cpu_published",!packets.empty()},
+                {"gpu_committed",false},
+                {"physics_committed",false},
+                {"packets",std::move(packets)}
+            };
+        });
     static_cast<void>(activeBody_.Refresh());
     static_cast<void>(pathNetwork_.RefreshBinding());
     static_cast<void>(pathRouting_.RefreshBinding());
@@ -245,6 +272,15 @@ StudioSession::PathProducts() const noexcept
 {
     return pathProducts_;
 }
+const StudioRoadJunctionPipeline& StudioSession::RoadJunctions() const noexcept
+{
+    return roadJunctionPipeline_;
+}
+StudioRoadJunctionPipeline& StudioSession::RoadJunctions() noexcept
+{
+    return roadJunctionPipeline_;
+}
+
 
 terrain_debug::TerrainDebugLivePages&
 StudioSession::TerrainDebugPages() noexcept
@@ -512,6 +548,7 @@ StudioSession::SetStartupWorld(
 void StudioSession::OpenWorld(
     const std::filesystem::path& relativePath)
 {
+    roadJunctionPipeline_.Clear();
     pendingTerrainInvalidations_.clear();
     corridorConstruction_.Clear();
     terrainPhysicalPages_.Clear();
@@ -522,8 +559,10 @@ void StudioSession::OpenWorld(
         relativePath);
 }
 
+// All derived patch products are lifetime-bound to the same active world.
 void StudioSession::CloseWorld()
 {
+    roadJunctionPipeline_.Clear();
     DispatchWorldLifecycle(
         "world.close",
         std::nullopt);
@@ -623,6 +662,7 @@ StudioTickResult StudioSession::Tick(
 
     if (!world_.HasWorld())
     {
+        roadJunctionPipeline_.Clear();
         const bool hadBody =
             activeBody_.Active().has_value();
         activeBody_.Clear();
@@ -772,6 +812,9 @@ StudioTickResult StudioSession::Tick(
             request.corridor = planned.section;
             return request;
         }, 2U));
+    // Stage one complete immutable road junction generation after all
+    // bounded corridor rebuilds, before render/physics consumers inspect it.
+    roadJunctionPipeline_.Refresh(world_,pathNetwork_.Service(),pathProducts_);
     result.viewportTargetsChanged =
         viewports_.Refresh();
 

@@ -417,6 +417,9 @@ void StudioPathNetworkHost::RefreshDerivedPaths()
         }
     }
 
+    if(observedJunctionPublicationRevision_!=
+        studioSession_.RoadJunctions().Revision())
+        requiresRefresh=true;
     // The StudioSession infrastructure cache owns the actual swept
     // construction geometry. Detect its later asynchronous publication even
     // when scene/content revisions did not change this particular frame.
@@ -614,8 +617,11 @@ void StudioPathNetworkHost::RefreshDerivedPaths()
             // generic ribbon with inconsistent banks or railheads.
             const auto* constructed =
                 studioSession_.PathProducts().Find(edgeId);
-            auto product = constructed != nullptr ?
-                *constructed :
+            const auto* replacement =
+                studioSession_.RoadJunctions().FindEdge(edgeId);
+            auto product = replacement != nullptr ?
+                replacement->product :
+                constructed != nullptr ? *constructed :
                 orbit::path_geometry::BuildPathDerived(
                     *centerline, resolvedProfile.profile,
                     {.sampleSpacingMeters = sampleSpacing});
@@ -712,6 +718,8 @@ void StudioPathNetworkHost::RefreshDerivedPaths()
         objects().Revision();
     derivedContentRevision_ =
         content_.Revision();
+    observedJunctionPublicationRevision_=
+        studioSession_.RoadJunctions().Revision();
 }
 
 void StudioPathNetworkHost::AttachRpc()
@@ -1486,6 +1494,11 @@ void StudioPathNetworkHost::AttachRpc()
                 {"construction_dependency_signature",static_cast<orbit::i64>(
                     construction.dependencySignature & 0x7fffffffffffffffULL)},
                 {"construction_committed_to_world",false},
+                {"construction_published_cpu",
+                    studioSession_.RoadJunctions().FindPatch(*node)!=nullptr},
+                {"construction_publication_revision",
+                    static_cast<orbit::i64>(
+                        studioSession_.RoadJunctions().Revision())},
                 {"construction_findings",std::move(constructionFindings)},
                 {"construction_trimmed_edges",std::move(constructionEdges)},
                 {"construction_patch_vertices",static_cast<orbit::i64>(

@@ -62,3 +62,7 @@ PathSourceRequest.maximumSamples bounds Bezier/routed centreline expansion. Path
 ## Road junction construction and collision (CPU product)
 
 The source-level BuildRoadJunctionConstruction consumes existing JunctionPlan and built road PathDerivedProducts and returns a disposable frame-local replacement bundle: all clipped pavement/shoulder meshes, one exact-boundary junction surface and matching collision triangles, and cut-aligned lane connectors. It rejects stale/unsupported/mixed-mode sources and sets a reproducible dependencySignature. Currently exposed through path.junction_preview(include_construction=true) and Build → Procedurals, NOT as a committed runtime collider. Test: Orbit.RoadJunctionConstruction. See docs/tree/world/roads-railways/road-junction-construction.md.
+
+## Atomic road junction publication CPU stage
+
+`RoadJunctionPublication` validates current raw corridor signatures, composes multi-junction single/double-ended cuts, retains one per-edge mesh/collider/reference graph, and stages one immutable `RoadJunctionScenePacket` per frame with patch and lane-connection records. `StudioRoadJunctionPipeline` (under studio_session) owns the publication lifetime. Neither mutates the authoritative path network or raw path cache. Native test: `Orbit.RoadJunctionPublication`; Studio session test: `Orbit.StudioRoadJunctionPipeline`. GPU/physics publication pending.

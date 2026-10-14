@@ -41,6 +41,8 @@ struct RoadJunctionBuildFinding
 struct RoadJunctionTrimmedEdge
 {
     scene::ObjectId edge{};
+    u64 sourceBuildSignature{0};
+    u64 sourceRevision{0};
     u32 sourceCutStation{0};
     f64 cutStationMeters{0.0};
     bool atStart{true};

@@ -5,7 +5,7 @@ kind = "subsystem"
 status = "planned"
 summary = "Canonical architectural contract for Orbit's unified, editable road/rail/path infrastructure: authored networks, alignment, terrain and structural construction, frame-aware dynamics, persistence, editor automation and planet-scale LOD."
 keywords = ["roads", "railways", "infrastructure", "corridors", "alignment", "terrain grading", "moving frames", "bridges", "tunnels"]
-related = ["/world/paths", "/world/path-geometry", "/world/path-routing", "/editor/studio-ui/debug-center", "/world/roads-railways/alignment", "/world/roads-railways/construction", "/world/roads-railways/runtime-validation", "/world/roads-railways/transport-foundations", "/world/roads-railways/spec-completeness", "/world/roads-railways/road-junction-construction"]
+related = ["/world/paths", "/world/path-geometry", "/world/path-routing", "/editor/studio-ui/debug-center", "/world/roads-railways/alignment", "/world/roads-railways/construction", "/world/roads-railways/runtime-validation", "/world/roads-railways/transport-foundations", "/world/roads-railways/spec-completeness", "/world/roads-railways/road-junction-construction", "/world/roads-railways/pipeline"]
 +++
 
 # Status and provenance
@@ -48,6 +48,7 @@ The renderer never authors its own road geometry. Network graph, route and colli
 - [Implemented transport section and topology foundations](roads-railways/transport-foundations.md)
 - [Specification completeness, implementation evidence and acceptance gates](roads-railways/spec-completeness.md)
 - [Road junction trimmed construction product, exact seams and collision](roads-railways/road-junction-construction.md)
+- [Production pipeline architecture: graph → geometry → immutable scene packet → GPU/physics/navigation](roads-railways/pipeline.md)
 
 No independent road/rail specification may silently supersede this root. New component documents should link back here and state scope.
 
@@ -60,3 +61,9 @@ These are foundations, not yet editor-visible placement, structural construction
 ## Traceability policy
 
 The [spec-completeness matrix](roads-railways/spec-completeness.md) is the authoritative checklist for design coverage versus running features. Each requirement maps to a domain owner, working integration, test fixture and remaining acceptance gate; new work updates that matrix in the same change. Semantic domain operations remain separate from mesh/collision previews. A successful GitHub push, registered test target or editor control is not a verified physical subsystem.
+
+## Pipeline-level architecture implementation
+
+The production chain now goes beyond individual CPU preview objects: StudioSession builds an immutable per-frame road-junction publication set from raw path products and semantic incidence, merging two junction cuts on a shared road into one retained surface, contact and trimmed lane graph. The path geometry RPC can read the packet's replaced edge product. The package has a deterministic generation signature and explicit lifecycle invalidation; it remains distinct from the raw cache to prevent double trimming.
+
+**No Vulkan upload, runtime physics shape cooking, traffic dispatcher or end-to-end driving acceptance is implied by this CPU publication.** The precise owner, stage-by-stage contracts, next handoff types and gates are in [pipeline.md](roads-railways/pipeline.md).

@@ -475,8 +475,14 @@ private:
                                         edge->AsString(),dist->AsNumber(),
                                         triangles->AsInteger()));
                                 }
+                            const auto* cpu=junctionReport_.Find(
+                                "construction_published_cpu");
+                            context.KeyValue("Production CPU publication",
+                                cpu && cpu->IsBool() && cpu->AsBool()?
+                                "Published to StudioSession packet":
+                                "Preview only");
                             context.MutedText(
-                                "CPU patch/trim mesh and collision agree. Not yet published as the live world collider.");
+                                "Scene packet includes trimmed roads, shared patch, contact and lane routes. GPU/physics publication remains pending.");
                         }
                         if(const auto* errors=junctionReport_.Find(
                             "construction_findings");

@@ -109,3 +109,9 @@ Domain acceptance: Orbit.RoadJunctionConstruction. Runtime gate C (physical road
 ## Junction failure atomicity follow-up
 
 The first road junction CPU replacement bundle now also preserves cut-vertex source normals and survives variable input order with a stable signature. The restricted 3+2+2 format validates indexed triangle topology; failures detected after staging clear all mesh, collision and lane output. This protects a future asynchronous handoff from accidentally consuming a partially constructed product. It does **not** replace the need for the runtime's world-generation transaction and source-revision fence. Release gate C remains open.
+
+## CPU production publication and pipeline ownership
+
+New `RoadJunctionPublication` composes a whole frame's junction products and incident road replacements, verifies raw build-signature/revision, dirty state, collision/mesh agreement, and prevents duplicate claims for the same end. Roads with junctions at both ends receive **one** doubly trimmed derived product; lane station/reference graphs are cropped to that retained range. `StudioRoadJunctionPipeline` discovers authored incidence once per scene/cache fingerprint, builds bounded frame-local batches and swaps complete immutable CPU packets. StudioSession::Tick runs this stage after raw corridor rebuild; `path.geometry` prefers its replacement product. `infrastructure.junction_pipeline_status` exposes frame generations, patch/edge/connection counts and failures.
+
+Stages S0–S8 are partially or fully implemented in the limited rural-road slice; S9 Vulkan draw submission and physical collider publication, S10 vehicle traffic and S11 profiler fixture **remain open**. New unverified test targets: `Orbit.RoadJunctionPublication` and `Orbit.StudioRoadJunctionPipeline`. Full architecture/acceptance at [pipeline.md](pipeline.md). Source present is not a passing compiler/runtime test.

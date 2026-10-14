@@ -103,6 +103,15 @@ if(BUILD_TESTING)
         COMMAND OrbitStudioSessionTests
     )
 
+    add_executable(OrbitStudioRoadJunctionPipelineTests
+        tests/StudioRoadJunctionPipelineTests.cpp)
+    target_link_libraries(OrbitStudioRoadJunctionPipelineTests PRIVATE
+        Orbit::StudioSession Orbit::WorldModel)
+    target_compile_features(OrbitStudioRoadJunctionPipelineTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioRoadJunctionPipelineTests)
+    add_test(NAME Orbit.StudioRoadJunctionPipeline
+        COMMAND OrbitStudioRoadJunctionPipelineTests)
+
     add_executable(OrbitStudioRuntimeBindingTests
         tests/StudioRuntimeBindingTests.cpp
     )

@@ -418,6 +418,8 @@ RoadJunctionConstruction BuildRoadJunctionConstruction(
         const auto& source=cut.input->geometry->visualMesh;
         RoadJunctionTrimmedEdge edge;
         edge.edge=id;
+        edge.sourceBuildSignature=cut.input->geometry->buildSignature;
+        edge.sourceRevision=cut.input->geometry->sourceRevision;
         edge.atStart=cut.input->atStart;
         edge.sourceCutStation=cut.stationIndex;
         edge.cutStationMeters=

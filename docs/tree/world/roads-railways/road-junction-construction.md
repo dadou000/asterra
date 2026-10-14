@@ -66,3 +66,9 @@ The CPU builder and test target are in source, but the native compilation/execut
 The junction seam preserves the constructed cut boundary vertex *normals*, not only positions. Connector Hermite tangents follow the surviving cut station (not the removed semantic-node station) so a curved road approaches the patch in the correct local direction. A built-in road section must carry the complete expected 3+2+2 surface and indexed triangle topology; coincident vertex counts from an unrelated profile are not sufficient. Work budgets have hard maxima independent of caller configuration.
 
 If a connector, index or source check fails after any temporary geometry has been staged, the builder discards the staged patch, all fragments, contact triangles, lane links and dependency fingerprint while preserving typed findings. Only Ready() output can be handed to a downstream publisher. Regression cases cover post-staging invalidation, curve/source-dependent fingerprints, cut shoulder seam normals and unsupported acute joins.
+
+## Frame-local production CPU publication (new)
+
+The formerly preview-only CPU product now feeds `RoadJunctionPublication`, which assembles replacement strips, patches, contact triangles and lane links into a revision-fenced frame packet. It supports one road shared by junctions at both ends through a single doubly cropped product, never two overlapping source meshes. `StudioRoadJunctionPipeline` is bound to StudioSession's authoritative world and raw cache, and `path.geometry` can inspect published edge products. Studio provides `infrastructure.junction_pipeline_status` and `path.junction_preview.construction_published_cpu`.
+
+**The GPU and physics consumers are not connected.** There is no native roadway rendered/cooked collider assertion until the S9 handoff described in [pipeline.md](pipeline.md). The source-level publication is an important boundary but must not be described as a drivable completed intersection.

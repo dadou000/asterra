@@ -13,6 +13,7 @@
 #include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
+#include <orbit/studio_session/StudioRoadJunctionPipeline.hpp>
 #include <orbit/studio_session/UniverseBoundRoutePlanner.hpp>
 #include <orbit/studio_session/ViewportTargetRegistry.hpp>
 #include <orbit/studio_session/WorldBoundPathNetwork.hpp>
@@ -83,6 +84,8 @@ public:
     PathProducts() noexcept;
     [[nodiscard]] const UniverseBoundPathCache&
     PathProducts() const noexcept;
+    [[nodiscard]] const StudioRoadJunctionPipeline& RoadJunctions() const noexcept;
+    [[nodiscard]] StudioRoadJunctionPipeline& RoadJunctions() noexcept;
 
     [[nodiscard]] terrain_debug::TerrainDebugLivePages&
     TerrainDebugPages() noexcept;
@@ -194,6 +197,7 @@ private:
     WorldBoundPathNetwork pathNetwork_;
     UniverseBoundRoutePlanner pathRouting_;
     UniverseBoundPathCache pathProducts_;
+    StudioRoadJunctionPipeline roadJunctionPipeline_;
     CorridorConstructionRegistry corridorConstruction_;
     struct ConstructionSelection
     {
