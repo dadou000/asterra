@@ -2439,6 +2439,18 @@ int orbit::editor_app::StudioApplication::Run(
             "Material Service",
             kContentPanel);
 
+        // Direct entry: keeps road construction discoverable even when
+        // nested submenus are collapsed or narrow menu navigation is awkward.
+        ui.RegisterMenuAction({
+            .menu="Build",
+            .label="Procedural Roads",
+            .invoke=[&ui,&proceduralsPanel]
+            {
+                proceduralsPanel.OpenPathsAndRoads();
+                static_cast<void>(ui.FocusPanel(
+                    orbit::editor_app::StudioProceduralsPanel::kPanelId));
+            }
+        });
         ui.RegisterMenuAction({
             .menu="Build",
             .label="Procedurals / Procedural Paths & Roads",
