@@ -43,6 +43,8 @@ private:
     std::string engineeringEdgeId_;
     f64 engineeringSpeedMps_{20.0};
     std::string engineeringResult_;
+    std::vector<scene::ObjectRecord> engineeringEdges_;
+    rpc::Value engineeringData_;
     bool engineeringError_{false};
 };
 } // namespace orbit::studio_ui
