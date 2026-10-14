@@ -78,6 +78,7 @@ A/B/EVE outputs must have identical physical units and signatures. Cache/source 
 7. [07 Vulkan render graph](reference-eve-v5-07-render-graph.md): exact Orbit insertion points, graph ordering, resource states and barriers, buffers/descriptors, multi-view and timewarp, code.
 8. [08 Verification and migration](reference-eve-v5-08-validation-and-migration.md): exact tests, deterministic golden scenes, optical error metrics, GPU budgets, scoped rollout, blockers and CI.
 9. [09 Implementation ledger](reference-eve-v5-09-implementation-ledger.md): complete dependency graph, system/subsystem work items, production/contract freeze gates and code ownership.
+10. [10 Per-planet calibration crosswalk](reference-eve-v5-10-profile-crosswalk.md): all ordered V5 cloud types plus authored atmosphere/ocean coefficients and calibration boundaries.
 
 These chapters are designed for implementation with little architectural guessing, but **they are not a substitute for unavailable proprietary source**.
 
