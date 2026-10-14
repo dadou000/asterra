@@ -127,8 +127,8 @@ public:
     }
 
     void SetEcoModeAccessors(
-        std::function<bool()> getter,
-        std::function<void(bool)> setter)
+        std::function<int()> getter,
+        std::function<void(int)> setter)
     {
         ecoModeGetter_ = std::move(getter);
         ecoModeSetter_ = std::move(setter);
@@ -183,8 +183,8 @@ private:
     struct ViewportModeCommandState;
     math::Float2 gizmoRelativeMouseDelta_{};
     std::function<void()> openProceduralRoadsAction_;
-    std::function<bool()> ecoModeGetter_;
-    std::function<void(bool)> ecoModeSetter_;
+    std::function<int()> ecoModeGetter_;
+    std::function<void(int)> ecoModeSetter_;
     std::optional<std::pair<u32, u32>> viewportCaptureResolution_;
 
     void RegisterBase(editor_ui::EditorUi& ui);
