@@ -757,7 +757,7 @@ int orbit::editor_app::StudioApplication::Run(
             {
                 std::filesystem::create_directories(ecoSettingsPath.parent_path());
                 std::ofstream file(ecoSettingsPath, std::ios::trunc);
-                if(file) file << mode << '\\n';
+                if(file) file << mode << '\n';
             }
             catch(const std::exception& exception)
             {
