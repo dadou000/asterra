@@ -121,6 +121,10 @@ void TestMultiViewIsolation()
     catch (const std::invalid_argument&) { refused = true; }
     assert(refused);
     assert(ResourceBudget{}.Valid());
+    assert(ResourceBudget{}.FitsPreviewTarget(1920U, 1080U));
+    assert(!ResourceBudget{}.FitsPreviewTarget(16384U, 16384U));
+    assert(!ResourceBudget{}.FitsPreviewTarget(0U, 1080U));
+    assert(!ResourceBudget{}.FitsPreviewTarget(1080U, 0U));
     ResourceBudget invalidBudget{};
     invalidBudget.maximumUpdatesPerFrame = 0U;
     assert(!invalidBudget.Valid());
