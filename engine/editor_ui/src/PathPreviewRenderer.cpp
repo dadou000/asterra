@@ -67,10 +67,13 @@ VSOutput main(VSInput input)
         normalize(g_push.forward.xyz);
     const float3 requestedUp =
         normalize(g_push.up.xyz);
+    // Match LookAtLH and render_view::ViewportRay/ProjectToViewport.
+    // The previous basis used forward x up, mirroring every road against
+    // the terrain and the editor's canonical camera/right direction.
     const float3 right =
-        normalize(cross(forward, requestedUp));
+        normalize(cross(requestedUp, forward));
     const float3 cameraUp =
-        normalize(cross(right, forward));
+        normalize(cross(forward, right));
 
     const float z =
         dot(input.position, forward);
