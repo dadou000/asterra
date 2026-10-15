@@ -99,7 +99,8 @@ enum class UiKey : u8
     Down,
     Enter,
     Escape,
-    Delete
+    Delete,
+    A
 };
 
 // Drawing and pointer helpers for overlays on the item submitted just before
