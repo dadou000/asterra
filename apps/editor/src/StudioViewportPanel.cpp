@@ -200,9 +200,14 @@ void StudioViewportPanel::Register()
                     context.SameLine();
                     if(context.Checkbox("Snap nodes##viewport-road-snap",
                         infrastructureSnapNodes))
+                    {
                         infrastructureLastAction=infrastructureSnapNodes ?
                             "Node snapping enabled (hold Ctrl to bypass)." :
                             "Node snapping disabled.";
+                        if(infrastructureSnapPreferenceChanged)
+                            infrastructureSnapPreferenceChanged(
+                                infrastructureSnapNodes);
+                    }
                 }
 
                 context.SameLine();
