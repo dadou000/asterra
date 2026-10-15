@@ -3646,7 +3646,7 @@ void EditorUi::DrawStudioShell()
                 if(update.busy)
                     ImGui::TextDisabled(
                         "Running in the background; the editor stays responsive.");
-                if(update.onOpenLog)
+                if(update.hasLog && update.onOpenLog)
                 {
                     ImGui::Separator();
                     if(ImGui::SmallButton("Open update log##orbit-github-log"))
