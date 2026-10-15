@@ -562,6 +562,19 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool QueueGitHubCheck()
+    {
+        std::scoped_lock lock(updateMutex_);
+        if (!running_.load() || updateState_.busy ||
+            updateRequested_.load(std::memory_order_acquire))
+            return false;
+        updateState_.busy = true;
+        updateState_.stage = "Queued check";
+        updateState_.detail = "Waiting for the active build or watcher task.";
+        checkRequested_.store(true, std::memory_order_release);
+        return true;
+    }
+
     [[nodiscard]] GitHubUpdateStatus GitHubUpdateState() const
     {
         std::scoped_lock lock(updateMutex_);
@@ -571,6 +584,23 @@ public:
     }
 
 private:
+    void PublishComparison(
+        const std::uint64_t commits)
+    {
+        const GitResult local = RunGit(L"rev-parse --short=12 HEAD");
+        const GitResult remote = RunGit(L"rev-parse --short=12 FETCH_HEAD");
+        std::scoped_lock lock(updateMutex_);
+        updateState_.pendingCommits = commits;
+        updateState_.localCommit =
+            local.success ? TrimGit(local.output) : std::string{};
+        updateState_.remoteCommit =
+            remote.success ? TrimGit(remote.output) : std::string{};
+        updateState_.lastCheckedUnixSeconds =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<
+                std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+    }
+
     void SetUpdateState(
         std::string stage,
         std::string detail,
@@ -693,11 +723,19 @@ private:
             return;
         }
         const std::string count=TrimGit(ahead.output);
-        if(count=="0")
+        std::uint64_t pending=0;
+        try { pending=std::stoull(count); }
+        catch(const std::exception&)
+        {
+            SetUpdateState("Failed","Invalid Git revision count.",false);
+            return;
+        }
+        PublishComparison(pending);
+        if(pending==0)
             SetUpdateState("Up to date","Already on the latest Harmony commit.",false);
         else
             SetUpdateState("Update available",
-                count+" new commit(s) available on Harmony.",false);
+                std::to_string(pending)+" new commit(s) available on Harmony.",false);
     }
 
     [[nodiscard]] bool ExecuteGitHubUpdate()
@@ -742,7 +780,15 @@ private:
             SetUpdateState("Failed","Could not determine whether an update exists.",false);
             return false;
         }
-        if(TrimGit(commits.output)=="0")
+        std::uint64_t pending=0;
+        try { pending=std::stoull(TrimGit(commits.output)); }
+        catch(const std::exception&)
+        {
+            SetUpdateState("Failed","Invalid Git revision count.",false);
+            return false;
+        }
+        PublishComparison(pending);
+        if(pending==0)
         {
             SetUpdateState("Up to date",
                 "Already on the latest Harmony commit. Nothing was rebuilt or restarted.",false);
@@ -764,6 +810,13 @@ private:
             SetUpdateState("Failed",
                 "Fast-forward failed: " + TrimGit(merge.output), false);
             return false;
+        }
+        // The source has advanced even if a later build fails. A second
+        // update attempt must not keep advertising already-pulled commits.
+        {
+            std::scoped_lock lock(updateMutex_);
+            updateState_.pendingCommits = 0;
+            updateState_.localCommit = updateState_.remoteCommit;
         }
         SetUpdateState("Building", "Incrementally rebuilding Orbit Studio...", true);
         const PendingFallback request{
@@ -874,6 +927,8 @@ private:
                 // same commit twice from those notifications.
                 watchers.clear();
                 recentEvents.clear();
+                nextUpdateCheck=std::chrono::steady_clock::now()+
+                    std::chrono::minutes(5);
                 {
                     std::scoped_lock lock(configurationMutex_);
                     pendingWatchRoots_ = knownWatchRoots_;
@@ -883,9 +938,11 @@ private:
 
             const auto now =
                 std::chrono::steady_clock::now();
-            if(now >= nextUpdateCheck)
+            if(checkRequested_.exchange(false,std::memory_order_acq_rel) ||
+               now >= nextUpdateCheck)
             {
-                nextUpdateCheck=now+std::chrono::minutes(5);
+                nextUpdateCheck=std::chrono::steady_clock::now()+
+                    std::chrono::minutes(5);
                 CheckGitHubUpdate();
             }
 
@@ -1340,6 +1397,7 @@ private:
     mutable std::mutex updateMutex_;
     GitHubUpdateStatus updateState_;
     std::atomic<bool> updateRequested_{false};
+    std::atomic<bool> checkRequested_{false};
 };
 
 HotIterationService::HotIterationService(
@@ -1379,6 +1437,11 @@ void HotIterationService::Stop() noexcept
 bool HotIterationService::QueueGitHubUpdate()
 {
     return impl_->QueueGitHubUpdate();
+}
+
+bool HotIterationService::QueueGitHubCheck()
+{
+    return impl_->QueueGitHubCheck();
 }
 
 GitHubUpdateStatus HotIterationService::GitHubUpdateState() const
