@@ -287,6 +287,7 @@ public:
     bool infrastructureEaseTurns = true;
     f64 infrastructureCurveBias = 0.25;
     bool infrastructureSnapNodes = true;
+    std::function<void(bool)> infrastructureSnapPreferenceChanged;
     f64 infrastructureNodeSnapMeters = 10.0;
     f64 infrastructureElevationMeters = 0.0;
     bool infrastructurePageUpWasDown = false;
