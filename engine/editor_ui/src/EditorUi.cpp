@@ -3545,6 +3545,7 @@ void EditorUi::DrawStudioShell()
             ImGui::BeginDisabled(!update.enabled);
             const bool hasNewCommits=update.pendingCommits>0U &&
                 update.stage=="Update available";
+            const bool canInstall=hasNewCommits || update.rebuildPending;
             const ImU32 buttonFill=hasNewCommits ?
                 ImGui::GetColorU32(ImVec4(0.22F,0.39F,0.80F,0.55F)) :
                 ImGui::GetColorU32(ImVec4(0.23F,0.35F,0.57F,0.26F));
@@ -3593,6 +3594,9 @@ void EditorUi::DrawStudioShell()
                 if(update.stage=="Up to date")
                     ImGui::TextColored(ImVec4(0.51F,0.83F,0.65F,1.0F),
                         "Up to date");
+                else if(update.rebuildPending)
+                    ImGui::TextColored(ImVec4(1.0F,0.78F,0.43F,1.0F),
+                        "Build required");
                 else if(hasNewCommits)
                     ImGui::TextColored(ImVec4(0.61F,0.77F,1.0F,1.0F),
                         "%llu new commit(s)",
@@ -3636,19 +3640,23 @@ void EditorUi::DrawStudioShell()
                     "Automatic check every 5 minutes");
 
                 ImGui::Separator();
-                ImGui::BeginDisabled(update.busy || !update.onCheck);
+                ImGui::BeginDisabled(update.busy || !update.available ||
+                    !update.onCheck);
                 if(ImGui::Button("Check now##orbit-github-check") &&
                    update.onCheck)
                     update.onCheck();
                 ImGui::EndDisabled();
                 ImGui::SameLine();
                 ImGui::BeginDisabled(update.busy || !update.enabled ||
-                    !hasNewCommits || !update.onClick);
-                if(ImGui::Button("Update and restart##orbit-github-apply") &&
+                    !canInstall || !update.onClick);
+                if(ImGui::Button(
+                       (update.rebuildPending && !hasNewCommits ?
+                           "Retry build and restart##orbit-github-apply" :
+                           "Update and restart##orbit-github-apply")) &&
                    update.onClick)
                     update.onClick();
                 ImGui::EndDisabled();
-                if(!hasNewCommits && !update.busy)
+                if(!canInstall && !update.busy)
                     ImGui::TextDisabled(
                         "No verified update to install. No restart needed.");
                 if(update.busy)
