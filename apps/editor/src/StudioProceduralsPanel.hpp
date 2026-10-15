@@ -40,6 +40,11 @@ public:
     void BindViewportTool(StudioViewportPanel& viewport) noexcept
     {
         viewportTool_=&viewport;
+        viewportTool_->infrastructureSnapPreferenceChanged=[this](const bool enabled)
+        {
+            snapToNodes_=enabled;
+            SavePreferencesIfChanged();
+        };
         UpdateViewportTool();
     }
     void OpenPathsAndRoads() noexcept
@@ -782,8 +787,14 @@ private:
             speed_=designSpeedKmh_/3.6;
             newNetworkName_=category_==0?"Road Network":
                 category_==1?"Rail Network":"Path Network";
+            // Never silently continue a road chain in a network that
+            // belonged to another infrastructure category.
+            newNetworkId_={};
             if(viewportTool_)
+            {
+                viewportTool_->activePathNetwork.reset();
                 viewportTool_->lastPlacedPathNode.reset();
+            }
             UpdateViewportTool();
         }
         context.Heading("Choose a section");
