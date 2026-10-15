@@ -11,6 +11,10 @@
 #include <cstring>
 #include <stdexcept>
 #include <vector>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <limits>
 
 namespace orbit::editor_ui
 {
@@ -381,25 +385,31 @@ public:
                     LineList);
     }
 
+    struct MeshUpload
+    {
+        std::unique_ptr<rhi::Buffer> vertexBuffer;
+        std::unique_ptr<rhi::Buffer> indexBuffer;
+        std::size_t vertexCapacity{0};
+        std::size_t indexCapacity{0};
+    };
+
     void EnsureMeshBuffers(
+        MeshUpload& upload,
         const std::size_t vertices,
         const std::size_t indices)
     {
-        if (vertices >
-                meshVertexCapacity)
+        if (vertices > upload.vertexCapacity)
         {
-            meshVertexCapacity =
-                std::max(
-                    vertices,
+            upload.vertexCapacity =
+                std::max(vertices,
                     std::max<std::size_t>(
-                        meshVertexCapacity * 2U,
-                        256U));
+                        upload.vertexCapacity * 2U, 256U));
 
-            meshVertexBuffer =
+            upload.vertexBuffer =
                 device.CreateBuffer({
                     .sizeBytes =
                         static_cast<u64>(
-                            meshVertexCapacity *
+                            upload.vertexCapacity *
                             sizeof(
                                 RenderVertex)),
                     .usage =
@@ -414,21 +424,18 @@ public:
                 });
         }
 
-        if (indices >
-                meshIndexCapacity)
+        if (indices > upload.indexCapacity)
         {
-            meshIndexCapacity =
-                std::max(
-                    indices,
+            upload.indexCapacity =
+                std::max(indices,
                     std::max<std::size_t>(
-                        meshIndexCapacity * 2U,
-                        512U));
+                        upload.indexCapacity * 2U, 512U));
 
-            meshIndexBuffer =
+            upload.indexBuffer =
                 device.CreateBuffer({
                     .sizeBytes =
                         static_cast<u64>(
-                            meshIndexCapacity *
+                            upload.indexCapacity *
                             sizeof(u32)),
                     .usage =
                         rhi::BufferUsage::
@@ -484,15 +491,13 @@ public:
     std::unique_ptr<rhi::GraphicsPipeline>
         linePipeline;
 
-    std::unique_ptr<rhi::Buffer>
-        meshVertexBuffer;
-    std::unique_ptr<rhi::Buffer>
-        meshIndexBuffer;
+    // The render graph records multiple viewport road draws before
+    // submission. Each view must own its camera-relative VB/IB; otherwise
+    // the last viewport's mapped upload overwrites earlier draw commands.
+    std::unordered_map<std::string, MeshUpload> meshUploads;
     std::unique_ptr<rhi::Buffer>
         lineVertexBuffer;
 
-    std::size_t meshVertexCapacity{0};
-    std::size_t meshIndexCapacity{0};
     std::size_t lineVertexCapacity{0};
 
     std::vector<RenderVertex>
@@ -529,7 +534,8 @@ void PathPreviewRenderer::Draw(
         products,
     const bool drawDebugLines,
     rhi::Texture* const depth,
-    const std::span<rhi::Texture* const> surfaceAttachments)
+    const std::span<rhi::Texture* const> surfaceAttachments,
+    const std::string_view viewportId)
 {
     if (!surfaceAttachments.empty() && surfaceAttachments.size() != 3U)
         throw std::invalid_argument("Corridor MRT requires exactly three surface attachments.");
@@ -762,33 +768,37 @@ void PathPreviewRenderer::Draw(
     if (!impl_->meshVertices.empty() &&
         !impl_->meshIndices.empty())
     {
-        impl_->EnsureMeshBuffers(
-            impl_->meshVertices.size(),
-            impl_->meshIndices.size());
+        // Independent GPU buffers for every viewport render-pass identity.
+        // Buffer::Map waits for previous submitted uses of this *view's*
+        // buffer; a different viewport cannot replace its contents before
+        // this frame's command buffer has even been submitted.
+        auto& upload=impl_->meshUploads[std::string(viewportId)];
+        impl_->EnsureMeshBuffers(upload,
+            impl_->meshVertices.size(), impl_->meshIndices.size());
 
         std::memcpy(
-            impl_->meshVertexBuffer->Map(),
+            upload.vertexBuffer->Map(),
             impl_->meshVertices.data(),
             impl_->meshVertices.size() *
                 sizeof(RenderVertex));
-        impl_->meshVertexBuffer->Unmap();
+        upload.vertexBuffer->Unmap();
 
         std::memcpy(
-            impl_->meshIndexBuffer->Map(),
+            upload.indexBuffer->Map(),
             impl_->meshIndices.data(),
             impl_->meshIndices.size() *
                 sizeof(u32));
-        impl_->meshIndexBuffer->Unmap();
+        upload.indexBuffer->Unmap();
 
         commands.SetGraphicsPipeline(
             surfaceAttachments.empty() ? *impl_->meshPipeline : *impl_->surfacePipeline);
         commands.SetGraphicsConstants(
             constants);
         commands.SetVertexBuffer(
-            *impl_->meshVertexBuffer,
+            *upload.vertexBuffer,
             sizeof(RenderVertex));
         commands.SetIndexBuffer(
-            *impl_->meshIndexBuffer,
+            *upload.indexBuffer,
             rhi::IndexFormat::UInt32);
         commands.DrawIndexed(
             static_cast<u32>(
