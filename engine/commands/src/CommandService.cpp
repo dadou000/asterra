@@ -1,6 +1,8 @@
 #include <orbit/commands/CommandService.hpp>
 
 #include <algorithm>
+#include <array>
+#include <unordered_set>
 #include <stdexcept>
 #include <utility>
 
@@ -156,66 +158,79 @@ CommandService::DuplicateObject(
     return duplicate;
 }
 
-void CommandService::DeleteObject(
-    const scene::ObjectId object)
+void CommandService::DeleteObject(const scene::ObjectId object)
 {
-    const scene::ObjectRecord record =
-        RequireObject(object);
+    const std::array roots{object};
+    DeleteObjects(roots);
+}
 
-    if (!objects_.Children(object).empty())
+void CommandService::DeleteObjects(
+    const std::span<const scene::ObjectId> objects)
+{
+    struct SavedObject
     {
-        throw std::invalid_argument(
-            "Cannot delete an object while it has children.");
+        scene::ObjectRecord record;
+        std::vector<std::pair<schema::PropertyId,schema::PropertyValue>>
+            properties;
+    };
+
+    if(objects.empty())return;
+
+    // Read and validate the ENTIRE subtree before mutating the world.
+    // Preorder gives parent-first insertion on undo and child-first erasure
+    // on redo. A shared child selected alongside its parent is visited once.
+    std::vector<SavedObject> snapshot;
+    std::unordered_set<scene::ObjectId> visited;
+    std::vector<scene::ObjectId> pending;
+    pending.reserve(objects.size());
+    for(const auto id:objects)
+    {
+        if(!id)continue;
+        static_cast<void>(RequireObject(id));
+        pending.push_back(id);
     }
-
-    const schema::TypeSchema* typeSchema =
-        schemas_.FindType(record.type);
-
-    if (typeSchema == nullptr)
+    while(!pending.empty())
     {
-        throw std::runtime_error(
-            "Cannot snapshot properties for an object with an unknown schema type.");
-    }
+        const auto id=pending.back();
+        pending.pop_back();
+        if(!visited.insert(id).second)continue;
 
-    std::vector<std::pair<
-        schema::PropertyId,
-        schema::PropertyValue>> storedProperties;
+        const auto record=RequireObject(id);
+        const auto* schema=schemas_.FindType(record.type);
+        if(!schema)
+            throw std::runtime_error(
+                "Cannot delete subtree containing an unknown schema type.");
 
-    for (const auto& property : typeSchema->properties)
-    {
-        const auto value =
-            objects_.GetProperty(object, property.id);
-
-        if (value.has_value())
+        SavedObject saved{.record=record};
+        for(const auto& property:schema->properties)
         {
-            storedProperties.emplace_back(
-                property.id,
-                *value);
+            if(const auto value=objects_.GetProperty(id,property.id))
+                saved.properties.emplace_back(property.id,*value);
         }
+        snapshot.push_back(std::move(saved));
+        for(const auto& child:objects_.Children(id))
+            pending.push_back(child.id);
     }
+    if(snapshot.empty())return;
 
     ApplyAndRecord(
-        "Delete Object",
+        snapshot.size()==1U?"Delete Object":"Delete Object Hierarchy",
         Action{
-            .redo =
-                [this, object](scene::MutationKey key)
+            .redo=[this,snapshot](scene::MutationKey key)
+            {
+                for(auto it=snapshot.rbegin();it!=snapshot.rend();++it)
+                    objects_.Erase(key,it->record.id);
+            },
+            .undo=[this,snapshot](scene::MutationKey key)
+            {
+                for(const auto& saved:snapshot)
                 {
-                    objects_.Erase(key, object);
-                },
-            .undo =
-                [this, record, storedProperties](scene::MutationKey key)
-                {
-                    objects_.Insert(key, record);
-
-                    for (const auto& [property, value] : storedProperties)
-                    {
+                    objects_.Insert(key,saved.record);
+                    for(const auto& [property,value]:saved.properties)
                         objects_.SetProperty(
-                            key,
-                            record.id,
-                            property,
-                            value);
-                    }
+                            key,saved.record.id,property,value);
                 }
+            }
         });
 }
 
