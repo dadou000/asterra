@@ -100,6 +100,7 @@
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <format>
 #include <functional>
 #include <optional>
@@ -119,6 +120,16 @@ using namespace support;
 
 void StudioViewportPanel::Register()
 {
+    // This debug presentation toggle is an editor preference, not world state.
+    try
+    {
+        std::ifstream in(orbit::platform::UserDataDirectory() /
+            "studio_road_outlines.txt");
+        int visible=0;
+        if(in >> visible && (visible==0 || visible==1))
+            pathDebugVisualization=visible!=0;
+    }
+    catch(const std::exception&) {}
     ui.RegisterPanel({
         .id = kViewportPanel,
         .title = "Viewport",
@@ -174,10 +185,20 @@ void StudioViewportPanel::Register()
                 context.Toolbar(toolbar);
 
                 context.SameLine();
-                static_cast<void>(
-                    context.Checkbox(
-                        "Road neon outlines (debug)",
-                        pathDebugVisualization));
+                if(context.Checkbox(
+                    "Road neon outlines (debug)",
+                    pathDebugVisualization))
+                {
+                    try
+                    {
+                        const auto path=orbit::platform::UserDataDirectory() /
+                            "studio_road_outlines.txt";
+                        std::filesystem::create_directories(path.parent_path());
+                        std::ofstream out(path,std::ios::trunc);
+                        if(out)out << (pathDebugVisualization ? 1 : 0) << '\n';
+                    }
+                    catch(const std::exception&) {}
+                }
 
                 context.SameLine();
                 if (context.Button(
