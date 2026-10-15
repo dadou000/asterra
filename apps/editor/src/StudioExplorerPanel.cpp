@@ -144,6 +144,13 @@ void StudioExplorerPanel::Register()
                     moveSource;
                 static bool openMovePicker = false;
                 static int explorerFilter = 0;
+                // Stable visible-row order from the previous frame is used
+                // for Shift-selection in either the tree or search results.
+                static std::vector<orbit::scene::ObjectId> visibleRows;
+                static std::optional<orbit::scene::ObjectId> selectionAnchor;
+                static std::string previousSearch;
+                static int previousFilter = -1;
+                std::vector<orbit::scene::ObjectId> currentVisibleRows;
                 using orbit::editor_ui::ToolbarChoice;
 
                 const auto typeLabel =
@@ -181,9 +188,10 @@ void StudioExplorerPanel::Register()
                     };
 
                 const auto selectVirtual =
-                    [this](const StudioInspectorTargetKind kind)
+                    [this, &selectionAnchor](const StudioInspectorTargetKind kind)
                     {
                         selection().Clear();
+                        selectionAnchor.reset();
                         inspectorTarget.kind = kind;
                     };
 
@@ -256,6 +264,77 @@ void StudioExplorerPanel::Register()
                         orbit::log::Warning(exception.what());
                     }
                 };
+                // Reuse one selection policy for hierarchical and search rows.
+                // Shift selects a visible contiguous range; Ctrl toggles;
+                // Ctrl+Shift extends the existing selection.
+                const auto selectRow=[&](orbit::scene::ObjectId id)
+                {
+                    if(context.ShiftDown() && selectionAnchor)
+                    {
+                        const auto a=std::find(
+                            visibleRows.begin(),visibleRows.end(),*selectionAnchor);
+                        const auto b=std::find(
+                            visibleRows.begin(),visibleRows.end(),id);
+                        if(a!=visibleRows.end() && b!=visibleRows.end())
+                        {
+                            auto start=static_cast<std::size_t>(
+                                std::distance(visibleRows.begin(),a));
+                            auto end=static_cast<std::size_t>(
+                                std::distance(visibleRows.begin(),b));
+                            if(start>end)std::swap(start,end);
+                            std::vector<orbit::scene::ObjectId> range;
+                            if(context.ControlDown())
+                                range=selection().Ordered();
+                            range.insert(range.end(),
+                                visibleRows.begin()+start,
+                                visibleRows.begin()+end+1U);
+                            selection().Set(range);
+                            inspectorTarget.kind=
+                                StudioInspectorTargetKind::WorldSelection;
+                            return;
+                        }
+                    }
+                    explorer().Select(id,context.ControlDown());
+                    selectionAnchor=id;
+                    inspectorTarget.kind=
+                        StudioInspectorTargetKind::WorldSelection;
+                };
+
+                const auto deleteSelected=[&]()
+                {
+                    std::vector<orbit::scene::ObjectId> targets;
+                    for(const auto id:selection().Ordered())
+                    {
+                        const auto record=objects().Find(id);
+                        if(!record)continue;
+                        if(record->type==orbit::world_model::kWorldType)
+                        {
+                            explorerStatus="World root is protected; deselect it to delete other objects.";
+                            return;
+                        }
+                        targets.push_back(id);
+                    }
+                    if(targets.empty())return;
+                    std::optional<orbit::scene::ObjectId> fallbackParent;
+                    if(targets.size()==1U)
+                    {
+                        if(const auto record=objects().Find(targets.front()))
+                            fallbackParent=record->parent;
+                    }
+                    attempt("Delete hierarchy",[&]
+                    {
+                        commandService().DeleteObjects(targets);
+                        selection().Clear();
+                        selectionAnchor.reset();
+                        if(fallbackParent && objects().Find(*fallbackParent))
+                        {
+                            explorer().Select(*fallbackParent,false);
+                            selectionAnchor=*fallbackParent;
+                        }
+                        inspectorTarget.kind=
+                            StudioInspectorTargetKind::WorldSelection;
+                    });
+                };
                 static constexpr std::string_view kObjectPayload = "ORBIT_OBJECT";
                 static constexpr std::array<ToolbarChoice, 3> kExplorerFilters{{
                     {"All", ToolbarIcon::Layers}, {"World", ToolbarIcon::World}, {"Assets", ToolbarIcon::Asset}}};
@@ -263,6 +342,43 @@ void StudioExplorerPanel::Register()
                 static_cast<void>(context.ToolbarChoices("explorer-filter", kExplorerFilters, explorerFilter, false));
                 context.MutedText("Search");
                 static_cast<void>(context.InputText("##explorer-search", explorerSearch, 2.0F));
+                if(previousSearch!=explorerSearch || previousFilter!=explorerFilter)
+                {
+                    visibleRows.clear();
+                    selectionAnchor.reset();
+                    previousSearch=explorerSearch;
+                    previousFilter=explorerFilter;
+                }
+                context.MutedText("Ctrl+click: toggle | Shift+click: range | Delete: remove selected subtree");
+                context.KeyValue("Selected",std::to_string(selection().Ordered().size()));
+                if(explorerFilter!=2)
+                {
+                    if(context.Button("Select visible##explorer-select-visible"))
+                    {
+                        selection().Set(visibleRows);
+                        if(!visibleRows.empty())
+                            selectionAnchor=visibleRows.front();
+                        inspectorTarget.kind=
+                            StudioInspectorTargetKind::WorldSelection;
+                    }
+                    context.SameLine();
+                    if(context.Button("Clear selection##explorer-clear-selection"))
+                    {
+                        selection().Clear();
+                        selectionAnchor.reset();
+                    }
+                    if(selection().Ordered().size()==1U)
+                    {
+                        if(const auto record=objects().Find(selection().Ordered().front()))
+                        {
+                            if(record->parent && context.Button("Select parent##explorer-parent"))
+                                selectRow(*record->parent);
+                        }
+                    }
+                    if(!selection().Ordered().empty() &&
+                       context.Button("Delete selected (undoable)##explorer-delete-selected"))
+                        deleteSelected();
+                }
                 context.Separator();
 
                 if (explorerFilter != 2)
@@ -273,6 +389,7 @@ void StudioExplorerPanel::Register()
                          explorer().Search(
                              explorerSearch))
                     {
+                        currentVisibleRows.push_back(object.id);
                         const std::string label = object.name +
                             "##search-" + object.id.ToString();
 
@@ -283,12 +400,7 @@ void StudioExplorerPanel::Register()
                                 typeIcon(object.type),
                                 4.0F))
                         {
-                            explorer().Select(
-                                object.id,
-                                context.
-                                    ControlDown());
-                            inspectorTarget.kind =
-                                StudioInspectorTargetKind::WorldSelection;
+                            selectRow(object.id);
                         }
                     }
                 }
@@ -305,6 +417,7 @@ void StudioExplorerPanel::Register()
                                     object)
                         {
                             ORBIT_PROFILE_SCOPE("Explorer.node");
+                            currentVisibleRows.push_back(object.id);
                             const std::string label =
                                 object.name +
                                 "##tree-" +
@@ -331,24 +444,13 @@ void StudioExplorerPanel::Register()
                                     2.0F);
 
                             if (item.clicked)
-                            {
-                                explorer().Select(
-                                    object.id,
-                                    context.
-                                        ControlDown());
-                                inspectorTarget.kind =
-                                    StudioInspectorTargetKind::WorldSelection;
-                            }
+                                selectRow(object.id);
 
                             if (item.rightClicked &&
                                 !selection().Contains(
                                     object.id))
                             {
-                                explorer().Select(
-                                    object.id,
-                                    false);
-                                inspectorTarget.kind =
-                                    StudioInspectorTargetKind::WorldSelection;
+                                selectRow(object.id);
                             }
 
                             // Building the action list is not free; only do
@@ -503,41 +605,26 @@ void StudioExplorerPanel::Register()
                                     }
                                 }
 
-                                if (object.type == orbit::world_model::kWorldType)
-                                {
+                                if(object.type==orbit::world_model::kWorldType)
                                     context.MutedText("The world root is protected.");
-                                }
-                                else if (!explorer().Children(object.id).empty())
+                                else
                                 {
-                                    context.MutedText("Delete its child elements first.");
-                                }
-                                else if (context.Selectable(
-                                             "Delete##del-" + object.id.ToString(),
-                                             false))
-                                {
-                                    attempt(
-                                        "Delete",
-                                        [&]
+                                    const bool batch=selection().Contains(object.id) &&
+                                        selection().Ordered().size()>1U;
+                                    const std::string label=batch ?
+                                        "Delete selected hierarchies##del-" :
+                                        "Delete hierarchy (including children)##del-";
+                                    if(context.Selectable(label+object.id.ToString(),false))
+                                    {
+                                        if(!batch)
                                         {
-                                            commandService()
-                                                .DeleteObject(
-                                                    object.id);
-                                            if (object.parent.has_value())
-                                            {
-                                                explorer().Select(
-                                                    *object.parent, false);
-                                                inspectorTarget.kind =
-                                                    StudioInspectorTargetKind::WorldSelection;
-                                            }
-                                            else
-                                            {
-                                                selection().Clear();
-                                                inspectorTarget.kind =
-                                                    StudioInspectorTargetKind::ViewportCamera;
-                                            }
-                                        });
-                                    context.
-                                        CloseCurrentPopup();
+                                            selection().Set(
+                                                std::array{object.id});
+                                            selectionAnchor=object.id;
+                                        }
+                                        deleteSelected();
+                                        context.CloseCurrentPopup();
+                                    }
                                 }
 
                                 if (object.type != orbit::world_model::kWorldType)
@@ -671,11 +758,12 @@ void StudioExplorerPanel::Register()
                     }
                 }
 
+                visibleRows=std::move(currentVisibleRows);
+                if(context.WindowFocusedForShortcuts() &&
+                   context.KeyPressed(orbit::editor_ui::UiKey::Delete))
+                    deleteSelected();
                 if (!explorerStatus.empty())
-                {
-                    context.MutedText(
-                        explorerStatus);
-                }
+                    context.MutedText(explorerStatus);
                 }
 
                 if (context.BeginPopup(
