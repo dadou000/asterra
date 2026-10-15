@@ -2257,6 +2257,11 @@ int orbit::editor_app::StudioApplication::Run(
                 return orbit::hot_reload::RequestGitHubUpdate();
             };
 
+        const auto checkOrbitFromGitHub = []() -> bool
+        {
+            return orbit::hot_reload::RequestGitHubCheck();
+        };
+
         shortcuts.RegisterCallback(
             {
                 .key = orbit::platform::Key::F5,
@@ -2280,8 +2285,25 @@ int orbit::editor_app::StudioApplication::Run(
                     {"busy", status.busy},
                     {"stage", status.stage},
                     {"detail", status.detail},
-                    {"log_path", status.logPath.string()}
+                    {"log_path", status.logPath.string()},
+                    {"pending_commits",static_cast<orbit::i64>(
+                        status.pendingCommits)},
+                    {"local_commit",status.localCommit},
+                    {"remote_commit",status.remoteCommit},
+                    {"last_checked_unix",static_cast<orbit::i64>(
+                        status.lastCheckedUnixSeconds)}
                 };
+            });
+        rpcHost.Dispatcher().Register(
+            {.name = "studio.github_update_check",
+             .description = "Queue a non-mutating GitHub freshness check; does not save, merge, build or restart.",
+             .mutating = false},
+            [&checkOrbitFromGitHub](const orbit::rpc::Value&)
+            {
+                if(!checkOrbitFromGitHub())
+                    throw std::runtime_error(
+                        "Updater unavailable or already working.");
+                return orbit::rpc::Value::Object{{"queued",true}};
             });
         rpcHost.Dispatcher().Register(
             {.name = "studio.github_update_start",
@@ -3312,30 +3334,57 @@ int orbit::editor_app::StudioApplication::Run(
                 const auto gitUpdate =
                     orbit::hot_reload::QueryGitHubUpdate();
                 ui.SetUpdateIndicator({
-                    .label = gitUpdate.busy
-                        ? (gitUpdate.stage == "Checking" ||
-                           gitUpdate.stage == "Fetching"
-                            ? "Checking updates..." : "Updating...")
-                        : gitUpdate.stage == "Up to date"
-                            ? "Up to date"
-                            : gitUpdate.stage == "Update available"
-                                ? "Update available"
-                                : gitUpdate.stage == "Failed" ||
-                                  gitUpdate.stage == "Blocked"
-                                    ? "Update unavailable"
-                                    : "Check updates",
+                    .label = gitUpdate.busy ?
+                        (gitUpdate.stage == "Checking" ||
+                         gitUpdate.stage == "Fetching" ||
+                         gitUpdate.stage == "Queued check" ?
+                            "Checking..." : "Updating...") :
+                        gitUpdate.stage == "Up to date" ? "Up to date" :
+                        gitUpdate.stage == "Update available" ?
+                            std::to_string(gitUpdate.pendingCommits) +
+                            " update(s)" :
+                        gitUpdate.stage == "Blocked" ? "Update blocked" :
+                        gitUpdate.stage == "Failed" ? "Check failed" :
+                            "Orbit updater",
                     .tooltip =
-                        "GitHub origin/0.1.1-Harmony - fast-forward only. "
-                        "Check every five minutes; rebuild and restart only if new commits exist."
+                        "Orbit updater - click for details and actions."
                         "\n" + gitUpdate.stage + ": " +
-                        gitUpdate.detail +
-                        (gitUpdate.logPath.empty()
-                            ? std::string{}
-                            : "\nLog: " + gitUpdate.logPath.string()),
-                    .enabled = gitUpdate.available && !gitUpdate.busy,
+                        gitUpdate.detail,
+                    .enabled = true,
+                    .available = gitUpdate.available,
+                    .stage = gitUpdate.stage,
+                    .detail = gitUpdate.detail,
+                    .branch = "origin/0.1.1-Harmony",
+                    .localCommit = gitUpdate.localCommit,
+                    .remoteCommit = gitUpdate.remoteCommit,
+                    .lastCheckedUnixSeconds =
+                        gitUpdate.lastCheckedUnixSeconds,
+                    .pendingCommits = gitUpdate.pendingCommits,
+                    .busy = gitUpdate.busy,
                     .onClick = [&updateOrbitFromGitHub]
                     {
                         static_cast<void>(updateOrbitFromGitHub());
+                    },
+                    .onCheck = [&checkOrbitFromGitHub]
+                    {
+                        static_cast<void>(checkOrbitFromGitHub());
+                    },
+                    .onOpenLog = [path=gitUpdate.logPath]
+                    {
+                        try
+                        {
+                            if(std::filesystem::exists(path))
+                                orbit::platform::OpenInFileBrowser(path);
+                            else if(std::filesystem::exists(path.parent_path()))
+                                orbit::platform::OpenInFileBrowser(
+                                    path.parent_path());
+                        }
+                        catch(const std::exception& exception)
+                        {
+                            orbit::log::Warning(std::string(
+                                "Could not open updater log: ")+
+                                exception.what());
+                        }
                     }
                 });
                 ui.SetProjectIndicator({
