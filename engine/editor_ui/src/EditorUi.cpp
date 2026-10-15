@@ -2112,7 +2112,9 @@ void PanelContext::DrawPanelMarquee(
     auto* window=ImGui::GetCurrentWindow();
     auto* draw=ImGui::GetForegroundDrawList();
     const ImVec2 windowMin=window->Pos;
-    const ImVec2 windowMax=window->Pos+window->Size;
+    const ImVec2 windowMax{
+        window->Pos.x+window->Size.x,
+        window->Pos.y+window->Size.y};
     draw->PushClipRect(windowMin,windowMax,true);
     draw->AddRectFilled(topLeft,bottomRight,
         IM_COL32(75,155,255,45));
