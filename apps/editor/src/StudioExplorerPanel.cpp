@@ -150,7 +150,17 @@ void StudioExplorerPanel::Register()
                 static std::optional<orbit::scene::ObjectId> selectionAnchor;
                 static std::string previousSearch;
                 static int previousFilter = -1;
+                static orbit::scene::ObjectId previousWorldRoot{};
                 std::vector<orbit::scene::ObjectId> currentVisibleRows;
+                const auto worldRoots=explorer().Roots();
+                const auto currentRoot=worldRoots.empty()?
+                    orbit::scene::ObjectId{}:worldRoots.front().id;
+                if(previousWorldRoot!=currentRoot)
+                {
+                    visibleRows.clear();
+                    selectionAnchor.reset();
+                    previousWorldRoot=currentRoot;
+                }
                 using orbit::editor_ui::ToolbarChoice;
 
                 const auto typeLabel =
@@ -471,11 +481,11 @@ void StudioExplorerPanel::Register()
 
                             if (object.type == orbit::world_model::kWorldType)
                             {
-                                static bool worldRootInitialized = false;
-                                if (!worldRootInitialized)
+                                static orbit::scene::ObjectId expandedWorldRoot{};
+                                if (expandedWorldRoot!=object.id)
                                 {
                                     context.SetNextTreeItemOpen(true);
-                                    worldRootInitialized = true;
+                                    expandedWorldRoot=object.id;
                                 }
                             }
 
@@ -820,7 +830,7 @@ void StudioExplorerPanel::Register()
 
                     ORBIT_PROFILE_SCOPE("Explorer.tree");
                     for (const auto& root :
-                         explorer().Roots())
+                         worldRoots)
                     {
                         drawObject(root);
                     }
