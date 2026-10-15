@@ -2257,6 +2257,16 @@ int orbit::editor_app::StudioApplication::Run(
                 return orbit::hot_reload::RequestGitHubUpdate();
             };
 
+        shortcuts.RegisterCallback(
+            {
+                .key = orbit::platform::Key::F5,
+                .shift = true
+            },
+            [&updateOrbitFromGitHub]
+            {
+                static_cast<void>(updateOrbitFromGitHub());
+            });
+
         rpcHost.Dispatcher().Register(
             {.name = "studio.github_update_status",
              .description = "Background GitHub update and rebuild state.",
