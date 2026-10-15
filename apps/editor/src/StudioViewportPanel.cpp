@@ -176,7 +176,7 @@ void StudioViewportPanel::Register()
 
                     if (!pathPlacementMode)
                     {
-                        lastPlacedPathNode.reset();
+                        ResetInfrastructureChain();
                         infrastructureDrawMode=false;
                     }
                 }
@@ -189,7 +189,7 @@ void StudioViewportPanel::Register()
                     context.SameLine();
                     if(context.Button("New chain##viewport-road-new-chain"))
                     {
-                        lastPlacedPathNode.reset();
+                        ResetInfrastructureChain();
                         infrastructureLastAction=
                             "New road chain ready. Click to place the first node.";
                         infrastructurePlacementError.clear();
@@ -800,7 +800,7 @@ void StudioViewportPanel::Register()
                 {
                     // Enter provides a keyboard-first way to complete one
                     // chain while keeping the chosen tool and road preset.
-                    lastPlacedPathNode.reset();
+                    ResetInfrastructureChain();
                     infrastructureLastAction=
                         "Chain finished. Click to begin another road.";
                     infrastructurePlacementError.clear();
@@ -809,7 +809,7 @@ void StudioViewportPanel::Register()
                 {
                     // Right click finishes the current continuous chain,
                     // but leaves the chosen construction tool armed.
-                    lastPlacedPathNode.reset();
+                    ResetInfrastructureChain();
                     viewportRadialOpen=false;
                     infrastructureLastAction=
                         "Chain finished. Left-click to start a new road.";
@@ -822,7 +822,7 @@ void StudioViewportPanel::Register()
                     // network is never discarded or rewritten.
                     pathPlacementMode=false;
                     infrastructureDrawMode=false;
-                    lastPlacedPathNode.reset();
+                    ResetInfrastructureChain();
                     infrastructureLastAction="Road construction exited.";
                     infrastructurePlacementError.clear();
                 }
@@ -836,7 +836,7 @@ void StudioViewportPanel::Register()
                 {
                     pathPlacementMode=false;
                     infrastructureDrawMode=false;
-                    lastPlacedPathNode.reset();
+                    ResetInfrastructureChain();
                     context.Text(
                         "No celestial body is authored in this world.");
                     context.Text(
@@ -1064,6 +1064,40 @@ void StudioViewportPanel::Register()
                     }
                     return referencePoint+radial*elevation;
                 };
+                // One canonical handle computation for both preview and
+                // authored Bezier. The second click selects the outgoing
+                // direction in the local ground tangent plane; its distance
+                // sets handle strength, bounded to half the segment chord.
+                // The end tangent defaults to the end-to-start chord and
+                // can still be edited in the expert editor.
+                const auto curveHandles =
+                    [](const orbit::math::Double3 start,
+                       const orbit::math::Double3 directionPoint,
+                       const orbit::math::Double3 end)
+                    {
+                        const auto up=orbit::math::Normalize(start);
+                        const auto requested=directionPoint-start;
+                        const auto tangent=requested-
+                            up*orbit::math::Dot(requested,up);
+                        const double selectedLength=orbit::math::Length(tangent);
+                        const double chord=orbit::math::Length(end-start);
+                        const double length=std::min(selectedLength,chord*0.5);
+                        const auto out=selectedLength>1.0e-6 ?
+                            tangent*(length/selectedLength) :
+                            (end-start)*0.33;
+                        return std::pair{out,(start-end)*0.33};
+                    };
+
+                // Direction picks belong to a specific start node. If a
+                // different tool or undo changed it, discard the pending step.
+                if((!lastPlacedPathNode ||
+                    infrastructureCurveDirectionNode!=*lastPlacedPathNode ||
+                    infrastructureAlignmentMode!=1) &&
+                   infrastructureCurveDirectionPoint)
+                {
+                    infrastructureCurveDirectionPoint.reset();
+                    infrastructureCurveDirectionNode={};
+                }
                 // Cities-style live construction preview: use the exact
                 // same surface ray, semantic network and snap radius that
                 // the committed click will use. No authored state is touched.
@@ -1110,7 +1144,12 @@ void StudioViewportPanel::Register()
                         }
                         // Ctrl bypasses snapping only while held; it does not
                         // change the user's saved snapping preference.
-                        if(network && infrastructureSnapNodes &&
+                        const bool pickingCurveDirection=
+                            infrastructureAlignmentMode==1 &&
+                            lastPlacedPathNode &&
+                            !infrastructureCurveDirectionPoint;
+                        if(!pickingCurveDirection && network &&
+                           infrastructureSnapNodes &&
                            !window.KeyDown(orbit::platform::Key::LeftControl))
                         {
                             if(infrastructureSnapCacheRevision!=objects().Revision() ||
@@ -1220,14 +1259,34 @@ void StudioViewportPanel::Register()
                                         catalog->pavedWidthMeters*0.5:
                                         infrastructureCatalogId=="ballasted-rail"?
                                             2.0175:0.0;
-                                    const auto curveSide=orbit::math::Cross(
-                                        orbit::math::Normalize(end),delta)*
-                                        infrastructureCurveBias;
-                                    const auto p1=start+delta*0.33+curveSide;
-                                    const auto p2=end-delta*0.33+curveSide;
+                                    // Before the second click, the cursor
+                                    // indicates the outgoing direction, not
+                                    // a committed curve endpoint.
+                                    const bool chooseDirection=
+                                        infrastructureAlignmentMode==1 &&
+                                        !infrastructureCurveDirectionPoint;
+                                    if(chooseDirection)
+                                    {
+                                        const auto startScreen=screen(start);
+                                        const auto targetScreen=screen(end);
+                                        if(startScreen && targetScreen)
+                                            strokes.push_back({
+                                                *startScreen,*targetScreen,
+                                                {1.0F,0.79F,0.38F,1.0F},2.4F});
+                                    }
+                                    const auto handles=
+                                        infrastructureAlignmentMode==1 &&
+                                        infrastructureCurveDirectionPoint ?
+                                        curveHandles(start,
+                                            *infrastructureCurveDirectionPoint,
+                                            end) :
+                                        std::pair{delta*0.33,delta*-0.33};
+                                    const auto p1=start+handles.first;
+                                    const auto p2=end+handles.second;
                                     auto centerPrevious=screen(start);
                                     std::optional<orbit::math::Float2> leftPrevious;
                                     std::optional<orbit::math::Float2> rightPrevious;
+                                    if(!chooseDirection)
                                     for(int segment=0;segment<=24;++segment)
                                     {
                                         const double t=static_cast<double>(
@@ -1295,14 +1354,21 @@ void StudioViewportPanel::Register()
                             context.OverlayShapesOnLastItem(strokes,markers);
                         context.OverlayLabelOnLastItem(
                             {12.0F,12.0F},pointColor,
-                            lastPlacedPathNode ?
-                                std::format("{}  |  {:.1f} m{}",
-                                    infrastructureAlignmentMode==0?"Straight":
-                                    infrastructureAlignmentMode==1?"Curve":"Route chord",
-                                    infrastructurePreviewLengthMeters,
-                                    infrastructurePreviewSnapped?"  |  node snap":"") :
-                                (infrastructurePreviewSnapped?
-                                    "Start from existing node":"Click to set first point"));
+                            infrastructureAlignmentMode==1 ?
+                                (!lastPlacedPathNode ?
+                                    "Curve 1/3: Click to place start node" :
+                                    !infrastructureCurveDirectionPoint ?
+                                        "Curve 2/3: Click to set outgoing direction" :
+                                        std::format("Curve 3/3: Click end node  |  {:.1f} m{}",
+                                            infrastructurePreviewLengthMeters,
+                                            infrastructurePreviewSnapped ? "  |  node snap" : "")) :
+                                lastPlacedPathNode ?
+                                    std::format("{}  |  {:.1f} m{}",
+                                        infrastructureAlignmentMode==0?"Straight":"Route chord",
+                                        infrastructurePreviewLengthMeters,
+                                        infrastructurePreviewSnapped?"  |  node snap":"") :
+                                    (infrastructurePreviewSnapped?
+                                        "Start from existing node":"Click to set first point"));
                     }
                 }
 
@@ -1361,6 +1427,35 @@ void StudioViewportPanel::Register()
                             roadSurfacePoint(bodyId,*hit) : *hit;
                         auto& pathService =
                             studioSession.PathNetwork().Service();
+
+                        if(infrastructureDrawMode &&
+                           infrastructureAlignmentMode==1 &&
+                           lastPlacedPathNode &&
+                           !infrastructureCurveDirectionPoint)
+                        {
+                            const auto previous=pathService.FindNode(
+                                *lastPlacedPathNode);
+                            const auto* fixed=previous ?
+                                std::get_if<orbit::paths::FramePointAnchor>(
+                                    &previous->anchor) : nullptr;
+                            if(!fixed || fixed->frame!=body->frame)
+                                throw std::runtime_error(
+                                    "Curve start is no longer valid. Start a new chain.");
+                            const auto radial=orbit::math::Normalize(
+                                fixed->localMeters);
+                            const auto selected=authoredPoint-fixed->localMeters;
+                            const auto groundDirection=selected-
+                                radial*orbit::math::Dot(selected,radial);
+                            if(orbit::math::Length(groundDirection)<0.5)
+                                throw std::invalid_argument(
+                                    "Choose a direction at least 0.5 m from the start.");
+                            infrastructureCurveDirectionPoint=authoredPoint;
+                            infrastructureCurveDirectionNode=*lastPlacedPathNode;
+                            infrastructureLastAction=
+                                "Direction set (2/3). Click the end node to build the curve.";
+                            infrastructurePlacementError.clear();
+                            return; // No node, edge or undo entry on click two.
+                        }
 
                         std::optional<
                             orbit::paths::NetworkId>
@@ -1562,33 +1657,21 @@ void StudioViewportPanel::Register()
                                             "Terrain-routed segment");
                                     else if(infrastructureAlignmentMode==1)
                                     {
-                                        orbit::math::Double3 direction{5,0,0};
-                                        if(const auto* fixed=std::get_if<
+                                        const auto* startFixed=std::get_if<
                                             orbit::paths::FramePointAnchor>(
                                                 &previous->anchor);
-                                            fixed && fixed->frame==body->frame)
-                                        {
-                                            direction=(authoredPoint-fixed->localMeters)*0.33;
-                                        }
-                                        else if(const auto* anchor=std::get_if<
-                                            orbit::paths::SurfaceAnchor>(
-                                                &previous->anchor);
-                                            anchor && anchor->body==bodyId)
-                                        {
-                                            const auto from=orbit::universe::
-                                                ReferenceSurfacePoint(body->shape,{
-                                                    anchor->coordinate.x,
-                                                    anchor->coordinate.y,
-                                                    anchor->coordinate.z});
-                                            direction=(authoredPoint-from)*0.33;
-                                        }
-                                        const auto side=orbit::math::Cross(
-                                            orbit::math::Normalize(authoredPoint),
-                                            direction)*infrastructureCurveBias;
+                                        if(!startFixed ||
+                                           !infrastructureCurveDirectionPoint ||
+                                           infrastructureCurveDirectionNode!=previous->id)
+                                            throw std::runtime_error(
+                                                "Curve direction is missing. Click to set it before the endpoint.");
+                                        const auto handles=curveHandles(
+                                            startFixed->localMeters,
+                                            *infrastructureCurveDirectionPoint,
+                                            authoredPoint);
                                         connected=pathService.ConnectBezier(
                                             previous->id,node.id,
-                                            direction+side,
-                                            direction*-1.0+side,
+                                            handles.first,handles.second,
                                             "Curved segment");
                                     }
                                     else
@@ -1620,9 +1703,17 @@ void StudioViewportPanel::Register()
                                 }
                                 else
                                     infrastructureLastAction=
+                                        infrastructureAlignmentMode==1 ?
+                                        "Start node placed (1/3). Click to set the outgoing direction." :
                                         "Starting point placed. Click the next point to construct a segment.";
                             }
 
+                            if(infrastructureDrawMode &&
+                               infrastructureAlignmentMode==1 && newBuiltEdge)
+                            {
+                                infrastructureCurveDirectionPoint.reset();
+                                infrastructureCurveDirectionNode={};
+                            }
                             activePathNetwork =
                                 targetNetwork;
 
