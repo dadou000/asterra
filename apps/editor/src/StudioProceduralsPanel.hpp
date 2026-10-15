@@ -1245,16 +1245,34 @@ private:
             if (revision != knownWorldGeneration_)
                 Refresh();
         }
-        else if (!edges_.empty() || !networks_.empty() || !nodes_.empty())
+        else if (knownWorldGeneration_ != ~u64{0} ||
+                 !edges_.empty() || !networks_.empty() ||
+                 !nodes_.empty() || newNetworkId_ ||
+                 !selectedRoads_.empty())
         {
+            // A new world must never inherit network IDs, selected roads,
+            // construction errors or an armed placement tool.
             edges_.clear(); nodes_.clear(); networks_.clear();
             edgeId_.clear(); newNetworkId_ = {};
+            selectedRoads_.clear();
+            upgradeTargetEdgeId_.clear();
             report_ = rpc::Value{};
             junctionReport_ = rpc::Value{};
             driveReport_ = rpc::Value{};
             runtimeVehicleReport_=rpc::Value{};
             runtimeVehicleId_.clear();
             junctionNodeId_.clear();
+            error_.clear(); status_.clear();
+            roadInventoryPage_=0U;
+            if(viewportTool_)
+            {
+                viewportTool_->activePathNetwork.reset();
+                viewportTool_->lastPlacedPathNode.reset();
+                viewportTool_->infrastructureDrawMode=false;
+                viewportTool_->pathPlacementMode=false;
+                viewportTool_->infrastructurePlacementError.clear();
+                viewportTool_->infrastructureLastAction.clear();
+            }
             knownWorldGeneration_ = ~u64{0};
         }
         if(page_==0)
