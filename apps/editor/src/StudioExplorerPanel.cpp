@@ -198,7 +198,7 @@ void StudioExplorerPanel::Register()
                     };
 
                 const auto selectVirtual =
-                    [this, &selectionAnchor](const StudioInspectorTargetKind kind)
+                    [this](const StudioInspectorTargetKind kind)
                     {
                         selection().Clear();
                         selectionAnchor.reset();
