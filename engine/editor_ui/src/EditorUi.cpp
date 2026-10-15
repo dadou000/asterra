@@ -2090,6 +2090,7 @@ PanelMarqueePointer PanelContext::PanelMarqueeInput() const noexcept
         .released=ImGui::IsMouseReleased(ImGuiMouseButton_Left),
         .shift=io.KeyShift,
         .ctrl=io.KeyCtrl,
+        .alt=io.KeyAlt,
         .screen={pos.x,pos.y}
     };
 }
@@ -2358,6 +2359,11 @@ bool PanelContext::ControlDown() const noexcept
 bool PanelContext::ShiftDown() const noexcept
 {
     return ImGui::GetIO().KeyShift;
+}
+
+bool PanelContext::AltDown() const noexcept
+{
+    return ImGui::GetIO().KeyAlt;
 }
 
 bool PanelContext::WindowFocusedForShortcuts() const noexcept
