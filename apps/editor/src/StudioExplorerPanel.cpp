@@ -152,6 +152,13 @@ void StudioExplorerPanel::Register()
                 static int previousFilter = -1;
                 static orbit::scene::ObjectId previousWorldRoot{};
                 std::vector<orbit::scene::ObjectId> currentVisibleRows;
+                std::vector<std::pair<orbit::scene::ObjectId,std::array<orbit::f32,4>>>
+                    visibleRowRects;
+                static bool marqueeHeld=false;
+                static bool marqueeDragging=false;
+                static orbit::math::Float2 marqueeStart{};
+                static std::vector<orbit::scene::ObjectId> marqueeBase;
+                static bool marqueeAdditive=false;
                 const auto worldRoots=explorer().Roots();
                 const auto currentRoot=worldRoots.empty()?
                     orbit::scene::ObjectId{}:worldRoots.front().id;
@@ -159,6 +166,9 @@ void StudioExplorerPanel::Register()
                 {
                     visibleRows.clear();
                     selectionAnchor.reset();
+                    marqueeHeld=false;
+                    marqueeDragging=false;
+                    marqueeBase.clear();
                     previousWorldRoot=currentRoot;
                 }
                 using orbit::editor_ui::ToolbarChoice;
@@ -392,10 +402,14 @@ void StudioExplorerPanel::Register()
                 {
                     visibleRows.clear();
                     selectionAnchor.reset();
+                    marqueeHeld=false;
+                    marqueeDragging=false;
                     previousSearch=explorerSearch;
                     previousFilter=explorerFilter;
                 }
-                context.MutedText("Ctrl+click: toggle | Shift+click: range | Ctrl+A: visible | Delete: subtree");
+                context.MutedText(
+                    "Drag empty space: box select | Shift+drag rows: box select | "
+                    "Ctrl+drag: add | Ctrl+click: toggle | Delete: subtree");
                 context.KeyValue("Selected",std::to_string(selection().Ordered().size()));
                 if(explorerFilter!=2)
                 {
@@ -449,15 +463,12 @@ void StudioExplorerPanel::Register()
                         const std::string label = object.name +
                             "##search-" + object.id.ToString();
 
-                        if (context.SelectableWithIcon(
-                                label,
-                                selection().Contains(
-                                    object.id),
-                                typeIcon(object.type),
-                                4.0F))
-                        {
-                            selectRow(object.id);
-                        }
+                        const bool clicked=context.SelectableWithIcon(
+                            label,selection().Contains(object.id),
+                            typeIcon(object.type),4.0F);
+                        visibleRowRects.emplace_back(
+                            object.id,context.LastItemScreenRect());
+                        if(clicked)selectRow(object.id);
                     }
                 }
                 else
@@ -498,6 +509,8 @@ void StudioExplorerPanel::Register()
                                     typeIcon(object.type),
                                     24.0F,
                                     2.0F);
+                            visibleRowRects.emplace_back(
+                                object.id,context.LastItemScreenRect());
 
                             if (item.clicked)
                                 selectRow(object.id);
@@ -788,7 +801,9 @@ void StudioExplorerPanel::Register()
                                 }
                             }
 
-                            if (context.
+                            // Shift+drag is reserved for marquee over
+                            // rows; ordinary row drag keeps reparenting.
+                            if (!context.ShiftDown() && context.
                                     BeginDragSource())
                             {
                                 const auto payload =
@@ -837,6 +852,55 @@ void StudioExplorerPanel::Register()
                 }
 
                 visibleRows=std::move(currentVisibleRows);
+
+                // Explorer marquee starts from whitespace by default. On
+                // occupied rows Shift+drag explicitly chooses the marquee
+                // rather than starting a reparent drag. No pointer capture
+                // is added to individual rows, preserving click and DnD.
+                const auto pointer=context.PanelMarqueeInput();
+                if(pointer.pressed && pointer.hoveredWindow &&
+                   (!pointer.overItem || pointer.shift))
+                {
+                    marqueeHeld=true;
+                    marqueeDragging=false;
+                    marqueeStart=pointer.screen;
+                    marqueeBase=selection().Ordered();
+                    marqueeAdditive=pointer.ctrl;
+                }
+                if(marqueeHeld)
+                {
+                    const auto delta=pointer.screen-marqueeStart;
+                    if(pointer.down &&
+                       delta.x*delta.x+delta.y*delta.y>=36.0F)
+                        marqueeDragging=true;
+                    if(marqueeDragging)
+                    {
+                        const float x0=std::min(marqueeStart.x,pointer.screen.x);
+                        const float x1=std::max(marqueeStart.x,pointer.screen.x);
+                        const float y0=std::min(marqueeStart.y,pointer.screen.y);
+                        const float y1=std::max(marqueeStart.y,pointer.screen.y);
+                        std::vector<orbit::scene::ObjectId> inside=
+                            marqueeAdditive?marqueeBase:
+                                std::vector<orbit::scene::ObjectId>{};
+                        for(const auto& [id,rect]:visibleRowRects)
+                        {
+                            if(rect[0]<=x1 && rect[2]>=x0 &&
+                               rect[1]<=y1 && rect[3]>=y0)
+                                inside.push_back(id);
+                        }
+                        selection().Set(inside);
+                        inspectorTarget.kind=
+                            StudioInspectorTargetKind::WorldSelection;
+                        context.DrawPanelMarquee(marqueeStart,pointer.screen);
+                    }
+                    if(pointer.released || !pointer.down)
+                    {
+                        marqueeHeld=false;
+                        marqueeDragging=false;
+                        marqueeBase.clear();
+                    }
+                }
+
                 if(context.WindowFocusedForShortcuts())
                 {
                     if(context.ControlDown() &&
