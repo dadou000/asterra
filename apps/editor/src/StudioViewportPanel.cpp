@@ -1632,6 +1632,8 @@ void StudioViewportPanel::Register()
                             {
                                 commandService().RollbackTransaction();
                                 infrastructureLastAction=
+                                    infrastructureAlignmentMode==1 ?
+                                    "Curve endpoint equals the start. Choose a different endpoint; your direction is preserved." :
                                     "Same endpoint: move the cursor to extend the road, or right-click to start another chain.";
                                 return;
                             }
