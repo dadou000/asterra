@@ -610,6 +610,11 @@ private:
         updateState_.available = running_.load();
         updateState_.busy = busy;
         updateState_.stage = std::move(stage);
+        // The full Git diagnostic is retained in the log. Bound popover
+        // text so a verbose transport error cannot fill the entire UI.
+        if(detail.size()>550U)
+            detail=detail.substr(0,550U)+
+                "... (see updater log for full output)";
         updateState_.detail = std::move(detail);
         updateState_.logPath =
             config_.runtimeRoot / "OrbitStudio_github_update.log";
