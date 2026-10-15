@@ -68,17 +68,11 @@ VSOutput main(VSInput input)
     const float z =
         dot(input.position, forward);
 
-    if (z <= g_push.projection.z ||
-        z >= g_push.projection.w)
-    {
-        output.position =
-            float4(2.0, 2.0, 1.0, 1.0);
-        output.color = input.color;
-        output.normal = input.normal;
-        output.corridorUv = input.corridorUv;
-        output.corridorInfo = input.corridorInfo;
-        return output;
-    }
+    // Do not push vertices outside near/far to a fixed off-screen point.
+    // A road triangle straddling the near plane would then acquire an
+    // enormous artificial edge, producing view-dependent stretched sheets.
+    // Always return the homogeneous projection and let the rasterizer clip
+    // the entire primitive to -w<=x,y<=w and 0<=z<=w.
 
     const float x =
         dot(input.position, right);
