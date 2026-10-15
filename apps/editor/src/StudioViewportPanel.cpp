@@ -1683,10 +1683,17 @@ void StudioViewportPanel::Register()
                                            infrastructureCurveDirectionNode!=previous->id)
                                             throw std::runtime_error(
                                                 "Curve direction is missing. Click to set it before the endpoint.");
+                                        const auto* endFixed=std::get_if<
+                                            orbit::paths::FramePointAnchor>(
+                                                &node.anchor);
+                                        if(!endFixed ||
+                                           endFixed->frame!=startFixed->frame)
+                                            throw std::runtime_error(
+                                                "Curve endpoint must be in the start node's body frame.");
                                         const auto handles=curveHandles(
                                             startFixed->localMeters,
                                             *infrastructureCurveDirectionPoint,
-                                            authoredPoint);
+                                            endFixed->localMeters);
                                         connected=pathService.ConnectBezier(
                                             previous->id,node.id,
                                             handles.first,handles.second,
