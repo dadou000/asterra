@@ -2234,7 +2234,7 @@ int orbit::editor_app::StudioApplication::Run(
 
         // One authority path for the top-bar gizmo, Build menu and MCP.
         // Save project/world data before the successful generation handoff.
-        bool manualUpdateAwaitingResult=false;
+        std::atomic_bool manualUpdateAwaitingResult{false};
         const auto updateOrbitFromGitHub =
             [&project, &world, &worldSession,
              &manualUpdateAwaitingResult]() -> bool
@@ -2258,7 +2258,8 @@ int orbit::editor_app::StudioApplication::Run(
                 }
                 if(orbit::hot_reload::RequestGitHubUpdate())
                 {
-                    manualUpdateAwaitingResult=true;
+                    manualUpdateAwaitingResult.store(
+                        true,std::memory_order_relaxed);
                     return true;
                 }
                 return false;
@@ -3343,7 +3344,8 @@ int orbit::editor_app::StudioApplication::Run(
                     orbit::hot_reload::QueryGitHubUpdate();
                 // Shift+F5/Build-menu update requests must visibly report a
                 // no-op, without spamming notifications for 5-minute polls.
-                if(manualUpdateAwaitingResult && !gitUpdate.busy)
+                if(manualUpdateAwaitingResult.load(
+                    std::memory_order_relaxed) && !gitUpdate.busy)
                 {
                     if(gitUpdate.stage=="Up to date")
                     {
@@ -3353,7 +3355,8 @@ int orbit::editor_app::StudioApplication::Run(
                             .severity=orbit::editor_ui::EditorUi::
                                 NotificationSeverity::Info,
                             .seconds=4.0F});
-                        manualUpdateAwaitingResult=false;
+                        manualUpdateAwaitingResult.store(
+                            false,std::memory_order_relaxed);
                     }
                     else if(gitUpdate.stage=="Failed" ||
                             gitUpdate.stage=="Blocked")
@@ -3364,7 +3367,8 @@ int orbit::editor_app::StudioApplication::Run(
                             .severity=orbit::editor_ui::EditorUi::
                                 NotificationSeverity::Error,
                             .seconds=7.0F});
-                        manualUpdateAwaitingResult=false;
+                        manualUpdateAwaitingResult.store(
+                            false,std::memory_order_relaxed);
                     }
                 }
                 ui.SetUpdateIndicator({
@@ -3405,6 +3409,7 @@ int orbit::editor_app::StudioApplication::Run(
                     {
                         static_cast<void>(checkOrbitFromGitHub());
                     },
+                    .hasLog = !gitUpdate.logPath.empty(),
                     .onOpenLog = [path=gitUpdate.logPath]
                     {
                         try
