@@ -3713,7 +3713,8 @@ StudioViewportRenderer::ComposeBase(
                  base = &view->SurfaceBaseRoughness(),
                  normal = &view->SurfaceNormalMetallic(),
                  emission = &view->SurfaceEmissionClass(),
-                 production = presentation == StudioViewportPresentation::ProductionTerrain](
+                 production = presentation == StudioViewportPresentation::ProductionTerrain,
+                 pathViewportId = info.id](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
@@ -3731,7 +3732,8 @@ StudioViewportRenderer::ComposeBase(
                         drawPathDebug,
                         depth,
                         production ? std::span<rhi::Texture* const>(surfaces) :
-                            std::span<rhi::Texture* const>{});
+                            std::span<rhi::Texture* const>{},
+                        pathViewportId);
                 });
         }
 
