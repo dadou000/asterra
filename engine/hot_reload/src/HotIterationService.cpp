@@ -659,6 +659,47 @@ private:
         return value.substr(first, last - first + 1U);
     }
 
+    void CheckGitHubUpdate()
+    {
+        if(updateRequested_.load(std::memory_order_acquire))
+            return;
+        SetUpdateState("Checking", "Checking origin/0.1.1-Harmony...", true);
+        const GitResult branch=RunGit(L"branch --show-current");
+        if(!branch.success || TrimGit(branch.output)!="0.1.1-Harmony")
+        {
+            SetUpdateState("Blocked",
+                "Updater requires local branch 0.1.1-Harmony.", false);
+            return;
+        }
+        const GitResult fetch=RunGit(L"fetch --no-tags origin 0.1.1-Harmony");
+        if(!fetch.success)
+        {
+            SetUpdateState("Failed",
+                "Unable to check for updates: "+TrimGit(fetch.output),false);
+            return;
+        }
+        const GitResult divergence=RunGit(
+            L"merge-base --is-ancestor HEAD FETCH_HEAD");
+        if(!divergence.success)
+        {
+            SetUpdateState("Blocked",
+                "Local branch has diverged from origin; no automatic changes.",false);
+            return;
+        }
+        const GitResult ahead=RunGit(L"rev-list --count HEAD..FETCH_HEAD");
+        if(!ahead.success)
+        {
+            SetUpdateState("Failed","Could not compare local and remote commits.",false);
+            return;
+        }
+        const std::string count=TrimGit(ahead.output);
+        if(count=="0")
+            SetUpdateState("Up to date","Already on the latest Harmony commit.",false);
+        else
+            SetUpdateState("Update available",
+                count+" new commit(s) available on Harmony.",false);
+    }
+
     [[nodiscard]] bool ExecuteGitHubUpdate()
     {
         // Never run Git through cmd.exe and never accept a user-controlled
@@ -703,6 +744,18 @@ private:
                 "Local history diverges from GitHub. "
                 "Update stopped without merging or resetting.", false);
             return false;
+        }
+        const GitResult commits=RunGit(L"rev-list --count HEAD..FETCH_HEAD");
+        if(!commits.success)
+        {
+            SetUpdateState("Failed","Could not determine whether an update exists.",false);
+            return false;
+        }
+        if(TrimGit(commits.output)=="0")
+        {
+            SetUpdateState("Up to date",
+                "Already on the latest Harmony commit. Nothing was rebuilt or restarted.",false);
+            return true;
         }
         SetUpdateState("Updating", "Fast-forwarding local Harmony...", true);
         const GitResult merge = RunGit(L"merge --ff-only FETCH_HEAD");
@@ -773,6 +826,9 @@ private:
         orbit::log::Info(
             "Orbit engine-wide hot iteration watcher is active.");
 
+        // Check on launch and every five minutes, using the existing
+        // worker so Git fetch cannot race the build/handoff transaction.
+        auto nextUpdateCheck=std::chrono::steady_clock::now();
         while (!stopToken.stop_requested())
         {
             std::vector<std::filesystem::path>
@@ -827,6 +883,11 @@ private:
 
             const auto now =
                 std::chrono::steady_clock::now();
+            if(now >= nextUpdateCheck)
+            {
+                nextUpdateCheck=now+std::chrono::minutes(5);
+                CheckGitHubUpdate();
+            }
 
             for (auto& watcher : watchers)
             {
