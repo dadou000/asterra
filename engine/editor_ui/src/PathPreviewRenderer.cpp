@@ -1,5 +1,6 @@
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 
+#include <orbit/core/Log.hpp>
 #include <orbit/rhi/Pipeline.hpp>
 #include <orbit/rhi/Resource.hpp>
 
@@ -11,6 +12,12 @@
 #include <cstring>
 #include <stdexcept>
 #include <vector>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <format>
+#include <limits>
 
 namespace orbit::editor_ui
 {
@@ -60,25 +67,22 @@ VSOutput main(VSInput input)
         normalize(g_push.forward.xyz);
     const float3 requestedUp =
         normalize(g_push.up.xyz);
+    // Match LookAtLH and render_view::ViewportRay/ProjectToViewport.
+    // The previous basis used forward x up, mirroring every road against
+    // the terrain and the editor's canonical camera/right direction.
     const float3 right =
-        normalize(cross(forward, requestedUp));
+        normalize(cross(requestedUp, forward));
     const float3 cameraUp =
-        normalize(cross(right, forward));
+        normalize(cross(forward, right));
 
     const float z =
         dot(input.position, forward);
 
-    if (z <= g_push.projection.z ||
-        z >= g_push.projection.w)
-    {
-        output.position =
-            float4(2.0, 2.0, 1.0, 1.0);
-        output.color = input.color;
-        output.normal = input.normal;
-        output.corridorUv = input.corridorUv;
-        output.corridorInfo = input.corridorInfo;
-        return output;
-    }
+    // Do not push vertices outside near/far to a fixed off-screen point.
+    // A road triangle straddling the near plane would then acquire an
+    // enormous artificial edge, producing view-dependent stretched sheets.
+    // Always return the homogeneous projection and let the rasterizer clip
+    // the entire primitive to -w<=x,y<=w and 0<=z<=w.
 
     const float x =
         dot(input.position, right);
@@ -387,25 +391,31 @@ public:
                     LineList);
     }
 
+    struct MeshUpload
+    {
+        std::unique_ptr<rhi::Buffer> vertexBuffer;
+        std::unique_ptr<rhi::Buffer> indexBuffer;
+        std::size_t vertexCapacity{0};
+        std::size_t indexCapacity{0};
+    };
+
     void EnsureMeshBuffers(
+        MeshUpload& upload,
         const std::size_t vertices,
         const std::size_t indices)
     {
-        if (vertices >
-                meshVertexCapacity)
+        if (vertices > upload.vertexCapacity)
         {
-            meshVertexCapacity =
-                std::max(
-                    vertices,
+            upload.vertexCapacity =
+                std::max(vertices,
                     std::max<std::size_t>(
-                        meshVertexCapacity * 2U,
-                        256U));
+                        upload.vertexCapacity * 2U, 256U));
 
-            meshVertexBuffer =
+            upload.vertexBuffer =
                 device.CreateBuffer({
                     .sizeBytes =
                         static_cast<u64>(
-                            meshVertexCapacity *
+                            upload.vertexCapacity *
                             sizeof(
                                 RenderVertex)),
                     .usage =
@@ -420,21 +430,18 @@ public:
                 });
         }
 
-        if (indices >
-                meshIndexCapacity)
+        if (indices > upload.indexCapacity)
         {
-            meshIndexCapacity =
-                std::max(
-                    indices,
+            upload.indexCapacity =
+                std::max(indices,
                     std::max<std::size_t>(
-                        meshIndexCapacity * 2U,
-                        512U));
+                        upload.indexCapacity * 2U, 512U));
 
-            meshIndexBuffer =
+            upload.indexBuffer =
                 device.CreateBuffer({
                     .sizeBytes =
                         static_cast<u64>(
-                            meshIndexCapacity *
+                            upload.indexCapacity *
                             sizeof(u32)),
                     .usage =
                         rhi::BufferUsage::
@@ -490,15 +497,14 @@ public:
     std::unique_ptr<rhi::GraphicsPipeline>
         linePipeline;
 
-    std::unique_ptr<rhi::Buffer>
-        meshVertexBuffer;
-    std::unique_ptr<rhi::Buffer>
-        meshIndexBuffer;
+    // The render graph records multiple viewport road draws before
+    // submission. Each view must own its camera-relative VB/IB; otherwise
+    // the last viewport's mapped upload overwrites earlier draw commands.
+    std::unordered_map<std::string, MeshUpload> meshUploads;
+    std::unordered_set<std::string> warnedBadMeshSignatures;
     std::unique_ptr<rhi::Buffer>
         lineVertexBuffer;
 
-    std::size_t meshVertexCapacity{0};
-    std::size_t meshIndexCapacity{0};
     std::size_t lineVertexCapacity{0};
 
     std::vector<RenderVertex>
@@ -535,7 +541,8 @@ void PathPreviewRenderer::Draw(
         products,
     const bool drawDebugLines,
     rhi::Texture* const depth,
-    const std::span<rhi::Texture* const> surfaceAttachments)
+    const std::span<rhi::Texture* const> surfaceAttachments,
+    const std::string_view viewportId)
 {
     if (!surfaceAttachments.empty() && surfaceAttachments.size() != 3U)
         throw std::invalid_argument("Corridor MRT requires exactly three surface attachments.");
@@ -569,6 +576,39 @@ void PathPreviewRenderer::Draw(
             continue;
         }
 
+        // Index corruption or NaN coordinates must never reach the GPU.
+        // Diagnose each bad published revision once, keeping the currently
+        // visible good road products intact instead of uploading undefined
+        // vertex fetches or poison geometry to the clipper.
+        const auto& mesh=product->visualMesh;
+        const auto finite3=[](const math::Double3& v)
+        {
+            return std::isfinite(v.x) && std::isfinite(v.y) &&
+                   std::isfinite(v.z);
+        };
+        const bool invalidIndices=mesh.indices.size()%3U!=0U ||
+            std::any_of(mesh.indices.begin(),mesh.indices.end(),
+                [&mesh](u32 index){return index>=mesh.vertices.size();});
+        const bool nonFiniteVertices=std::any_of(
+            mesh.vertices.begin(),mesh.vertices.end(),
+            [&](const path_geometry::PathMeshVertex& v)
+            {
+                return !finite3(v.position) || !finite3(v.normal) ||
+                    !std::isfinite(v.uv.x) || !std::isfinite(v.uv.y);
+            });
+        if(invalidIndices || nonFiniteVertices)
+        {
+            const auto key=std::format("{}:{:016x}",
+                product->edge.ToString(),product->buildSignature);
+            if(impl_->warnedBadMeshSignatures.insert(key).second)
+                orbit::log::Warning(std::format(
+                    "Road mesh rejected: {} ({}). Check source/junction "
+                    "publication for corrupt indices or nonfinite vertices.",
+                    key,invalidIndices?"out-of-range triangle index":
+                        "nonfinite vertex data"));
+            continue;
+        }
+
         std::vector<math::Float3> relativeNormals;
         relativeNormals.reserve(product->visualMesh.vertices.size());
         std::vector<math::Float3>
@@ -578,45 +618,30 @@ void PathPreviewRenderer::Draw(
             product->visualMesh.
                 vertices.size());
 
-        bool connected = true;
-
-        for (const auto& vertex :
-             product->visualMesh.vertices)
+        // Resolve the rigid frame once per product, rather than twice per
+        // vertex. The old normal calculation subtracted two already-rounded
+        // float camera-relative coordinates (position and position+normal),
+        // losing the one-metre offset at large planetary distances.
+        const auto cameraFromProduct=frames.ResolveTransform(
+            product->frame,camera.frame,atTime);
+        if(!cameraFromProduct)continue;
+        for(const auto& vertex:mesh.vertices)
         {
-            const auto relative =
-                frames.ToCameraRelative(
-                    {
-                        .frame =
-                            product->frame,
-                        .localMeters =
-                            vertex.position
-                    },
-                    cameraOrigin,
-                    atTime);
-
-            if (!relative.has_value())
-            {
-                connected = false;
-                break;
-            }
-
-            const auto tip = frames.ToCameraRelative(
-                {.frame = product->frame,
-                 .localMeters = vertex.position + vertex.normal},
-                cameraOrigin, atTime);
-            if (!tip.has_value())
-            {
-                connected = false;
-                break;
-            }
-            const auto n = math::Normalize(*tip - *relative);
-            relativeNormals.push_back(n);
-            relativeVertices.push_back(*relative);
-        }
-
-        if (!connected)
-        {
-            continue;
+            const auto relative=math::TransformPoint(
+                *cameraFromProduct,vertex.position)-
+                camera.localPositionMeters;
+            auto normal=math::Normalize(math::TransformVector(
+                cameraFromProduct->rotation,vertex.normal));
+            if(math::LengthSquared(normal)<0.25)
+                normal={0.0,1.0,0.0};
+            relativeVertices.push_back({
+                static_cast<f32>(relative.x),
+                static_cast<f32>(relative.y),
+                static_cast<f32>(relative.z)});
+            relativeNormals.push_back({
+                static_cast<f32>(normal.x),
+                static_cast<f32>(normal.y),
+                static_cast<f32>(normal.z)});
         }
 
         const u32 vertexBase =
@@ -768,33 +793,37 @@ void PathPreviewRenderer::Draw(
     if (!impl_->meshVertices.empty() &&
         !impl_->meshIndices.empty())
     {
-        impl_->EnsureMeshBuffers(
-            impl_->meshVertices.size(),
-            impl_->meshIndices.size());
+        // Independent GPU buffers for every viewport render-pass identity.
+        // Buffer::Map waits for previous submitted uses of this *view's*
+        // buffer; a different viewport cannot replace its contents before
+        // this frame's command buffer has even been submitted.
+        auto& upload=impl_->meshUploads[std::string(viewportId)];
+        impl_->EnsureMeshBuffers(upload,
+            impl_->meshVertices.size(), impl_->meshIndices.size());
 
         std::memcpy(
-            impl_->meshVertexBuffer->Map(),
+            upload.vertexBuffer->Map(),
             impl_->meshVertices.data(),
             impl_->meshVertices.size() *
                 sizeof(RenderVertex));
-        impl_->meshVertexBuffer->Unmap();
+        upload.vertexBuffer->Unmap();
 
         std::memcpy(
-            impl_->meshIndexBuffer->Map(),
+            upload.indexBuffer->Map(),
             impl_->meshIndices.data(),
             impl_->meshIndices.size() *
                 sizeof(u32));
-        impl_->meshIndexBuffer->Unmap();
+        upload.indexBuffer->Unmap();
 
         commands.SetGraphicsPipeline(
             surfaceAttachments.empty() ? *impl_->meshPipeline : *impl_->surfacePipeline);
         commands.SetGraphicsConstants(
             constants);
         commands.SetVertexBuffer(
-            *impl_->meshVertexBuffer,
+            *upload.vertexBuffer,
             sizeof(RenderVertex));
         commands.SetIndexBuffer(
-            *impl_->meshIndexBuffer,
+            *upload.indexBuffer,
             rhi::IndexFormat::UInt32);
         commands.DrawIndexed(
             static_cast<u32>(

@@ -51,9 +51,17 @@ struct GitHubUpdateStatus
     std::string stage{"Idle"};
     std::string detail;
     std::filesystem::path logPath;
+    // Populated only after a successful remote comparison. The timestamp
+    // represents the last *verified* GitHub check, not a guessed freshness.
+    std::uint64_t lastCheckedUnixSeconds{0};
+    std::uint64_t pendingCommits{0};
+    bool rebuildPending{false};
+    std::string localCommit;
+    std::string remoteCommit;
 };
 
 [[nodiscard]] bool RequestGitHubUpdate();
+[[nodiscard]] bool RequestGitHubCheck();
 [[nodiscard]] GitHubUpdateStatus QueryGitHubUpdate();
 
 struct HotIterationConfig
@@ -95,6 +103,7 @@ public:
     void Stop() noexcept;
 
     [[nodiscard]] bool QueueGitHubUpdate();
+    [[nodiscard]] bool QueueGitHubCheck();
     [[nodiscard]] GitHubUpdateStatus GitHubUpdateState() const;
 
 private:

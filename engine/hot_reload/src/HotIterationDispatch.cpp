@@ -109,6 +109,11 @@ bool RequestGitHubUpdate()
         return service->QueueGitHubUpdate();
     return false;
 }
+bool RequestGitHubCheck()
+{
+    auto* service=gActiveService.load(std::memory_order_acquire);
+    return service && service->QueueGitHubCheck();
+}
 
 GitHubUpdateStatus QueryGitHubUpdate()
 {

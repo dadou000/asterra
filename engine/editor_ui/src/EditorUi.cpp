@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <array>
 #include <bit>
 #include <cfloat>
@@ -2311,6 +2312,17 @@ bool PanelContext::ControlDown() const noexcept
     return ImGui::GetIO().KeyCtrl;
 }
 
+bool PanelContext::ShiftDown() const noexcept
+{
+    return ImGui::GetIO().KeyShift;
+}
+
+bool PanelContext::WindowFocusedForShortcuts() const noexcept
+{
+    return ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput;
+}
+
 bool PanelContext::BeginDragSource()
 {
     return ImGui::BeginDragDropSource(
@@ -2449,6 +2461,8 @@ bool PanelContext::KeyPressed(
     case UiKey::Down: imguiKey = ImGuiKey_DownArrow; break;
     case UiKey::Enter: imguiKey = ImGuiKey_Enter; break;
     case UiKey::Escape: imguiKey = ImGuiKey_Escape; break;
+    case UiKey::Delete: imguiKey = ImGuiKey_Delete; break;
+    case UiKey::A: imguiKey = ImGuiKey_A; break;
     }
 
     return imguiKey != ImGuiKey_None &&
@@ -3501,61 +3515,145 @@ void EditorUi::DrawStudioShell()
 
         if (!impl_->updateIndicator.label.empty())
         {
-            const UpdateIndicator& update = impl_->updateIndicator;
-            const ImGuiStyle& style = ImGui::GetStyle();
-            const std::string buttonLabel = update.label + "    ";
-            const f32 updateWidth =
-                ImGui::CalcTextSize(buttonLabel.c_str()).x +
-                style.FramePadding.x * 2.0F;
-            f32 projectWidth = 0.0F;
-            if (!impl_->projectIndicator.name.empty())
+            const UpdateIndicator& update=impl_->updateIndicator;
+            const ImGuiStyle& style=ImGui::GetStyle();
+            const std::string buttonLabel=update.label+"    ";
+            const f32 updateWidth=ImGui::CalcTextSize(
+                buttonLabel.c_str()).x+style.FramePadding.x*2.0F;
+            f32 projectWidth=0.0F;
+            if(!impl_->projectIndicator.name.empty())
             {
-                std::string projectText =
-                    "Project: " + impl_->projectIndicator.name;
-                if (!impl_->projectIndicator.detail.empty())
-                    projectText += "  |  " +
-                        impl_->projectIndicator.detail;
-                projectWidth = ImGui::CalcTextSize(
-                    projectText.c_str()).x +
-                    style.FramePadding.x * 2.0F +
-                    style.ItemSpacing.x;
+                std::string projectText="Project: "+
+                    impl_->projectIndicator.name;
+                if(!impl_->projectIndicator.detail.empty())
+                    projectText+="  |  "+impl_->projectIndicator.detail;
+                projectWidth=ImGui::CalcTextSize(projectText.c_str()).x+
+                    style.FramePadding.x*2.0F+style.ItemSpacing.x;
             }
-            const f32 x = ImGui::GetWindowWidth() -
-                updateWidth - projectWidth -
-                style.ItemSpacing.x * 2.0F;
-            if (x > ImGui::GetCursorPosX())
-                ImGui::SetCursorPosX(x);
-            ImGui::BeginDisabled(!update.enabled);
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                Rgb(0x4b, 0x7b, 0xec, 0.16F));
-            if (ImGui::SmallButton(
-                    (buttonLabel + "##orbit-github-update").c_str()) &&
-                update.onClick)
-                update.onClick();
-            // Compact circular-refresh glyph inside the same button,
-            // not a separate launcher or an extra toolbar row.
-            const ImVec2 edge = ImGui::GetItemRectMax();
-            const ImVec2 top = ImGui::GetItemRectMin();
-            const ImVec2 centre(edge.x - 10.0F * g_uiScale,
-                (top.y + edge.y) * 0.5F);
-            ImDrawList* draw = ImGui::GetWindowDrawList();
-            const ImU32 ink = ImGui::GetColorU32(
-                update.enabled ? ImGuiCol_Text : ImGuiCol_TextDisabled);
-            draw->PathArcTo(centre, 4.0F * g_uiScale,
-                -2.35F, 2.1F, 18);
-            draw->PathStroke(ink, 0, 1.3F * g_uiScale);
+            const f32 x=ImGui::GetWindowWidth()-updateWidth-
+                projectWidth-style.ItemSpacing.x*2.0F;
+            if(x>ImGui::GetCursorPosX())ImGui::SetCursorPosX(x);
+
+            const bool hasNewCommits=update.pendingCommits>0U &&
+                update.stage=="Update available";
+            const bool canInstall=hasNewCommits || update.rebuildPending;
+            ImGui::PushStyleColor(ImGuiCol_Button,hasNewCommits ?
+                ImVec4(0.22F,0.39F,0.80F,0.55F):
+                ImVec4(0.23F,0.35F,0.57F,0.26F));
+            if(ImGui::SmallButton(
+                (buttonLabel+"##orbit-github-update").c_str()))
+                ImGui::OpenPopup("Orbit updater##github-update-panel");
+            const ImVec2 edge=ImGui::GetItemRectMax();
+            const ImVec2 top=ImGui::GetItemRectMin();
+            const ImVec2 centre(edge.x-10.0F*g_uiScale,
+                (top.y+edge.y)*0.5F);
+            const ImU32 ink=ImGui::GetColorU32(ImGuiCol_Text);
+            const f32 phase=update.busy?
+                static_cast<f32>(ImGui::GetTime()*3.5):0.0F;
+            ImDrawList* draw=ImGui::GetWindowDrawList();
+            draw->PathArcTo(centre,4.0F*g_uiScale,
+                -2.35F+phase,2.1F+phase,18);
+            draw->PathStroke(ink,0,1.3F*g_uiScale);
             draw->AddLine(
-                ImVec2(centre.x + 3.2F * g_uiScale,
-                    centre.y - 3.0F * g_uiScale),
-                ImVec2(centre.x + 4.1F * g_uiScale,
-                    centre.y + 0.7F * g_uiScale),
-                ink, 1.3F * g_uiScale);
+                ImVec2(centre.x+3.2F*g_uiScale,centre.y-3.0F*g_uiScale),
+                ImVec2(centre.x+4.1F*g_uiScale,centre.y+0.7F*g_uiScale),
+                ink,1.3F*g_uiScale);
             ImGui::PopStyleColor();
-            ImGui::EndDisabled();
-            if (ImGui::IsItemHovered(
-                    ImGuiHoveredFlags_AllowWhenDisabled) &&
-                !update.tooltip.empty())
-                ImGui::SetTooltip("%s", update.tooltip.c_str());
+            if(ImGui::IsItemHovered() && !update.tooltip.empty())
+                ImGui::SetTooltip("%s",update.tooltip.c_str());
+
+            ImGui::SetNextWindowSizeConstraints(
+                ImVec2(345.0F*g_uiScale,0.0F),
+                ImVec2(440.0F*g_uiScale,FLT_MAX));
+            if(ImGui::BeginPopup("Orbit updater##github-update-panel"))
+            {
+                ImGui::TextUnformatted("Orbit Studio updater");
+                ImGui::SameLine();
+                ImGui::TextDisabled("Shift+F5");
+                ImGui::Separator();
+                ImGui::TextDisabled("TRACKED BRANCH");
+                ImGui::TextUnformatted(update.branch.c_str());
+                ImGui::Spacing();
+                if(update.busy)
+                    ImGui::TextUnformatted(update.stage.c_str());
+                else if(update.rebuildPending)
+                    ImGui::TextColored(ImVec4(1.0F,0.78F,0.43F,1.0F),
+                        "Build required");
+                else if(hasNewCommits)
+                    ImGui::TextColored(ImVec4(0.61F,0.77F,1.0F,1.0F),
+                        "%llu new commit(s)",
+                        static_cast<unsigned long long>(update.pendingCommits));
+                else if(update.stage=="Up to date")
+                    ImGui::TextColored(ImVec4(0.51F,0.83F,0.65F,1.0F),
+                        "Up to date");
+                else
+                    ImGui::TextUnformatted(update.stage.c_str());
+                ImGui::PushTextWrapPos(
+                    ImGui::GetCursorPosX()+325.0F*g_uiScale);
+                if(!update.detail.empty())
+                    ImGui::TextWrapped("%s",update.detail.c_str());
+                ImGui::PopTextWrapPos();
+
+                if(!update.localCommit.empty() ||
+                   !update.remoteCommit.empty())
+                {
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Local");
+                    ImGui::SameLine(100.0F*g_uiScale);
+                    ImGui::TextUnformatted(update.localCommit.c_str());
+                    ImGui::TextDisabled("Remote");
+                    ImGui::SameLine(100.0F*g_uiScale);
+                    ImGui::TextUnformatted(update.remoteCommit.c_str());
+                }
+
+                if(update.lastCheckedUnixSeconds>0U)
+                {
+                    const auto now=std::chrono::system_clock::now();
+                    const auto secs=std::chrono::duration_cast<
+                        std::chrono::seconds>(now.time_since_epoch()).count();
+                    const auto age=std::max<std::int64_t>(
+                        0,secs-static_cast<std::int64_t>(
+                            update.lastCheckedUnixSeconds));
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Checked %lld %s ago",
+                        static_cast<long long>(age>=60?age/60:age),
+                        age>=60?"min":"sec");
+                }
+                else
+                    ImGui::TextDisabled("No successful check yet");
+                ImGui::TextDisabled("Automatic checks every 5 minutes");
+
+                ImGui::Separator();
+                ImGui::BeginDisabled(update.busy || !update.available ||
+                    !update.onCheck);
+                if(ImGui::Button("Check now##orbit-github-check") &&
+                   update.onCheck)
+                    update.onCheck();
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::BeginDisabled(update.busy || !update.available ||
+                    !canInstall || !update.onClick);
+                const char* installText=
+                    update.rebuildPending && !hasNewCommits ?
+                    "Retry build##orbit-github-apply":
+                    "Update and restart##orbit-github-apply";
+                if(ImGui::Button(installText) && update.onClick)
+                    update.onClick();
+                ImGui::EndDisabled();
+                if(!canInstall && !update.busy)
+                    ImGui::TextDisabled(
+                        "No update to install; no restart is needed.");
+                if(update.busy)
+                    ImGui::TextDisabled(
+                        "Running in the background; the editor stays responsive.");
+                if(update.hasLog && update.onOpenLog)
+                {
+                    ImGui::Separator();
+                    if(ImGui::SmallButton("Open update log##orbit-github-log"))
+                        update.onOpenLog();
+                }
+                ImGui::EndPopup();
+            }
         }
 
         if (!impl_->projectIndicator.name.empty())

@@ -278,6 +278,63 @@ int main()
             objects.Find(bodyB)->parent ==
             std::optional(system));
 
+        // Explorer deleting a parent must remove every descendant in ONE
+        // undo unit, even when a descendant appears before its ancestor in
+        // the selected set. Undo restores IDs, hierarchy and properties.
+        const auto child=commands.CreateObject(
+            orbit::world_model::kPrimitiveType,
+            "Owned child",bodyA);
+        const auto grandchild=commands.CreateObject(
+            orbit::world_model::kPrimitiveType,
+            "Nested child",child);
+        const auto oldRadius=objects.GetProperty(
+            bodyA,orbit::editor_model::builtin::kBodyRadius);
+        ORBIT_TEST_CHECK(oldRadius.has_value());
+        const std::array overlapping{grandchild,system,bodyA};
+        commands.DeleteObjects(overlapping);
+        ORBIT_TEST_CHECK(objects.Find(worldRoot).has_value());
+        for(const auto id:{system,bodyA,bodyB,child,grandchild})
+            ORBIT_TEST_CHECK(!objects.Find(id).has_value());
+        ORBIT_TEST_CHECK(commands.CanUndo());
+        commands.Undo();
+        ORBIT_TEST_CHECK(objects.Find(system).has_value());
+        ORBIT_TEST_CHECK(objects.Find(bodyA)->parent==std::optional(system));
+        ORBIT_TEST_CHECK(objects.Find(bodyB)->parent==std::optional(system));
+        ORBIT_TEST_CHECK(objects.Find(child)->parent==std::optional(bodyA));
+        ORBIT_TEST_CHECK(objects.Find(grandchild)->parent==std::optional(child));
+        ORBIT_TEST_CHECK(objects.GetProperty(
+            bodyA,orbit::editor_model::builtin::kBodyRadius)==oldRadius);
+        commands.Redo();
+        ORBIT_TEST_CHECK(!objects.Find(system).has_value());
+        commands.Undo();
+        ORBIT_TEST_CHECK(objects.Find(grandchild).has_value());
+
+        // Sibling multidelete must also be atomic and one-step undo.
+        const std::array siblings{bodyA,bodyB};
+        commands.DeleteObjects(siblings);
+        ORBIT_TEST_CHECK(objects.Find(system).has_value());
+        ORBIT_TEST_CHECK(!objects.Find(bodyA).has_value());
+        ORBIT_TEST_CHECK(!objects.Find(bodyB).has_value());
+        commands.Undo();
+        ORBIT_TEST_CHECK(objects.Find(bodyA).has_value());
+        ORBIT_TEST_CHECK(objects.Find(bodyB).has_value());
+        ORBIT_TEST_CHECK(objects.Find(grandchild).has_value());
+
+        // An invalid selection must reject before removing any valid object.
+        bool rejectedInvalid=false;
+        try
+        {
+            const std::array invalid{
+                bodyA,orbit::scene::ObjectId::Random()};
+            commands.DeleteObjects(invalid);
+        }
+        catch(const std::invalid_argument&)
+        {
+            rejectedInvalid=true;
+        }
+        ORBIT_TEST_CHECK(rejectedInvalid);
+        ORBIT_TEST_CHECK(objects.Find(bodyA).has_value());
+
         world.Checkpoint();
     }
 

@@ -58,6 +58,13 @@ Minimum acceptance matrix:
 12. Headless MCP command parity, deterministic replay and clean cancellation under rapid edits.
 13. Profile on low-end GPU budget and full-capability GPU: CPU job time, GPU upload bandwidth, resident pages, collision cooks, visible LOD and frame variance.
 
+15. **Two-viewport upload isolation:** Open two live Studio viewports with different cameras looking at different parts of a road, then rotate only one while the other remains fixed. Both road meshes must remain stable. All road draws for a render-graph execution are recorded before the GPU submission; reusing one host-visible camera-relative vertex/index buffer across viewports aliases earlier recorded draw commands. The PathPreviewRenderer must keep separate upload buffers for each viewport identity and honor Vulkan's last-use fence before rewriting that viewport's buffers.
+16. **Mesh publication integrity:** Check road and junction mesh indices are in range and vertex position/normal/UV values are finite before GPU upload. A malformed product must log its edge/build signature once and be rejected, without hiding or corrupting other valid roads.
+
+14. **Path near-plane regression:** Place a long paved corridor so one set of vertices lies behind or inside the camera near plane. Rotate the camera from looking along the road to looking across/away from it, then fly through its edge. The road must remain a bounded strip, with no large triangle connecting to an offscreen corner, even when the road crosses near/far frustum planes. Repeat with debug outlines on/off and Production Terrain's MRT path pass.
+
+The path renderer's HLSL vertex stage must preserve true homogeneous clip coordinates for *every* vertex (including those behind the camera) and leave whole-primitive clipping to Vulkan. Do not emulate frustum culling by overwriting out-of-range vertex positions with a constant clip-space point: triangles crossing the clip boundary become camera-dependent giant wedges. The Vulkan rasterization state uses normal clipping (depth clamp is not enabled), so the shader can rely on the hardware clipping rules.
+
 The current Debug physical-page sanity check only verifies presence, revision and finite center height; tests above are **planned** until implemented and run.
 
 # Implementation dependency sequence / gates

@@ -551,14 +551,30 @@ public:
         std::scoped_lock lock(updateMutex_);
         if (!running_.load() || updateState_.busy)
             return false;
-        updateState_ = {
-            .available = true,
-            .busy = true,
-            .stage = "Queued",
-            .detail = "Waiting for the current hot-iteration task to finish.",
-            .logPath = config_.runtimeRoot / "OrbitStudio_github_update.log"
-        };
+        // Preserve last verified comparison and any pending-build marker.
+        // A full reset here would erase recovery state whenever Retry build
+        // is queued, concealing subsequent build failures from the popup.
+        updateState_.available=true;
+        updateState_.busy=true;
+        updateState_.stage="Queued";
+        updateState_.detail=
+            "Waiting for the current hot-iteration task to finish.";
+        updateState_.logPath=
+            config_.runtimeRoot / "OrbitStudio_github_update.log";
         updateRequested_.store(true, std::memory_order_release);
+        return true;
+    }
+
+    [[nodiscard]] bool QueueGitHubCheck()
+    {
+        std::scoped_lock lock(updateMutex_);
+        if (!running_.load() || updateState_.busy ||
+            updateRequested_.load(std::memory_order_acquire))
+            return false;
+        updateState_.busy = true;
+        updateState_.stage = "Queued check";
+        updateState_.detail = "Waiting for the active build or watcher task.";
+        checkRequested_.store(true, std::memory_order_release);
         return true;
     }
 
@@ -571,6 +587,23 @@ public:
     }
 
 private:
+    void PublishComparison(
+        const std::uint64_t commits)
+    {
+        const GitResult local = RunGit(L"rev-parse --short=12 HEAD");
+        const GitResult remote = RunGit(L"rev-parse --short=12 FETCH_HEAD");
+        std::scoped_lock lock(updateMutex_);
+        updateState_.pendingCommits = commits;
+        updateState_.localCommit =
+            local.success ? TrimGit(local.output) : std::string{};
+        updateState_.remoteCommit =
+            remote.success ? TrimGit(remote.output) : std::string{};
+        updateState_.lastCheckedUnixSeconds =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<
+                std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+    }
+
     void SetUpdateState(
         std::string stage,
         std::string detail,
@@ -580,6 +613,11 @@ private:
         updateState_.available = running_.load();
         updateState_.busy = busy;
         updateState_.stage = std::move(stage);
+        // The full Git diagnostic is retained in the log. Bound popover
+        // text so a verbose transport error cannot fill the entire UI.
+        if(detail.size()>550U)
+            detail=detail.substr(0,550U)+
+                "... (see updater log for full output)";
         updateState_.detail = std::move(detail);
         updateState_.logPath =
             config_.runtimeRoot / "OrbitStudio_github_update.log";
@@ -622,7 +660,11 @@ private:
         (void)SetHandleInformation(emptyInput, HANDLE_FLAG_INHERIT,
             HANDLE_FLAG_INHERIT);
         startup.hStdInput = emptyInput;
-        std::wstring command = std::wstring(L"git.exe ") + arguments;
+        // Never allow a credential helper to show a modal prompt inside the
+        // editor. The worker must remain responsive if GitHub is unreachable.
+        std::wstring command =
+            std::wstring(L"git.exe -c credential.interactive=never ") +
+            arguments;
         PROCESS_INFORMATION process{};
         const BOOL launched = CreateProcessW(nullptr, command.data(),
             nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
@@ -633,7 +675,16 @@ private:
         if (launched == FALSE)
             return {.output = std::format(
                 "Git could not start (Windows error {}).", launchError)};
-        (void)WaitForSingleObject(process.hProcess, INFINITE);
+        constexpr DWORD kGitTimeoutMilliseconds = 45000U;
+        const DWORD wait=WaitForSingleObject(
+            process.hProcess,kGitTimeoutMilliseconds);
+        if(wait!=WAIT_OBJECT_0)
+        {
+            // Git and credential helpers must never hang the entire
+            // hot-iteration worker indefinitely.
+            (void)TerminateProcess(process.hProcess,1U);
+            (void)WaitForSingleObject(process.hProcess,5000U);
+        }
         DWORD exitCode = 1U;
         (void)GetExitCodeProcess(process.hProcess, &exitCode);
         CloseHandle(process.hThread);
@@ -648,6 +699,10 @@ private:
             "OrbitStudio_github_update.log", std::ios::app);
         log << "git " << "[step]" << " (exit " << exitCode
             << ")\n" << output << "\n";
+        if(wait!=WAIT_OBJECT_0)
+            return {.success=false,
+                .output=std::format("Git command timed out or wait failed ({} ms).",
+                    kGitTimeoutMilliseconds)};
         return {.success = exitCode == 0U, .output = std::move(output)};
     }
 
@@ -693,11 +748,23 @@ private:
             return;
         }
         const std::string count=TrimGit(ahead.output);
-        if(count=="0")
+        std::uint64_t pending=0;
+        try { pending=std::stoull(count); }
+        catch(const std::exception&)
+        {
+            SetUpdateState("Failed","Invalid Git revision count.",false);
+            return;
+        }
+        PublishComparison(pending);
+        if(pending==0 && rebuildPending_)
+            SetUpdateState("Rebuild required",
+                "Source was updated, but the previous rebuild/handoff failed. "
+                "Retry build to activate the downloaded version.",false);
+        else if(pending==0)
             SetUpdateState("Up to date","Already on the latest Harmony commit.",false);
         else
             SetUpdateState("Update available",
-                count+" new commit(s) available on Harmony.",false);
+                std::to_string(pending)+" new commit(s) available on Harmony.",false);
     }
 
     [[nodiscard]] bool ExecuteGitHubUpdate()
@@ -742,28 +809,48 @@ private:
             SetUpdateState("Failed","Could not determine whether an update exists.",false);
             return false;
         }
-        if(TrimGit(commits.output)=="0")
+        std::uint64_t pending=0;
+        try { pending=std::stoull(TrimGit(commits.output)); }
+        catch(const std::exception&)
+        {
+            SetUpdateState("Failed","Invalid Git revision count.",false);
+            return false;
+        }
+        PublishComparison(pending);
+        if(pending==0 && !rebuildPending_)
         {
             SetUpdateState("Up to date",
                 "Already on the latest Harmony commit. Nothing was rebuilt or restarted.",false);
             return true;
         }
-        const GitResult changes = RunGit(
-            L"status --porcelain --untracked-files=normal");
-        if (!changes.success || !TrimGit(changes.output).empty())
+        if(pending!=0)
         {
-            SetUpdateState("Blocked",
-                "Local changes detected. Commit or stash them first; "
-                "no files were overwritten.", false);
-            return false;
-        }
-        SetUpdateState("Updating", "Fast-forwarding local Harmony...", true);
-        const GitResult merge = RunGit(L"merge --ff-only FETCH_HEAD");
-        if (!merge.success)
-        {
-            SetUpdateState("Failed",
-                "Fast-forward failed: " + TrimGit(merge.output), false);
-            return false;
+            const GitResult changes = RunGit(
+                L"status --porcelain --untracked-files=normal");
+            if (!changes.success || !TrimGit(changes.output).empty())
+            {
+                SetUpdateState("Blocked",
+                    "Local changes detected. Commit or stash them first; "
+                    "no files were overwritten.", false);
+                return false;
+            }
+            SetUpdateState("Updating", "Fast-forwarding local Harmony...", true);
+            const GitResult merge = RunGit(L"merge --ff-only FETCH_HEAD");
+            if (!merge.success)
+            {
+                SetUpdateState("Failed",
+                    "Fast-forward failed: " + TrimGit(merge.output), false);
+                return false;
+            }
+            // Source is now newer than the running executable. Retain a
+            // recoverable rebuild state if building or handoff fails.
+            rebuildPending_=true;
+            {
+                std::scoped_lock lock(updateMutex_);
+                updateState_.pendingCommits=0;
+                updateState_.localCommit=updateState_.remoteCommit;
+                updateState_.rebuildPending=true;
+            }
         }
         SetUpdateState("Building", "Incrementally rebuilding Orbit Studio...", true);
         const PendingFallback request{
@@ -787,6 +874,11 @@ private:
             return false;
         }
         relaunchScheduled_ = true;
+        rebuildPending_=false;
+        {
+            std::scoped_lock lock(updateMutex_);
+            updateState_.rebuildPending=false;
+        }
         SetUpdateState("Restarting", "New Studio launched.", true);
         return true;
     }
@@ -874,6 +966,8 @@ private:
                 // same commit twice from those notifications.
                 watchers.clear();
                 recentEvents.clear();
+                nextUpdateCheck=std::chrono::steady_clock::now()+
+                    std::chrono::minutes(5);
                 {
                     std::scoped_lock lock(configurationMutex_);
                     pendingWatchRoots_ = knownWatchRoots_;
@@ -883,9 +977,11 @@ private:
 
             const auto now =
                 std::chrono::steady_clock::now();
-            if(now >= nextUpdateCheck)
+            if(checkRequested_.exchange(false,std::memory_order_acq_rel) ||
+               now >= nextUpdateCheck)
             {
-                nextUpdateCheck=now+std::chrono::minutes(5);
+                nextUpdateCheck=std::chrono::steady_clock::now()+
+                    std::chrono::minutes(5);
                 CheckGitHubUpdate();
             }
 
@@ -1336,10 +1432,12 @@ private:
     std::jthread worker_;
     std::atomic<bool> running_{false};
     bool relaunchScheduled_{false};
+    bool rebuildPending_{false};
     std::uint64_t studioGeneration_{0U};
     mutable std::mutex updateMutex_;
     GitHubUpdateStatus updateState_;
     std::atomic<bool> updateRequested_{false};
+    std::atomic<bool> checkRequested_{false};
 };
 
 HotIterationService::HotIterationService(
@@ -1379,6 +1477,11 @@ void HotIterationService::Stop() noexcept
 bool HotIterationService::QueueGitHubUpdate()
 {
     return impl_->QueueGitHubUpdate();
+}
+
+bool HotIterationService::QueueGitHubCheck()
+{
+    return impl_->QueueGitHubCheck();
 }
 
 GitHubUpdateStatus HotIterationService::GitHubUpdateState() const

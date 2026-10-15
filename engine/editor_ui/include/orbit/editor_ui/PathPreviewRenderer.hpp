@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <span>
+#include <string_view>
 
 namespace orbit::editor_ui
 {
@@ -50,7 +51,10 @@ public:
             products,
         bool drawDebugLines = true,
         rhi::Texture* depth = nullptr,
-        std::span<rhi::Texture* const> surfaceAttachments = {});
+        std::span<rhi::Texture* const> surfaceAttachments = {},
+        // Unique to each viewport whose road pass can be recorded into
+        // the same command list before GPU submission.
+        std::string_view viewportId = {});
 
     // Generic camera-relative line overlay path reused by Studio gizmos.
     // Positions are already relative to camera.localPositionMeters.

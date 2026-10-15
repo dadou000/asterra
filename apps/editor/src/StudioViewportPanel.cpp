@@ -1113,7 +1113,7 @@ void StudioViewportPanel::Register()
                     const auto ray=orbit::render_view::ViewportRay(
                         primaryView->Camera(),primaryView->Width(),
                         primaryView->Height(),
-                        1.0F-interaction.u,interaction.v);
+                        interaction.u,interaction.v);
                     if(activeBody && ray)
                         previewPoint=orbit::universe::IntersectReferenceSurfaceRay(
                             activeBody->shape,ray->origin,ray->direction);
@@ -1223,7 +1223,7 @@ void StudioViewportPanel::Register()
                                uv->v<0.0F || uv->v>1.0F)
                                 return std::nullopt;
                             return orbit::math::Float2{
-                                (1.0F-uv->u)*previewWidth,
+                                uv->u*previewWidth,
                                 uv->v*previewHeight};
                         };
                         std::vector<orbit::editor_ui::OverlaySegment> strokes;
@@ -1405,8 +1405,7 @@ void StudioViewportPanel::Register()
                                     primaryView->Camera(),
                                     primaryView->Width(),
                                     primaryView->Height(),
-                                    infrastructureDrawMode ?
-                                        1.0F-interaction.u : interaction.u,
+                                    interaction.u,
                                     interaction.v);
 
                         if (body == nullptr ||

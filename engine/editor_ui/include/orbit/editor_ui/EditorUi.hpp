@@ -9,6 +9,7 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <array>
 #include <optional>
@@ -98,7 +99,9 @@ enum class UiKey : u8
     Up,
     Down,
     Enter,
-    Escape
+    Escape,
+    Delete,
+    A
 };
 
 // Drawing and pointer helpers for overlays on the item submitted just before
@@ -352,6 +355,10 @@ public:
     [[nodiscard]] bool InputInteger(std::string_view label, i64& value);
     [[nodiscard]] bool InputDouble3(std::string_view label, math::Double3& value);
     [[nodiscard]] bool ControlDown() const noexcept;
+    [[nodiscard]] bool ShiftDown() const noexcept;
+    // Used for contextual keyboard commands without stealing input from
+    // another dock panel or a focused text field.
+    [[nodiscard]] bool WindowFocusedForShortcuts() const noexcept;
     [[nodiscard]] bool BeginDragSource();
     void SetDragPayload(std::string_view type, std::span<const std::byte> bytes);
     void EndDragSource();
@@ -653,7 +660,22 @@ public:
         std::string label;
         std::string tooltip;
         bool enabled{true};
+        bool available{false};
+        // Update and check are separate operations. Clicking the chip opens
+        // details, never triggers a surprise rebuild or restart.
+        std::string stage;
+        std::string detail;
+        std::string branch{"0.1.1-Harmony"};
+        std::string localCommit;
+        std::string remoteCommit;
+        std::uint64_t lastCheckedUnixSeconds{0};
+        std::uint64_t pendingCommits{0};
+        bool rebuildPending{false};
+        bool busy{false};
         std::function<void()> onClick;
+        std::function<void()> onCheck;
+        bool hasLog{false};
+        std::function<void()> onOpenLog;
     };
     void SetUpdateIndicator(UpdateIndicator indicator);
 

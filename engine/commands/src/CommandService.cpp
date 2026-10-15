@@ -1,6 +1,9 @@
 #include <orbit/commands/CommandService.hpp>
 
 #include <algorithm>
+#include <array>
+#include <memory>
+#include <unordered_set>
 #include <stdexcept>
 #include <utility>
 
@@ -156,66 +159,99 @@ CommandService::DuplicateObject(
     return duplicate;
 }
 
-void CommandService::DeleteObject(
-    const scene::ObjectId object)
+void CommandService::DeleteObject(const scene::ObjectId object)
 {
-    const scene::ObjectRecord record =
-        RequireObject(object);
+    const std::array roots{object};
+    DeleteObjects(roots);
+}
 
-    if (!objects_.Children(object).empty())
+void CommandService::DeleteObjects(
+    const std::span<const scene::ObjectId> objects)
+{
+    struct SavedObject
     {
-        throw std::invalid_argument(
-            "Cannot delete an object while it has children.");
+        scene::ObjectRecord record;
+        std::vector<std::pair<schema::PropertyId,schema::PropertyValue>>
+            properties;
+    };
+
+    if(objects.empty())return;
+
+    // Read and validate the ENTIRE subtree before mutating the world.
+    // Preorder gives parent-first insertion on undo and child-first erasure
+    // on redo. A shared child selected alongside its parent is visited once.
+    std::vector<SavedObject> snapshot;
+    std::unordered_set<scene::ObjectId> visited;
+    std::unordered_set<scene::ObjectId> selected;
+    for(const auto id:objects)
+    {
+        if(!id)continue;
+        static_cast<void>(RequireObject(id));
+        selected.insert(id);
     }
 
-    const schema::TypeSchema* typeSchema =
-        schemas_.FindType(record.type);
-
-    if (typeSchema == nullptr)
+    // Normalize overlapping selections BEFORE traversal: if a child was
+    // selected before its parent, undo must still insert the parent first.
+    std::vector<scene::ObjectId> pending;
+    pending.reserve(selected.size());
+    for(const auto id:selected)
     {
-        throw std::runtime_error(
-            "Cannot snapshot properties for an object with an unknown schema type.");
-    }
-
-    std::vector<std::pair<
-        schema::PropertyId,
-        schema::PropertyValue>> storedProperties;
-
-    for (const auto& property : typeSchema->properties)
-    {
-        const auto value =
-            objects_.GetProperty(object, property.id);
-
-        if (value.has_value())
+        bool nested=false;
+        auto parent=RequireObject(id).parent;
+        while(parent)
         {
-            storedProperties.emplace_back(
-                property.id,
-                *value);
+            if(selected.contains(*parent)) {nested=true;break;}
+            parent=RequireObject(*parent).parent;
         }
+        if(!nested)pending.push_back(id);
     }
+    while(!pending.empty())
+    {
+        const auto id=pending.back();
+        pending.pop_back();
+        if(!visited.insert(id).second)continue;
 
+        const auto record=RequireObject(id);
+        const auto* schema=schemas_.FindType(record.type);
+        if(!schema)
+            throw std::runtime_error(
+                "Cannot delete subtree containing an unknown schema type.");
+
+        SavedObject saved{.record=record};
+        for(const auto& property:schema->properties)
+        {
+            if(const auto value=objects_.GetProperty(id,property.id))
+                saved.properties.emplace_back(property.id,*value);
+        }
+        snapshot.push_back(std::move(saved));
+        for(const auto& child:objects_.Children(id))
+            pending.push_back(child.id);
+    }
+    if(snapshot.empty())return;
+
+    // Large hierarchies carry potentially large property blobs. Share one
+    // immutable undo snapshot across both lambdas rather than copying every
+    // descendant's data twice into command history.
+    const auto saved=std::make_shared<const std::vector<SavedObject>>(
+        std::move(snapshot));
     ApplyAndRecord(
-        "Delete Object",
+        saved->size()==1U?"Delete Object":"Delete Object Hierarchy",
         Action{
-            .redo =
-                [this, object](scene::MutationKey key)
+            .redo=[this,saved](scene::MutationKey key)
+            {
+                for(auto it=saved->rbegin();it!=saved->rend();++it)
+                    objects_.Erase(key,it->record.id);
+            },
+            .undo=[this,saved](scene::MutationKey key)
+            {
+                for(const auto& item:*saved)
                 {
-                    objects_.Erase(key, object);
-                },
-            .undo =
-                [this, record, storedProperties](scene::MutationKey key)
-                {
-                    objects_.Insert(key, record);
-
-                    for (const auto& [property, value] : storedProperties)
-                    {
+                    objects_.Insert(key,item.record);
+                    for(const auto& [property,value]:item.properties)
                         objects_.SetProperty(
-                            key,
-                            record.id,
-                            property,
-                            value);
-                    }
+                            key,item.record.id,property,value);
                 }
+            }
         });
 }
 
