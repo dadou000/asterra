@@ -167,9 +167,9 @@ void StudioViewportPanel::Register()
                                 Toolbar);
 
                 if (context.Button(
-                        pathPlacementMode
-                            ? "Path Tool: On"
-                            : "Path Tool"))
+                        infrastructureDrawMode && pathPlacementMode
+                            ? "Finish Road Tool [Esc]"
+                            : pathPlacementMode ? "Path Tool: On" : "Path Tool"))
                 {
                     pathPlacementMode =
                         !pathPlacementMode;
@@ -183,6 +183,27 @@ void StudioViewportPanel::Register()
 
                 context.SameLine();
                 context.Toolbar(toolbar);
+
+                if(infrastructureDrawMode && pathPlacementMode)
+                {
+                    context.SameLine();
+                    if(context.Button("New chain##viewport-road-new-chain"))
+                    {
+                        lastPlacedPathNode.reset();
+                        infrastructureLastAction=
+                            "New road chain ready. Click to place the first node.";
+                        infrastructurePlacementError.clear();
+                    }
+                    context.SameLine();
+                    context.Text(infrastructureCatalogId.empty()
+                        ? "Reference path" : infrastructureCatalogId);
+                    context.SameLine();
+                    if(context.Checkbox("Snap nodes##viewport-road-snap",
+                        infrastructureSnapNodes))
+                        infrastructureLastAction=infrastructureSnapNodes ?
+                            "Node snapping enabled (hold Ctrl to bypass)." :
+                            "Node snapping disabled.";
+                }
 
                 context.SameLine();
                 if(context.Checkbox(
@@ -1071,7 +1092,10 @@ void StudioViewportPanel::Register()
                                         selected->parent->high,selected->parent->low};
                             }
                         }
-                        if(network && infrastructureSnapNodes)
+                        // Ctrl bypasses snapping only while held; it does not
+                        // change the user's saved snapping preference.
+                        if(network && infrastructureSnapNodes &&
+                           !window.KeyDown(orbit::platform::Key::LeftControl))
                         {
                             if(infrastructureSnapCacheRevision!=objects().Revision() ||
                                infrastructureSnapCacheNetwork!=*network ||
