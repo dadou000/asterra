@@ -408,8 +408,8 @@ void StudioExplorerPanel::Register()
                     previousFilter=explorerFilter;
                 }
                 context.MutedText(
-                    "Drag empty space: box select | Shift+drag rows: box select | "
-                    "Ctrl+drag: add | Ctrl+click: toggle | Delete: subtree");
+                    "Left-drag: box select | Ctrl+drag: add | "
+                    "Alt+drag row: move | Shift+click: range");
                 context.KeyValue("Selected",std::to_string(selection().Ordered().size()));
                 if(explorerFilter!=2)
                 {
@@ -801,9 +801,11 @@ void StudioExplorerPanel::Register()
                                 }
                             }
 
-                            // Shift+drag is reserved for marquee over
-                            // rows; ordinary row drag keeps reparenting.
-                            if (!context.ShiftDown() && context.
+                            // Left-drag is always marquee selection.
+                            // Alt+drag explicitly opts into hierarchy DnD,
+                            // so the two operations cannot steal each other's
+                            // gestures.
+                            if (context.AltDown() && context.
                                     BeginDragSource())
                             {
                                 const auto payload =
@@ -853,13 +855,22 @@ void StudioExplorerPanel::Register()
 
                 visibleRows=std::move(currentVisibleRows);
 
-                // Explorer marquee starts from whitespace by default. On
-                // occupied rows Shift+drag explicitly chooses the marquee
-                // rather than starting a reparent drag. No pointer capture
-                // is added to individual rows, preserving click and DnD.
+                // Default left-drag selects over ordinary Explorer rows
+                // as well as whitespace. Toolbar widgets and the asset
+                // inventory are not selectable by this scene marquee.
                 const auto pointer=context.PanelMarqueeInput();
+                const bool startedOnRow=std::any_of(
+                    visibleRowRects.begin(),visibleRowRects.end(),
+                    [&](const auto& candidate)
+                    {
+                        const auto& rect=candidate.second;
+                        return pointer.screen.x>=rect[0] &&
+                            pointer.screen.x<=rect[2] &&
+                            pointer.screen.y>=rect[1] &&
+                            pointer.screen.y<=rect[3];
+                    });
                 if(pointer.pressed && pointer.hoveredWindow &&
-                   (!pointer.overItem || pointer.shift))
+                   !pointer.alt && (startedOnRow || !pointer.overItem))
                 {
                     marqueeHeld=true;
                     marqueeDragging=false;
