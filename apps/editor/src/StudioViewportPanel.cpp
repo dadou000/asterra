@@ -94,6 +94,8 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/world_model/PrimitiveBinding.hpp>
 #include <orbit/world_model/StaticMeshBinding.hpp>
+#include <orbit/world_model/LocalLightBinding.hpp>
+#include <orbit/world_model/VisibilityProxyBinding.hpp>
 
 #include <algorithm>
 #include <array>
@@ -722,6 +724,30 @@ void StudioViewportPanel::Register()
                                         orbit::math::TransformPoint(
                                             *fromBody,mesh.positionMeters);
                                     addProjected(mesh.object,position,1.5);
+                                }
+                                for(const auto& light:
+                                    orbit::world_model::ResolveAuthoredLocalLights(
+                                        objects(),bodyObject))
+                                {
+                                    const auto position=
+                                        orbit::math::TransformPoint(
+                                            *fromBody,light.positionMeters);
+                                    // Select the light gizmo, not the entire
+                                    // (possibly kilometre-scale) light range.
+                                    addProjected(light.object,position,0.0);
+                                }
+                                for(const auto& proxy:
+                                    orbit::world_model::ResolveVisibilityProxies(
+                                        objects(),bodyObject))
+                                {
+                                    const auto position=
+                                        orbit::math::TransformPoint(
+                                            *fromBody,proxy.positionMeters);
+                                    const auto h=proxy.halfExtentsMeters;
+                                    const double radius=std::max(
+                                        proxy.radiusMeters,
+                                        std::sqrt(h.x*h.x+h.y*h.y+h.z*h.z));
+                                    addProjected(proxy.object,position,radius);
                                 }
                             }
                         }
