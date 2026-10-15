@@ -65,3 +65,23 @@ The status RPC `studio.github_update_status` includes `pending_commits`, `rebuil
 7. With a delayed Git command, ensure the status worker times out instead of stalling indefinitely; the editor viewport and UI must remain responsive.
 
 **Verification status:** Source changes and manual gate documented; Windows compilation, native execution, and automated UI checks have not been run in this session.
+
+
+## Box selection in Explorer and viewport (Harmony)
+
+**Explorer:** Hold left mouse and drag from a scene tree/search row or blank space to draw a screen-space selection rectangle; rows intersecting it become selected live. A drag shorter than 6 screen pixels remains a normal click. Ctrl+drag adds to the prior selection (selection snapshot captured when pressed); otherwise the marquee replaces the prior selection. **Alt+drag** a tree row to reparent it with the existing drag-and-drop payload. Shift+click still selects a visible range, Ctrl+click toggles an individual object. Asset rows are not scene-object marquee targets.
+
+**Viewport:** Without an active construction tool or gizmo, hold left mouse on the actual rendered image and drag a rectangle. Crossing a 6-pixel threshold activates selection; the rectangle is drawn over the image and scene selection updates live. The selected candidates are **rendered authored primitives, static meshes, local light gizmos and visibility proxies under the active body's scene hierarchy**. Their scene-space centers (and approximate bounding spheres for sized objects) are transformed through the canonical frame graph into the active camera frame and projected using `render_view::ProjectToViewport`. This is *not* GPU ID/depth-buffer or occlusion picking: occluded candidates can be included, and currently there is no marquee projection for road edges, terrain layers or every other semantic type. Ctrl/Shift+drag adds to the prior selection; a short click retains normal body selection. Active road placement, the cloud split divider, viewport gizmos, and right-mouse navigation take precedence over box selection. Letterboxed viewports use the actual image item rectangle, not the enclosing panel dimensions.
+
+**Shared UI helpers:** `PanelContext::PanelMarqueeInput`, `LastItemScreenRect`, and `DrawPanelMarquee` are presentation/input only; they do not mutate authored data. Explorer/viewport resolve the candidate ObjectIds and update the same `SelectionService`, which also drives Properties and Explorer highlighting.
+
+### Runtime validation checklist
+
+1. Drag left-to-right and right-to-left across several Explorer rows (including nested open subtrees and filtered search results). Verify the translucent rectangle and live highlights, Ctrl-add, normal Ctrl-click/Shift-click, and Alt+drag reparenting.
+2. Drag outside the Explorer window and release. Ensure selection completes and no drag state remains stuck. Switch worlds while a selection existed; ensure no stale ObjectIds carry over.
+3. Select multiple nearby primitives/lights/meshes in the viewport from both drag directions, with native and scaled/letterboxed image sizes. Verify the visible border tracks the cursor and selection matches the scene hierarchy.
+4. Repeat with Ctrl additive selection and a small click (under 6 px) to verify that ordinary single-click behavior is preserved.
+5. Enter Roads/Paths construction, drag a cloud split divider, use a transform gizmo, and navigate with RMB. These gestures must not start an unintended marquee.
+6. The viewport marquee currently uses approximate bounds, not occlusion-aware picking. Explicitly verify its limitations rather than claiming all semantic object types or hidden-object filtering are supported.
+
+**Validation status:** Source committed to Harmony; Windows native build and manual pointer-interaction tests have not been executed in this session.
