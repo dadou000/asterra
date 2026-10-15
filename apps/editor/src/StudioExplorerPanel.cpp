@@ -447,10 +447,16 @@ void StudioExplorerPanel::Register()
                                 selectRow(object.id);
 
                             if (item.rightClicked &&
-                                !selection().Contains(
-                                    object.id))
+                                !selection().Contains(object.id))
                             {
-                                selectRow(object.id);
+                                // Context-click on an unselected row should
+                                // focus just that row, independent of held
+                                // Ctrl/Shift. Right-click an already-selected
+                                // row keeps its bulk selection intact.
+                                selection().Set(std::array{object.id});
+                                selectionAnchor=object.id;
+                                inspectorTarget.kind=
+                                    StudioInspectorTargetKind::WorldSelection;
                             }
 
                             // Building the action list is not free; only do
