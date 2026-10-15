@@ -2,6 +2,7 @@
 #include <orbit/terrain_bake/PlanetBakeFile.hpp>
 #include <orbit/terrain_bake/RiverBaker.hpp>
 #include <orbit/terrain_bake/TectonicBaker.hpp>
+#include <orbit/terrain_bake/IsostaticFoundation.hpp>
 #include <orbit/terrain_bake/TerrainBakeService.hpp>
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <numbers>
 #include <string>
 #include <thread>
@@ -986,9 +988,36 @@ bool BeltsHaveStrikeAlignedRelief()
     return Check(spread > 500.0, "belts must carry ridge-and-valley relief");
 }
 
+bool IsostaticFoundationFollowsCrustPhysics()
+{
+    using terrain_bake::IsostaticCrustCorrectionMeters;
+    const auto eval = [](const double continental, const double thickness)
+    {
+        return IsostaticCrustCorrectionMeters({continental, thickness});
+    };
+    bool ok = Check(std::abs(eval(1.0, 35.0)) < 1e-9,
+        "reference continental crust must produce zero correction");
+    ok &= Check(std::abs(eval(0.0, 7.0)) < 1e-9,
+        "reference oceanic crust must produce zero correction");
+    ok &= Check(eval(1.0, 50.0) > 2400.0,
+        "continental thickening must cause buoyant uplift");
+    ok &= Check(eval(1.0, 25.0) < -1000.0,
+        "continental thinning must cause subsidence");
+    ok &= Check(eval(0.0, 12.0) > 0.0,
+        "oceanic crustal thickening must add buoyancy");
+    ok &= Check(std::abs(eval(0.5, 21.0)) < 1e-9,
+        "mixed crust reference must not shift global sea level");
+    ok &= Check(std::isfinite(eval(1.0, 1e200)),
+        "extreme inputs must remain bounded");
+    ok &= Check(eval(1.0, std::numeric_limits<double>::quiet_NaN()) == 0.0,
+        "invalid inputs must not poison the bake");
+    return ok;
+}
+
 int main()
 {
     bool ok = true;
+    ok &= IsostaticFoundationFollowsCrustPhysics();
     ok &= BakeIsDeterministicAndResolutionConsistent();
     ok &= BakedFieldsAreContinuousAcrossCubeEdges();
     ok &= CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel();
