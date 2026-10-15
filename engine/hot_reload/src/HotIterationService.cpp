@@ -748,7 +748,11 @@ private:
             return;
         }
         PublishComparison(pending);
-        if(pending==0)
+        if(pending==0 && rebuildPending_)
+            SetUpdateState("Rebuild required",
+                "Source was updated, but the previous rebuild/handoff failed. "
+                "Retry build to activate the downloaded version.",false);
+        else if(pending==0)
             SetUpdateState("Up to date","Already on the latest Harmony commit.",false);
         else
             SetUpdateState("Update available",
@@ -805,35 +809,40 @@ private:
             return false;
         }
         PublishComparison(pending);
-        if(pending==0)
+        if(pending==0 && !rebuildPending_)
         {
             SetUpdateState("Up to date",
                 "Already on the latest Harmony commit. Nothing was rebuilt or restarted.",false);
             return true;
         }
-        const GitResult changes = RunGit(
-            L"status --porcelain --untracked-files=normal");
-        if (!changes.success || !TrimGit(changes.output).empty())
+        if(pending!=0)
         {
-            SetUpdateState("Blocked",
-                "Local changes detected. Commit or stash them first; "
-                "no files were overwritten.", false);
-            return false;
-        }
-        SetUpdateState("Updating", "Fast-forwarding local Harmony...", true);
-        const GitResult merge = RunGit(L"merge --ff-only FETCH_HEAD");
-        if (!merge.success)
-        {
-            SetUpdateState("Failed",
-                "Fast-forward failed: " + TrimGit(merge.output), false);
-            return false;
-        }
-        // The source has advanced even if a later build fails. A second
-        // update attempt must not keep advertising already-pulled commits.
-        {
-            std::scoped_lock lock(updateMutex_);
-            updateState_.pendingCommits = 0;
-            updateState_.localCommit = updateState_.remoteCommit;
+            const GitResult changes = RunGit(
+                L"status --porcelain --untracked-files=normal");
+            if (!changes.success || !TrimGit(changes.output).empty())
+            {
+                SetUpdateState("Blocked",
+                    "Local changes detected. Commit or stash them first; "
+                    "no files were overwritten.", false);
+                return false;
+            }
+            SetUpdateState("Updating", "Fast-forwarding local Harmony...", true);
+            const GitResult merge = RunGit(L"merge --ff-only FETCH_HEAD");
+            if (!merge.success)
+            {
+                SetUpdateState("Failed",
+                    "Fast-forward failed: " + TrimGit(merge.output), false);
+                return false;
+            }
+            // Source is now newer than the running executable. Retain a
+            // recoverable rebuild state if building or handoff fails.
+            rebuildPending_=true;
+            {
+                std::scoped_lock lock(updateMutex_);
+                updateState_.pendingCommits=0;
+                updateState_.localCommit=updateState_.remoteCommit;
+                updateState_.rebuildPending=true;
+            }
         }
         SetUpdateState("Building", "Incrementally rebuilding Orbit Studio...", true);
         const PendingFallback request{
@@ -857,6 +866,11 @@ private:
             return false;
         }
         relaunchScheduled_ = true;
+        rebuildPending_=false;
+        {
+            std::scoped_lock lock(updateMutex_);
+            updateState_.rebuildPending=false;
+        }
         SetUpdateState("Restarting", "New Studio launched.", true);
         return true;
     }
@@ -1410,6 +1424,7 @@ private:
     std::jthread worker_;
     std::atomic<bool> running_{false};
     bool relaunchScheduled_{false};
+    bool rebuildPending_{false};
     std::uint64_t studioGeneration_{0U};
     mutable std::mutex updateMutex_;
     GitHubUpdateStatus updateState_;
