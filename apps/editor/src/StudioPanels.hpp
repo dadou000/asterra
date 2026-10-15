@@ -306,7 +306,7 @@ public:
     frames::FrameId infrastructureSnapCacheFrame{};
     std::vector<std::pair<scene::ObjectId,math::Double3>>
         infrastructureSnapCache;
-    bool pathDebugVisualization = true;
+    bool pathDebugVisualization = false;
     std::optional<orbit::paths::NetworkId>
         activePathNetwork;
     std::optional<orbit::scene::ObjectId>
