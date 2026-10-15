@@ -55,6 +55,7 @@ struct GitHubUpdateStatus
     // represents the last *verified* GitHub check, not a guessed freshness.
     std::uint64_t lastCheckedUnixSeconds{0};
     std::uint64_t pendingCommits{0};
+    bool rebuildPending{false};
     std::string localCommit;
     std::string remoteCommit;
 };
