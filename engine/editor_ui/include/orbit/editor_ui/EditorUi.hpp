@@ -98,7 +98,8 @@ enum class UiKey : u8
     Up,
     Down,
     Enter,
-    Escape
+    Escape,
+    Delete
 };
 
 // Drawing and pointer helpers for overlays on the item submitted just before
@@ -352,6 +353,10 @@ public:
     [[nodiscard]] bool InputInteger(std::string_view label, i64& value);
     [[nodiscard]] bool InputDouble3(std::string_view label, math::Double3& value);
     [[nodiscard]] bool ControlDown() const noexcept;
+    [[nodiscard]] bool ShiftDown() const noexcept;
+    // Used for contextual keyboard commands without stealing input from
+    // another dock panel or a focused text field.
+    [[nodiscard]] bool WindowFocusedForShortcuts() const noexcept;
     [[nodiscard]] bool BeginDragSource();
     void SetDragPayload(std::string_view type, std::span<const std::byte> bytes);
     void EndDragSource();
