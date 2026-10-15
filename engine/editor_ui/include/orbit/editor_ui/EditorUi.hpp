@@ -123,6 +123,19 @@ struct OverlayDisc
     bool filled{true};
 };
 
+// Screen-space information for drag selection within a dock panel.
+struct PanelMarqueePointer
+{
+    bool hoveredWindow{false};
+    bool overItem{false};
+    bool pressed{false};
+    bool down{false};
+    bool released{false};
+    bool shift{false};
+    bool ctrl{false};
+    math::Float2 screen{};
+};
+
 struct ItemPointer
 {
     bool hovered{false};
@@ -324,6 +337,11 @@ public:
     // Left-button state relative to the last item, for gizmos that need to
     // keep tracking a drag after the pointer leaves it.
     [[nodiscard]] ItemPointer LastItemPointer() const;
+    [[nodiscard]] PanelMarqueePointer PanelMarqueeInput() const noexcept;
+    // Screen rectangle [left, top, right, bottom] of the last submitted row.
+    [[nodiscard]] std::array<f32,4> LastItemScreenRect() const noexcept;
+    // Screen-space overlay, clipped to the containing Explorer panel.
+    void DrawPanelMarquee(math::Float2 a, math::Float2 b) const;
     [[nodiscard]] CanvasInteraction Canvas(std::string_view id, UiSize size);
     void CanvasLine(math::Float2 a, math::Float2 b, math::Float4 color, f32 thickness = 1.0F);
     void CanvasCircle(math::Float2 center, f32 radiusPixels, math::Float4 color, bool filled = true, f32 thickness = 1.0F);
