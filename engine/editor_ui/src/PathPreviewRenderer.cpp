@@ -1,5 +1,6 @@
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 
+#include <orbit/core/Log.hpp>
 #include <orbit/rhi/Pipeline.hpp>
 #include <orbit/rhi/Resource.hpp>
 
@@ -14,6 +15,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
+#include <format>
 #include <limits>
 
 namespace orbit::editor_ui
@@ -495,6 +498,7 @@ public:
     // submission. Each view must own its camera-relative VB/IB; otherwise
     // the last viewport's mapped upload overwrites earlier draw commands.
     std::unordered_map<std::string, MeshUpload> meshUploads;
+    std::unordered_set<std::string> warnedBadMeshSignatures;
     std::unique_ptr<rhi::Buffer>
         lineVertexBuffer;
 
@@ -566,6 +570,39 @@ void PathPreviewRenderer::Draw(
             product->visualMesh.
                 vertices.empty())
         {
+            continue;
+        }
+
+        // Index corruption or NaN coordinates must never reach the GPU.
+        // Diagnose each bad published revision once, keeping the currently
+        // visible good road products intact instead of uploading undefined
+        // vertex fetches or poison geometry to the clipper.
+        const auto& mesh=product->visualMesh;
+        const auto finite3=[](const math::Double3& v)
+        {
+            return std::isfinite(v.x) && std::isfinite(v.y) &&
+                   std::isfinite(v.z);
+        };
+        const bool invalidIndices=mesh.indices.size()%3U!=0U ||
+            std::any_of(mesh.indices.begin(),mesh.indices.end(),
+                [&mesh](u32 index){return index>=mesh.vertices.size();});
+        const bool nonFiniteVertices=std::any_of(
+            mesh.vertices.begin(),mesh.vertices.end(),
+            [&](const path_geometry::PathMeshVertex& v)
+            {
+                return !finite3(v.position) || !finite3(v.normal) ||
+                    !std::isfinite(v.uv.x) || !std::isfinite(v.uv.y);
+            });
+        if(invalidIndices || nonFiniteVertices)
+        {
+            const auto key=std::format("{}:{:016x}",
+                product->edge.ToString(),product->buildSignature);
+            if(impl_->warnedBadMeshSignatures.insert(key).second)
+                orbit::log::Warning(std::format(
+                    "Road mesh rejected: {} ({}). Check source/junction "
+                    "publication for corrupt indices or nonfinite vertices.",
+                    key,invalidIndices?"out-of-range triangle index":
+                        "nonfinite vertex data"));
             continue;
         }
 
