@@ -718,15 +718,6 @@ private:
                     + TrimGit(branch.output), false);
             return false;
         }
-        const GitResult changes = RunGit(
-            L"status --porcelain --untracked-files=normal");
-        if (!changes.success || !TrimGit(changes.output).empty())
-        {
-            SetUpdateState("Blocked",
-                "Local changes detected. Commit or stash them first; "
-                "no files were overwritten.", false);
-            return false;
-        }
         SetUpdateState("Fetching", "Fetching origin/0.1.1-Harmony...", true);
         const GitResult fetch = RunGit(
             L"fetch --no-tags origin 0.1.1-Harmony");
@@ -756,6 +747,15 @@ private:
             SetUpdateState("Up to date",
                 "Already on the latest Harmony commit. Nothing was rebuilt or restarted.",false);
             return true;
+        }
+        const GitResult changes = RunGit(
+            L"status --porcelain --untracked-files=normal");
+        if (!changes.success || !TrimGit(changes.output).empty())
+        {
+            SetUpdateState("Blocked",
+                "Local changes detected. Commit or stash them first; "
+                "no files were overwritten.", false);
+            return false;
         }
         SetUpdateState("Updating", "Fast-forwarding local Harmony...", true);
         const GitResult merge = RunGit(L"merge --ff-only FETCH_HEAD");
