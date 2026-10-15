@@ -1,4 +1,5 @@
 #include <orbit/terrain_bake/TectonicBaker.hpp>
+#include <orbit/terrain_bake/IsostaticFoundation.hpp>
 
 #include <algorithm>
 #include <stdexcept>
@@ -83,8 +84,19 @@ std::shared_ptr<const terrain::BakedTectonicRasters> BakeTectonics(
             const i32 y = static_cast<i32>(row % stride) - 1;
             for (i32 x = -1; x <= static_cast<i32>(resolution); ++x)
             {
-                const terrain::BakedTectonicTexel texel =
+                terrain::BakedTectonicTexel texel =
                     fields.EvaluateTectonicTexel(*growth, face, x, y);
+
+                // Foundation is computed once during baking. Oceanic thermal
+                // depth and structural faults remain in their existing layers.
+                // Blend the crust-thickening correction into the same bias
+                // consumed by CPU terrain sampling and the Vulkan page path.
+                const f32 correction = static_cast<f32>(
+                    IsostaticCrustCorrectionMeters({
+                        texel.Get(terrain::BakedTectonicLayer::ContinentalCrustFraction),
+                        texel.Get(terrain::BakedTectonicLayer::CrustThicknessKm)}));
+                texel.Set(terrain::BakedTectonicLayer::PlateBiasMeters,
+                    texel.Get(terrain::BakedTectonicLayer::PlateBiasMeters) + correction);
 
                 const std::size_t index =
                     (static_cast<std::size_t>(face) * stride +
