@@ -939,14 +939,19 @@ private:
                 "Select multiple authored roads and update their geometry "
                 "profiles together. Alignment, construction mode and "
                 "junction identity are preserved.");
-            static_cast<void>(context.InputText(
-                "Filter roads##roads-inventory-search",roadInventoryFilter_));
-            static_cast<void>(context.Checkbox(
+            if(context.InputText(
+                "Filter roads##roads-inventory-search",roadInventoryFilter_))
+                roadInventoryPage_=0;
+            if(context.Checkbox(
                 "Only selected network##roads-upgrade-network",
-                upgradeOnlyActiveNetwork_));
-            static_cast<void>(context.Checkbox(
+                upgradeOnlyActiveNetwork_))
+                roadInventoryPage_=0;
+            if(context.Checkbox(
                 "Show build errors only##roads-upgrade-errors",
-                showOnlyConstructionErrors_));
+                showOnlyConstructionErrors_))
+                roadInventoryPage_=0;
+            if(upgradeOnlyActiveNetwork_ && !newNetworkId_)
+                context.MutedText("Choose a network above to filter; Auto shows all networks.");
             const auto& cache=session_->PathProducts();
             std::size_t matching=0;
             for(const auto& edge:edges_)
@@ -960,8 +965,21 @@ private:
                    cache.RebuildError(edge.id).empty())continue;
                 ++matching;
             }
+            constexpr std::size_t kRoadsPerPage=40U;
+            const auto pageCount=std::max<std::size_t>(1U,
+                (matching+kRoadsPerPage-1U)/kRoadsPerPage);
+            roadInventoryPage_=std::min(roadInventoryPage_,pageCount-1U);
             context.KeyValue("Matching roads",std::to_string(matching));
-            if(context.Button("Select visible##roads-manager-all"))
+            context.KeyValue("Page",std::format("{} / {}",
+                roadInventoryPage_+1U,pageCount));
+            if(context.Button("Previous 40##roads-list-previous") &&
+               roadInventoryPage_>0U)
+                --roadInventoryPage_;
+            context.SameLine();
+            if(context.Button("Next 40##roads-list-next") &&
+               roadInventoryPage_+1U<pageCount)
+                ++roadInventoryPage_;
+            if(context.Button("Select all filtered##roads-manager-all"))
             {
                 for(const auto& edge:edges_)
                 {
@@ -982,6 +1000,7 @@ private:
             if(context.BeginChild("roads-manager-list",
                 {.width=0.0F,.height=235.0F},true))
             {
+                std::size_t filteredIndex=0U;
                 for(const auto& edge:edges_)
                 {
                     if(!RoadMatchesFilter(edge))continue;
@@ -991,6 +1010,10 @@ private:
                        road->network!=newNetworkId_)continue;
                     const auto failure=cache.RebuildError(edge.id);
                     if(showOnlyConstructionErrors_ && failure.empty())continue;
+                    const auto currentIndex=filteredIndex++;
+                    if(currentIndex<roadInventoryPage_*kRoadsPerPage ||
+                       currentIndex>=(roadInventoryPage_+1U)*kRoadsPerPage)
+                        continue;
                     const auto* preset=path_geometry::FindRoadCatalog(
                         road->infrastructureCatalogId);
                     const char* state=!failure.empty()?"ERROR":
@@ -1657,6 +1680,7 @@ private:
     std::string upgradeTargetEdgeId_;
     std::set<scene::ObjectId> selectedRoads_;
     std::string roadInventoryFilter_;
+    std::size_t roadInventoryPage_{0U};
     bool upgradeOnlyActiveNetwork_{false};
     bool showOnlyConstructionErrors_{false};
 
