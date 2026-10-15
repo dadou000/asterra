@@ -176,7 +176,7 @@ void StudioViewportPanel::Register()
                 context.SameLine();
                 static_cast<void>(
                     context.Checkbox(
-                        "Path Debug",
+                        "Road neon outlines (debug)",
                         pathDebugVisualization));
 
                 context.SameLine();
