@@ -32,3 +32,12 @@ Studio modules (all under `engine/`): `studio_ui` (panels, viewport renderer, re
 
 The authoring rule is: a UI element **requests**, a domain owner **executes**, and the same
 operation is reachable over RPC and MCP (`/editor/mcp-rpc`).
+
+
+## Explorer selection and hierarchy deletion (Harmony)
+
+The canonical scene Explorer lives in `apps/editor/src/StudioExplorerPanel.cpp`. Scene IDs use the shared `SelectionService`; a click selects one object, Ctrl+click toggles an object, and Shift+click selects a contiguous range in the currently visible tree/search order. Ctrl+Shift+click adds the range to the existing selection. Ctrl+A selects visible scene rows when Explorer has keyboard focus; Delete removes the selected scene subtrees, but never while a text field is active. The toolbar supports Select visible, Clear selection, Select parent, Select children and Select subtree; right-click on an already selected row preserves the existing multi-selection. The world root is protected.
+
+**Deletion is an atomic undoable domain operation, not a UI-specific tree hack.** `CommandService::DeleteObject` calls `DeleteObjects` and recursively deletes all descendants, even when they are nested arbitrarily deep. The command snapshots object records and explicit properties, collapses overlapping selected ancestors/descendants, erases children before parents, and restores parents before children on Undo using original stable IDs and property values. A failed validation leaves every object intact. A multi-selection uses exactly one undo entry. The low-level `ObjectStore::Erase` remains leaf-only; do not bypass the command service.
+
+**Validation:** `tests/ExplorerInspectorTests.cpp` checks overlapping selections, deletion/Undo/Redo, multiple siblings, property restoration and invalid-target atomicity. Source changes are committed; the Windows executable and native CTest remain to be verified.
