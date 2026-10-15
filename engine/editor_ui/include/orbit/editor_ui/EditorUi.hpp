@@ -660,6 +660,7 @@ public:
         std::string label;
         std::string tooltip;
         bool enabled{true};
+        bool available{false};
         // Update and check are separate operations. Clicking the chip opens
         // details, never triggers a surprise rebuild or restart.
         std::string stage;
