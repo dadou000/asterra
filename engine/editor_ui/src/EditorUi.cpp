@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <array>
 #include <bit>
 #include <cfloat>
@@ -3522,6 +3523,148 @@ void EditorUi::DrawStudioShell()
                 style.FramePadding.x * 2.0F;
             f32 projectWidth = 0.0F;
             if (!impl_->projectIndicator.name.empty())
+            {
+                std::string projectText =
+                    "Project: " + impl_->projectIndicator.name;
+                if (!impl_->projectIndicator.detail.empty())
+                    projectText += "  |  " +
+                        impl_->projectIndicator.detail;
+                projectWidth = ImGui::CalcTextSize(
+                    projectText.c_str()).x +
+                    style.FramePadding.x * 2.0F +
+                    style.ItemSpacing.x;
+            }
+            const f32 x = ImGui::GetWindowWidth() -
+                updateWidth - projectWidth -
+                style.ItemSpacing.x * 2.0F;
+            if (x > ImGui::GetCursorPosX())
+                ImGui::SetCursorPosX(x);
+
+            // The chip is a status + details popover. It remains accessible
+            // while checking/building; only mutating actions are disabled.
+            ImGui::BeginDisabled(!update.enabled);
+            const bool hasNewCommits=update.pendingCommits>0U &&
+                update.stage=="Update available";
+            const ImU32 buttonFill=hasNewCommits ?
+                ImGui::GetColorU32(ImVec4(0.22F,0.39F,0.80F,0.55F)) :
+                ImGui::GetColorU32(ImVec4(0.23F,0.35F,0.57F,0.26F));
+            ImGui::PushStyleColor(ImGuiCol_Button,buttonFill);
+            if(ImGui::SmallButton(
+                (buttonLabel+"##orbit-github-update").c_str()))
+                ImGui::OpenPopup("Orbit updater##github-update-panel");
+            const ImVec2 edge = ImGui::GetItemRectMax();
+            const ImVec2 top = ImGui::GetItemRectMin();
+            const ImVec2 centre(edge.x - 10.0F * g_uiScale,
+                (top.y + edge.y) * 0.5F);
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            const ImU32 ink = ImGui::GetColorU32(
+                update.enabled ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+            const f32 phase=update.busy ?
+                static_cast<f32>(ImGui::GetTime()*3.5) : 0.0F;
+            draw->PathArcTo(centre, 4.0F * g_uiScale,
+                -2.35F+phase, 2.1F+phase, 18);
+            draw->PathStroke(ink, 0, 1.3F * g_uiScale);
+            draw->AddLine(
+                ImVec2(centre.x + 3.2F * g_uiScale,
+                    centre.y - 3.0F * g_uiScale),
+                ImVec2(centre.x + 4.1F * g_uiScale,
+                    centre.y + 0.7F * g_uiScale),
+                ink, 1.3F * g_uiScale);
+            ImGui::PopStyleColor();
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(
+                    ImGuiHoveredFlags_AllowWhenDisabled) &&
+                !update.tooltip.empty())
+                ImGui::SetTooltip("%s", update.tooltip.c_str());
+
+            ImGui::SetNextWindowSizeConstraints(
+                ImVec2(340.0F*g_uiScale,0.0F),
+                ImVec2(435.0F*g_uiScale,FLT_MAX));
+            if(ImGui::BeginPopup("Orbit updater##github-update-panel"))
+            {
+                ImGui::TextUnformatted("Orbit Studio updater");
+                ImGui::SameLine();
+                ImGui::TextDisabled("Shift+F5 to update");
+                ImGui::Separator();
+
+                ImGui::TextDisabled("TRACKED BRANCH");
+                ImGui::TextUnformatted(update.branch.c_str());
+                ImGui::Spacing();
+                if(update.stage=="Up to date")
+                    ImGui::TextColored(ImVec4(0.51F,0.83F,0.65F,1.0F),
+                        "Up to date");
+                else if(hasNewCommits)
+                    ImGui::TextColored(ImVec4(0.61F,0.77F,1.0F,1.0F),
+                        "%llu new commit(s)",
+                        static_cast<unsigned long long>(update.pendingCommits));
+                else
+                    ImGui::TextUnformatted(update.stage.c_str());
+                ImGui::PushTextWrapPos(
+                    ImGui::GetCursorPosX()+320.0F*g_uiScale);
+                if(!update.detail.empty())
+                    ImGui::TextWrapped("%s",update.detail.c_str());
+                ImGui::PopTextWrapPos();
+
+                if(!update.localCommit.empty() ||
+                   !update.remoteCommit.empty())
+                {
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Local");
+                    ImGui::SameLine(100.0F*g_uiScale);
+                    ImGui::TextUnformatted(update.localCommit.c_str());
+                    ImGui::TextDisabled("Remote");
+                    ImGui::SameLine(100.0F*g_uiScale);
+                    ImGui::TextUnformatted(update.remoteCommit.c_str());
+                }
+                if(update.lastCheckedUnixSeconds>0U)
+                {
+                    const auto now=std::chrono::system_clock::now();
+                    const auto seconds=std::chrono::duration_cast<
+                        std::chrono::seconds>(now.time_since_epoch()).count();
+                    const auto age=std::max<std::int64_t>(
+                        0,seconds-static_cast<std::int64_t>(
+                            update.lastCheckedUnixSeconds));
+                    ImGui::Spacing();
+                    ImGui::TextDisabled(
+                        "Last verified check: %lld %s ago",
+                        static_cast<long long>(age>=60?age/60:age),
+                        age>=60?"min":"sec");
+                }
+                else
+                    ImGui::TextDisabled("Not yet checked successfully");
+                ImGui::TextDisabled(
+                    "Automatic check every 5 minutes");
+
+                ImGui::Separator();
+                ImGui::BeginDisabled(update.busy || !update.onCheck);
+                if(ImGui::Button("Check now##orbit-github-check") &&
+                   update.onCheck)
+                    update.onCheck();
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::BeginDisabled(update.busy || !update.enabled ||
+                    !hasNewCommits || !update.onClick);
+                if(ImGui::Button("Update and restart##orbit-github-apply") &&
+                   update.onClick)
+                    update.onClick();
+                ImGui::EndDisabled();
+                if(!hasNewCommits && !update.busy)
+                    ImGui::TextDisabled(
+                        "No verified update to install. No restart needed.");
+                if(update.busy)
+                    ImGui::TextDisabled(
+                        "This operation runs on the background updater worker.");
+                if(update.onOpenLog)
+                {
+                    ImGui::Separator();
+                    if(ImGui::SmallButton("Open updater log##orbit-github-log"))
+                        update.onOpenLog();
+                }
+                ImGui::EndPopup();
+            }
+        }
+
+        if (!impl_->projectIndicator.name.empty())
             {
                 std::string projectText =
                     "Project: " + impl_->projectIndicator.name;
