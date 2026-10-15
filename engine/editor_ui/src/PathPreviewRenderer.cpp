@@ -21,6 +21,8 @@ struct RenderVertex
     math::Float3 position{};
     math::Float4 color{};
     math::Float3 normal{0.0F, 1.0F, 0.0F};
+    math::Float2 corridorUv{};
+    math::Float2 corridorInfo{}; // half-width, lane count (0 => unmarked)
 };
 
 constexpr const char* kVertexShader = R"(
@@ -37,6 +39,8 @@ struct VSInput
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(1)]] float4 color : COLOR0;
     [[vk::location(2)]] float3 normal : NORMAL0;
+    [[vk::location(3)]] float2 corridorUv : TEXCOORD0;
+    [[vk::location(4)]] float2 corridorInfo : TEXCOORD1;
 };
 
 struct VSOutput
@@ -44,6 +48,8 @@ struct VSOutput
     float4 position : SV_Position;
     float4 color : COLOR0;
     float3 normal : TEXCOORD0;
+    float2 corridorUv : TEXCOORD1;
+    float2 corridorInfo : TEXCOORD2;
 };
 
 VSOutput main(VSInput input)
@@ -69,6 +75,8 @@ VSOutput main(VSInput input)
             float4(2.0, 2.0, 1.0, 1.0);
         output.color = input.color;
         output.normal = input.normal;
+        output.corridorUv = input.corridorUv;
+        output.corridorInfo = input.corridorInfo;
         return output;
     }
 
@@ -96,6 +104,8 @@ VSOutput main(VSInput input)
             z);
     output.color = input.color;
     output.normal = input.normal;
+    output.corridorUv = input.corridorUv;
+    output.corridorInfo = input.corridorInfo;
     return output;
 }
 )";
@@ -113,12 +123,16 @@ float4 main(VSOutput input) : SV_Target0
 }
 )";
 
+// Pure analytic road material: no textures, no samplers, no extra draws.
+// Distances come from swept world-metre UVs, so lines remain metric.
 constexpr const char* kSurfacePixelShader = R"(
 struct VSOutput
 {
     float4 position : SV_Position;
     float4 color : COLOR0;
     float3 normal : TEXCOORD0;
+    float2 corridorUv : TEXCOORD1;
+    float2 corridorInfo : TEXCOORD2;
 };
 struct SurfaceOutput
 {
@@ -127,13 +141,52 @@ struct SurfaceOutput
     float4 normalMetallic : SV_Target2;
     float4 emissionClass : SV_Target3;
 };
+float Hash(float2 p)
+{
+    return frac(sin(dot(p,float2(127.1,311.7)))*43758.5453);
+}
 SurfaceOutput main(VSOutput input)
 {
     SurfaceOutput output;
-    output.color = float4(input.color.rgb, 1.0);
-    output.baseRoughness = float4(input.color.rgb, 0.86);
-    output.normalMetallic = float4(normalize(input.normal), 0.0);
-    output.emissionClass = float4(0.0, 0.0, 0.0, 0.0);
+    float3 base = input.color.rgb;
+    float roughness = 0.86;
+    const float halfWidth = input.corridorInfo.x;
+    const float lanes = input.corridorInfo.y;
+    if(lanes >= 1.0 && halfWidth > 1.0)
+    {
+        const float s = input.corridorUv.x;
+        const float lateral = input.corridorUv.y;
+        // Sparse coarse aggregate breakup in physical metres, not UV pixels.
+        const float grain = Hash(floor(float2(s,lateral)*7.0));
+        const float patches = Hash(floor(float2(s,lateral)*0.48));
+        base = float3(0.125,0.135,0.145) *
+            (0.90 + grain*0.09 + patches*0.08);
+        const float aa = max(fwidth(lateral),0.006);
+        const float edgeDist = abs(abs(lateral)-(halfWidth-0.19));
+        const float edge = 1.0-smoothstep(0.055-aa,0.065+aa,edgeDist);
+        float white = edge;
+        float yellow = 0.0;
+        const float laneWidth = (2.0*halfWidth)/lanes;
+        const float dash = step(frac(s/9.0),0.55);
+        for(int k=1;k<6;++k)
+        {
+            if(float(k)>=lanes) break;
+            const float divider = -halfWidth+laneWidth*float(k);
+            const float d = abs(lateral-divider);
+            const float line = 1.0-smoothstep(0.045-aa,0.065+aa,d);
+            if(k*2 == int(lanes))
+                yellow = max(yellow,line);
+            else
+                white = max(white,line*dash);
+        }
+        base = lerp(base,float3(0.82,0.83,0.78),saturate(white));
+        base = lerp(base,float3(0.88,0.67,0.16),saturate(yellow));
+        roughness = 0.91;
+    }
+    output.color = float4(base,1.0);
+    output.baseRoughness = float4(base,roughness);
+    output.normalMetallic = float4(normalize(input.normal),0.0);
+    output.emissionClass = float4(0.0,0.0,0.0,0.0);
     return output;
 }
 )";
@@ -220,7 +273,7 @@ public:
 
         constexpr std::array<
             rhi::VertexAttribute,
-            3> attributes{{
+            5> attributes{{
                 {
                     .location = 0,
                     .format =
@@ -243,7 +296,11 @@ public:
                     .location = 2,
                     .format = rhi::VertexFormat::Float3,
                     .offsetBytes = offsetof(RenderVertex, normal)
-                }
+                },
+                {.location = 3, .format = rhi::VertexFormat::Float2,
+                 .offsetBytes = offsetof(RenderVertex, corridorUv)},
+                {.location = 4, .format = rhi::VertexFormat::Float2,
+                 .offsetBytes = offsetof(RenderVertex, corridorInfo)}
             }};
 
         const auto makePipeline =
@@ -571,8 +628,15 @@ void PathPreviewRenderer::Draw(
         {
             impl_->meshVertices.push_back({
                 .position = relativeVertices[vertexIndex],
-                .color = MeshColor(),
-                .normal = relativeNormals[vertexIndex]
+                .color = product->laneCount > 0U ? math::Float4{
+                    0.14F, 0.15F, 0.16F, 1.0F} : MeshColor(),
+                .normal = relativeNormals[vertexIndex],
+                .corridorUv = {
+                    static_cast<orbit::f32>(product->visualMesh.vertices[vertexIndex].uv.x),
+                    static_cast<orbit::f32>(product->visualMesh.vertices[vertexIndex].uv.y)},
+                .corridorInfo = {
+                    static_cast<orbit::f32>(product->widthMeters*0.5),
+                    static_cast<orbit::f32>(product->laneCount)}
             });
         }
 
