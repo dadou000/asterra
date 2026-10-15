@@ -2288,6 +2288,7 @@ int orbit::editor_app::StudioApplication::Run(
                     {"log_path", status.logPath.string()},
                     {"pending_commits",static_cast<orbit::i64>(
                         status.pendingCommits)},
+                    {"rebuild_pending",status.rebuildPending},
                     {"local_commit",status.localCommit},
                     {"remote_commit",status.remoteCommit},
                     {"last_checked_unix",static_cast<orbit::i64>(
@@ -3344,6 +3345,7 @@ int orbit::editor_app::StudioApplication::Run(
                             std::to_string(gitUpdate.pendingCommits) +
                             " update(s)" :
                         gitUpdate.stage == "Blocked" ? "Update blocked" :
+                        gitUpdate.rebuildPending ? "Build required" :
                         gitUpdate.stage == "Failed" ? "Check failed" :
                             "Orbit updater",
                     .tooltip =
@@ -3360,6 +3362,7 @@ int orbit::editor_app::StudioApplication::Run(
                     .lastCheckedUnixSeconds =
                         gitUpdate.lastCheckedUnixSeconds,
                     .pendingCommits = gitUpdate.pendingCommits,
+                    .rebuildPending = gitUpdate.rebuildPending,
                     .busy = gitUpdate.busy,
                     .onClick = [&updateOrbitFromGitHub]
                     {
