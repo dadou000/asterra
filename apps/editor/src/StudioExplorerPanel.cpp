@@ -702,10 +702,11 @@ void StudioExplorerPanel::Register()
                                 {
                                     const bool batch=selection().Contains(object.id) &&
                                         selection().Ordered().size()>1U;
-                                    const std::string label=batch ?
+                                    const std::string deleteActionLabel=batch ?
                                         "Delete selected hierarchies##del-" :
                                         "Delete hierarchy (including children)##del-";
-                                    if(context.Selectable(label+object.id.ToString(),false))
+                                    if(context.Selectable(
+                                        deleteActionLabel+object.id.ToString(),false))
                                     {
                                         if(!batch)
                                         {
