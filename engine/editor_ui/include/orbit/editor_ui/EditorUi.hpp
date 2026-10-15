@@ -674,6 +674,7 @@ public:
         bool busy{false};
         std::function<void()> onClick;
         std::function<void()> onCheck;
+        bool hasLog{false};
         std::function<void()> onOpenLog;
     };
     void SetUpdateIndicator(UpdateIndicator indicator);
