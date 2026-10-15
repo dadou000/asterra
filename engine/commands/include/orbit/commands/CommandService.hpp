@@ -34,10 +34,13 @@ public:
         scene::ObjectId object,
         std::string_view nameSuffix = " Copy");
 
-    // Deletes one leaf semantic object as an undoable command. The complete
-    // object record and all explicitly stored schema properties are restored
-    // with the same stable ID on undo.
+    // Deletes an entire authored subtree atomically, children first.
+    // Undo restores parents before descendants with stable IDs and properties.
     void DeleteObject(scene::ObjectId object);
+
+    // Multi-selection: overlapping roots are de-duplicated and one undo
+    // restores every subtree. Nothing is deleted if validation fails.
+    void DeleteObjects(std::span<const scene::ObjectId> objects);
 
     void RenameObject(
         scene::ObjectId object,
