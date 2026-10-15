@@ -133,6 +133,7 @@ struct PanelMarqueePointer
     bool released{false};
     bool shift{false};
     bool ctrl{false};
+    bool alt{false};
     math::Float2 screen{};
 };
 
@@ -374,6 +375,7 @@ public:
     [[nodiscard]] bool InputDouble3(std::string_view label, math::Double3& value);
     [[nodiscard]] bool ControlDown() const noexcept;
     [[nodiscard]] bool ShiftDown() const noexcept;
+    [[nodiscard]] bool AltDown() const noexcept;
     // Used for contextual keyboard commands without stealing input from
     // another dock panel or a focused text field.
     [[nodiscard]] bool WindowFocusedForShortcuts() const noexcept;
