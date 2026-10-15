@@ -999,6 +999,38 @@ private:
             }
         }
 
+        if(context.Section("Builder preferences##roads-preferences",false))
+        {
+            context.MutedText(
+                "Road presets, snapping, alignment and elevation are saved "
+                "per user. Active networks, chain endpoints and tool arming "
+                "are deliberately temporary.");
+            if(context.Button("Reset builder settings##roads-defaults"))
+            {
+                category_=0;
+                catalogId_="rural-road";
+                newEdgeMode_=0;
+                curveBias_=0.25;
+                elevationMeters_=0.0;
+                snapToNodes_=true;
+                nodeSnapMeters_=10.0;
+                designSpeedKmh_=60.0;
+                speed_=designSpeedKmh_/3.6;
+                easeTurns_=true;
+                constructionMode_="terrain";
+                newNetworkId_={};
+                newNetworkName_="Road Network";
+                if(viewportTool_)
+                {
+                    viewportTool_->lastPlacedPathNode.reset();
+                    viewportTool_->activePathNetwork.reset();
+                }
+                UpdateViewportTool();
+                status_="Road builder preferences restored to defaults.";
+                error_.clear();
+            }
+        }
+
         if(context.Section("Networks##road-networks",false))
         {
             static_cast<void>(context.InputText(
