@@ -196,6 +196,8 @@ int VirtualKeyForUncached(const Key key, const HKL layout)
         return VK_F3;
     case Key::F4:
         return VK_F4;
+    case Key::F5:
+        return VK_F5;
     case Key::F11:
         return VK_F11;
     case Key::ArrowLeft:
