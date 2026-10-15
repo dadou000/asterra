@@ -794,6 +794,17 @@ void StudioViewportPanel::Register()
                 viewportEndWasDown =
                     endDown;
 
+                if(infrastructureDrawMode && pathPlacementMode &&
+                   interaction.hovered &&
+                   context.KeyPressed(orbit::editor_ui::UiKey::Enter))
+                {
+                    // Enter provides a keyboard-first way to complete one
+                    // chain while keeping the chosen tool and road preset.
+                    lastPlacedPathNode.reset();
+                    infrastructureLastAction=
+                        "Chain finished. Click to begin another road.";
+                    infrastructurePlacementError.clear();
+                }
                 if(infrastructureDrawMode && viewportRadialOpen)
                 {
                     // Right click finishes the current continuous chain,
