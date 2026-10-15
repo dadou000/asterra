@@ -4,6 +4,7 @@
 #include "StudioPanels.hpp"
 #include <orbit/path_geometry/RoadCatalog.hpp>
 #include <orbit/paths/PathNetwork.hpp>
+#include <orbit/platform/Paths.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <algorithm>
@@ -12,6 +13,10 @@
 #include <cctype>
 #include <set>
 #include <format>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -27,11 +32,19 @@ public:
         .high=0x4f5242495450524fULL,.low=0x4345445552414c53ULL};
     StudioProceduralsPanel(studio_session::StudioSession& session,
                            rpc::Dispatcher& rpc) noexcept
-        : session_(&session), rpc_(&rpc) {}
+        : session_(&session), rpc_(&rpc)
+    {
+        LoadPreferences();
+    }
 
     void BindViewportTool(StudioViewportPanel& viewport) noexcept
     {
         viewportTool_=&viewport;
+        viewportTool_->infrastructureSnapPreferenceChanged=[this](const bool enabled)
+        {
+            snapToNodes_=enabled;
+            SavePreferencesIfChanged();
+        };
         UpdateViewportTool();
     }
     void OpenPathsAndRoads() noexcept
@@ -40,8 +53,16 @@ public:
         if(category_==0 && catalogId_.empty())catalogId_="rural-road";
         UpdateViewportTool();
     }
-    void OpenOverview() noexcept {page_=0;}
-    void OpenAdvanced() noexcept {page_=2;}
+    void OpenOverview() noexcept
+    {
+        DisarmConstructionForNavigation();
+        page_=0;
+    }
+    void OpenAdvanced() noexcept
+    {
+        DisarmConstructionForNavigation();
+        page_=2;
+    }
     [[nodiscard]] bool IsRoadBuilderOpen() const noexcept {return page_==1;}
 
     void Register(editor_ui::EditorUi& ui)
@@ -54,6 +75,105 @@ public:
         });
     }
 private:
+    void DisarmConstructionForNavigation() noexcept
+    {
+        if(viewportTool_ && viewportTool_->infrastructureDrawMode)
+        {
+            viewportTool_->infrastructureDrawMode=false;
+            viewportTool_->pathPlacementMode=false;
+            viewportTool_->ResetInfrastructureChain();
+        }
+    }
+
+    [[nodiscard]] static std::filesystem::path PreferencesPath()
+    {
+        return platform::UserDataDirectory() / "studio_procedurals_preferences.txt";
+    }
+
+    [[nodiscard]] std::string SerializePreferences() const
+    {
+        std::ostringstream out;
+        out << std::setprecision(17)
+            << 1 << ' '
+            << category_ << ' '
+            << std::quoted(catalogId_) << ' '
+            << newEdgeMode_ << ' '
+            << curveBias_ << ' '
+            << elevationMeters_ << ' '
+            << static_cast<int>(snapToNodes_) << ' '
+            << nodeSnapMeters_ << ' '
+            << designSpeedKmh_ << ' '
+            << static_cast<int>(easeTurns_) << ' '
+            << std::quoted(constructionMode_) << '\n';
+        return out.str();
+    }
+
+    void LoadPreferences() noexcept
+    {
+        try
+        {
+            std::ifstream in(PreferencesPath());
+            int version=0,category=0,alignment=0,snap=1,easing=1;
+            std::string catalog,construction;
+            f64 curve=0.25,height=0.0,radius=10.0,speed=60.0;
+            if(in >> version >> category >> std::quoted(catalog) >>
+                alignment >> curve >> height >> snap >> radius >>
+                speed >> easing >> std::quoted(construction) &&
+                version==1 && category>=0 && category<=2 &&
+                alignment>=0 && alignment<=2 &&
+                std::isfinite(curve) && curve>=0.0 && curve<=0.7 &&
+                std::isfinite(height) && height>=-10000.0 && height<=100000.0 &&
+                (snap==0 || snap==1) &&
+                std::isfinite(radius) && radius>=1.0 && radius<=50.0 &&
+                std::isfinite(speed) && speed>=10.0 && speed<=180.0 &&
+                (easing==0 || easing==1) &&
+                (construction=="terrain" || construction=="bridge" ||
+                 construction=="tunnel" || construction=="deck") &&
+                (category==0 ? path_geometry::FindRoadCatalog(catalog)!=nullptr :
+                 category==1 ? catalog=="ballasted-rail" : catalog.empty()))
+            {
+                category_=category;
+                catalogId_=catalog;
+                newEdgeMode_=alignment;
+                curveBias_=curve;
+                elevationMeters_=height;
+                snapToNodes_=snap!=0;
+                nodeSnapMeters_=radius;
+                designSpeedKmh_=speed;
+                easeTurns_=easing!=0;
+                constructionMode_=construction;
+            }
+            speed_=designSpeedKmh_/3.6;
+            newNetworkName_=category_==0?"Road Network":
+                category_==1?"Rail Network":"Path Network";
+            savedPreferences_=SerializePreferences();
+        }
+        catch(const std::exception&)
+        {
+            // Preferences must never prevent Studio from launching.
+        }
+    }
+
+    void SavePreferencesIfChanged() noexcept
+    {
+        try
+        {
+            const std::string data=SerializePreferences();
+            if(data==savedPreferences_)return;
+            const auto path=PreferencesPath();
+            std::filesystem::create_directories(path.parent_path());
+            std::ofstream out(path,std::ios::binary|std::ios::trunc);
+            if(!out)return;
+            out << data;
+            out.flush();
+            if(out) savedPreferences_=data;
+        }
+        catch(const std::exception&)
+        {
+            // Editor preferences are best-effort, never authored world data.
+        }
+    }
+
     void Refresh()
     {
         edges_.clear();
@@ -89,7 +209,7 @@ private:
             if(viewportTool_)
             {
                 viewportTool_->activePathNetwork.reset();
-                viewportTool_->lastPlacedPathNode.reset();
+                viewportTool_->ResetInfrastructureChain();
             }
         }
         knownWorldGeneration_=session_->World().Objects().Revision();
@@ -133,7 +253,7 @@ private:
             newNetworkId_=created.id;
             if(viewportTool_) {
                 viewportTool_->activePathNetwork=newNetworkId_;
-                viewportTool_->lastPlacedPathNode.reset();
+                viewportTool_->ResetInfrastructureChain();
             }
             status_="Network created. Add anchor nodes through the existing node tools or connect nodes below.";
             error_.clear();
@@ -487,7 +607,7 @@ private:
                 "Upgraded {} road segments as one undoable edit.",
                 eligible.size());
             selectedRoads_.clear();
-            if(viewportTool_)viewportTool_->lastPlacedPathNode.reset();
+            if(viewportTool_)viewportTool_->ResetInfrastructureChain();
             Refresh();
         }
         catch(const std::exception& e)
@@ -538,6 +658,10 @@ private:
     void UpdateViewportTool() noexcept
     {
         if(!viewportTool_)return;
+        // An unfinished direction pick must never be reused after
+        // changing the underlying alignment mode.
+        if(viewportTool_->infrastructureAlignmentMode!=newEdgeMode_)
+            viewportTool_->ResetInfrastructureChain();
         viewportTool_->infrastructureCatalogId=
             category_==2?"":catalogId_.empty()?
                 (category_==1?"ballasted-rail":"rural-road"):catalogId_;
@@ -567,10 +691,12 @@ private:
         UpdateViewportTool();
         viewportTool_->pathPlacementMode=enable;
         viewportTool_->infrastructureDrawMode=enable;
-        if(!enable)viewportTool_->lastPlacedPathNode.reset();
+        if(!enable)viewportTool_->ResetInfrastructureChain();
         error_.clear();
         status_=enable?
-            "Construction tool armed. Click to place the start point, then click again to build a segment; continue clicking to extend.":
+            (newEdgeMode_==1 ?
+                "Curve tool armed: click start, click outgoing direction, then click end. Repeat direction/end to continue." :
+                "Construction tool armed. Click to place the start point, then click again to build a segment; continue clicking to extend.") :
             "Construction mode finished.";
     }
     void DrawBuilder(editor_ui::PanelContext& context)
@@ -593,7 +719,7 @@ private:
         context.SameLine();
         if(context.Button("Expert editor##road-expert"))
         {
-            page_=2;
+            OpenAdvanced();
             return;
         }
         const bool drawing=viewportTool_ &&
@@ -616,7 +742,7 @@ private:
                     if(!commands.CanUndo())
                         throw std::runtime_error("There is no authored edit to undo.");
                     commands.Undo();
-                    if(viewportTool_)viewportTool_->lastPlacedPathNode.reset();
+                    if(viewportTool_)viewportTool_->ResetInfrastructureChain();
                     status_="Undo complete. Re-select an endpoint to resume drawing.";
                     error_.clear();
                     Refresh();
@@ -631,7 +757,7 @@ private:
                     if(!commands.CanRedo())
                         throw std::runtime_error("There is no authored edit to redo.");
                     commands.Redo();
-                    if(viewportTool_)viewportTool_->lastPlacedPathNode.reset();
+                    if(viewportTool_)viewportTool_->ResetInfrastructureChain();
                     status_="Redo complete. Select an endpoint to continue.";
                     error_.clear();
                     Refresh();
@@ -644,11 +770,22 @@ private:
         if(drawing)
         {
             context.KeyValue("Tool","Drawing - successive clicks extend the network");
+            if(newEdgeMode_==1)
+            {
+                const int step=!viewportTool_->lastPlacedPathNode?1:
+                    !viewportTool_->infrastructureCurveDirectionPoint?2:3;
+                context.KeyValue("Curve construction step",
+                    std::format("{} / 3",step));
+                context.MutedText(
+                    step==1?"Click the starting node (or snap to an existing one)." :
+                    step==2?"Click to fix the curve's outgoing direction; no node is created." :
+                    "Click the end node to commit the curve. The endpoint becomes the next start.");
+            }
             context.MutedText(
-                "Left click: add road | Right click: end chain | Escape: exit tool");
+                "Left click: build | Ctrl: bypass snapping | Right click / Enter: end chain | Esc: exit tool");
             if(context.Button("New independent road chain##road-new-chain"))
             {
-                viewportTool_->lastPlacedPathNode.reset();
+                viewportTool_->ResetInfrastructureChain();
                 viewportTool_->infrastructureLastAction=
                     "Next viewport click starts an independent road chain.";
             }
@@ -660,7 +797,7 @@ private:
                 context.KeyValue("Target",
                     viewportTool_->infrastructurePreviewSnapped ?
                         "Existing authored network node" :
-                        "New reference-surface point");
+                        "New terrain-surface point");
             }
             if(!viewportTool_->infrastructurePlacementError.empty())
                 context.ErrorText(
@@ -685,8 +822,14 @@ private:
             speed_=designSpeedKmh_/3.6;
             newNetworkName_=category_==0?"Road Network":
                 category_==1?"Rail Network":"Path Network";
+            // Never silently continue a road chain in a network that
+            // belonged to another infrastructure category.
+            newNetworkId_={};
             if(viewportTool_)
-                viewportTool_->lastPlacedPathNode.reset();
+            {
+                viewportTool_->activePathNetwork.reset();
+                viewportTool_->ResetInfrastructureChain();
+            }
             UpdateViewportTool();
         }
         context.Heading("Choose a section");
@@ -805,10 +948,12 @@ private:
         if(context.SegmentedControl(
             "Road alignment##road-geometry",alignment,newEdgeMode_))
             UpdateViewportTool();
-        if(newEdgeMode_==1 &&
-           context.SliderDouble(
-               "Curve offset##roads-curve",curveBias_,0.0,0.70))
-            UpdateViewportTool();
+        if(newEdgeMode_==1)
+            context.MutedText(
+                "Three clicks: start -> outgoing tangent direction -> end. "
+                "Tangent length follows the second-click distance, capped "
+                "to half the completed segment length. No extra node is "
+                "authored for the tangent.");
         if(newEdgeMode_==2)
             context.MutedText(
                 "Terrain routing uses the existing path router; native "
@@ -891,6 +1036,38 @@ private:
             }
         }
 
+        if(context.Section("Builder preferences##roads-preferences",false))
+        {
+            context.MutedText(
+                "Road presets, snapping, alignment and elevation are saved "
+                "per user. Active networks, chain endpoints and tool arming "
+                "are deliberately temporary.");
+            if(context.Button("Reset builder settings##roads-defaults"))
+            {
+                category_=0;
+                catalogId_="rural-road";
+                newEdgeMode_=0;
+                curveBias_=0.25;
+                elevationMeters_=0.0;
+                snapToNodes_=true;
+                nodeSnapMeters_=10.0;
+                designSpeedKmh_=60.0;
+                speed_=designSpeedKmh_/3.6;
+                easeTurns_=true;
+                constructionMode_="terrain";
+                newNetworkId_={};
+                newNetworkName_="Road Network";
+                if(viewportTool_)
+                {
+                    viewportTool_->ResetInfrastructureChain();
+                    viewportTool_->activePathNetwork.reset();
+                }
+                UpdateViewportTool();
+                status_="Road builder preferences restored to defaults.";
+                error_.clear();
+            }
+        }
+
         if(context.Section("Networks##road-networks",false))
         {
             static_cast<void>(context.InputText(
@@ -898,7 +1075,7 @@ private:
             if(context.Button("Create and select##roads-network-create"))
             {
                 CreateNetwork();
-                if(viewportTool_)viewportTool_->lastPlacedPathNode.reset();
+                if(viewportTool_)viewportTool_->ResetInfrastructureChain();
                 UpdateViewportTool();
             }
             for(const auto& entry:networks_)
@@ -911,7 +1088,7 @@ private:
                     newNetworkId_==found->id))
                 {
                     newNetworkId_=found->id;
-                    if(viewportTool_)viewportTool_->lastPlacedPathNode.reset();
+                    if(viewportTool_)viewportTool_->ResetInfrastructureChain();
                     UpdateViewportTool();
                 }
             }
@@ -921,7 +1098,7 @@ private:
                 if(viewportTool_)
                 {
                     viewportTool_->activePathNetwork.reset();
-                    viewportTool_->lastPlacedPathNode.reset();
+                    viewportTool_->ResetInfrastructureChain();
                 }
             }
             context.MutedText(
@@ -939,14 +1116,19 @@ private:
                 "Select multiple authored roads and update their geometry "
                 "profiles together. Alignment, construction mode and "
                 "junction identity are preserved.");
-            static_cast<void>(context.InputText(
-                "Filter roads##roads-inventory-search",roadInventoryFilter_));
-            static_cast<void>(context.Checkbox(
+            if(context.InputText(
+                "Filter roads##roads-inventory-search",roadInventoryFilter_))
+                roadInventoryPage_=0;
+            if(context.Checkbox(
                 "Only selected network##roads-upgrade-network",
-                upgradeOnlyActiveNetwork_));
-            static_cast<void>(context.Checkbox(
+                upgradeOnlyActiveNetwork_))
+                roadInventoryPage_=0;
+            if(context.Checkbox(
                 "Show build errors only##roads-upgrade-errors",
-                showOnlyConstructionErrors_));
+                showOnlyConstructionErrors_))
+                roadInventoryPage_=0;
+            if(upgradeOnlyActiveNetwork_ && !newNetworkId_)
+                context.MutedText("Choose a network above to filter; Auto shows all networks.");
             const auto& cache=session_->PathProducts();
             std::size_t matching=0;
             for(const auto& edge:edges_)
@@ -960,8 +1142,21 @@ private:
                    cache.RebuildError(edge.id).empty())continue;
                 ++matching;
             }
+            constexpr std::size_t kRoadsPerPage=40U;
+            const auto pageCount=std::max<std::size_t>(1U,
+                (matching+kRoadsPerPage-1U)/kRoadsPerPage);
+            roadInventoryPage_=std::min(roadInventoryPage_,pageCount-1U);
             context.KeyValue("Matching roads",std::to_string(matching));
-            if(context.Button("Select visible##roads-manager-all"))
+            context.KeyValue("Page",std::format("{} / {}",
+                roadInventoryPage_+1U,pageCount));
+            if(context.Button("Previous 40##roads-list-previous") &&
+               roadInventoryPage_>0U)
+                --roadInventoryPage_;
+            context.SameLine();
+            if(context.Button("Next 40##roads-list-next") &&
+               roadInventoryPage_+1U<pageCount)
+                ++roadInventoryPage_;
+            if(context.Button("Select all filtered##roads-manager-all"))
             {
                 for(const auto& edge:edges_)
                 {
@@ -982,6 +1177,7 @@ private:
             if(context.BeginChild("roads-manager-list",
                 {.width=0.0F,.height=235.0F},true))
             {
+                std::size_t filteredIndex=0U;
                 for(const auto& edge:edges_)
                 {
                     if(!RoadMatchesFilter(edge))continue;
@@ -991,6 +1187,10 @@ private:
                        road->network!=newNetworkId_)continue;
                     const auto failure=cache.RebuildError(edge.id);
                     if(showOnlyConstructionErrors_ && failure.empty())continue;
+                    const auto currentIndex=filteredIndex++;
+                    if(currentIndex<roadInventoryPage_*kRoadsPerPage ||
+                       currentIndex>=(roadInventoryPage_+1U)*kRoadsPerPage)
+                        continue;
                     const auto* preset=path_geometry::FindRoadCatalog(
                         road->infrastructureCatalogId);
                     const char* state=!failure.empty()?"ERROR":
@@ -1024,58 +1224,43 @@ private:
             {
                 if(const auto id=scene::ObjectId::Parse(upgradeTargetEdgeId_))
                     SelectEdge(*id);
-                page_=2;
+                OpenAdvanced();
             }
         }
         if(context.Section("Single road quick upgrade##roads-upgrade-legacy",false))
         {
             context.MutedText(
-                "Change only an existing road's section profile. "
-                "Its alignment, node IDs and construction level stay intact.");
-            if(edges_.empty())
-                context.MutedText("No authored path edges in this world.");
-            else
+                "Select a road in the paged Road manager above. Changing "
+                "its profile preserves alignment, endpoints and construction mode.");
+            const auto id=scene::ObjectId::Parse(upgradeTargetEdgeId_);
+            const auto road=id?
+                session_->PathNetwork().Service().FindEdge(*id):
+                std::nullopt;
+            const auto* from=road?
+                path_geometry::FindRoadCatalog(
+                    road->infrastructureCatalogId):nullptr;
+            const auto* into=path_geometry::FindRoadCatalog(catalogId_);
+            if(from && into)
             {
-                for(const auto& entry:edges_)
+                context.KeyValue("Selected road",
+                    std::format("{} / {} lanes",
+                        from->label,from->laneCount));
+                context.KeyValue("Section change",
+                    std::format("{:.1f} m / {} lanes  ->  {:.1f} m / {} lanes",
+                        from->pavedWidthMeters,from->laneCount,
+                        into->pavedWidthMeters,into->laneCount));
+                if(context.PrimaryButton(
+                    "Upgrade selected road##roads-upgrade-run"))
+                    UpgradeRoadSection();
+                if(context.Button(
+                    "Edit alignment and junctions##roads-upgrade-expert"))
                 {
-                    const auto road=session_->PathNetwork().Service().FindEdge(
-                        entry.id);
-                    if(!road || !path_geometry::FindRoadCatalog(
-                        road->infrastructureCatalogId))continue;
-                    const auto* previous=path_geometry::FindRoadCatalog(
-                        road->infrastructureCatalogId);
-                    const auto label=std::format(
-                        "{} | {} lane(s)##roads-upgrade-{}",
-                        entry.name,previous->laneCount,entry.id.ToString());
-                    if(context.Selectable(label,
-                        upgradeTargetEdgeId_==entry.id.ToString()))
-                        upgradeTargetEdgeId_=entry.id.ToString();
-                }
-                if(!upgradeTargetEdgeId_.empty())
-                {
-                    const auto id=scene::ObjectId::Parse(upgradeTargetEdgeId_);
-                    const auto road=id?
-                        session_->PathNetwork().Service().FindEdge(*id):
-                        std::nullopt;
-                    const auto* from=road?
-                        path_geometry::FindRoadCatalog(
-                            road->infrastructureCatalogId):nullptr;
-                    const auto* into=path_geometry::FindRoadCatalog(catalogId_);
-                    if(from && into)
-                        context.KeyValue("Section change",
-                            std::format("{:.1f} m / {} lanes  ->  {:.1f} m / {} lanes",
-                                from->pavedWidthMeters,from->laneCount,
-                                into->pavedWidthMeters,into->laneCount));
-                    if(context.PrimaryButton(
-                        "Upgrade selected road##roads-upgrade-run"))
-                        UpgradeRoadSection();
-                    if(context.Button("Edit alignment and junctions##roads-upgrade-expert"))
-                    {
-                        if(id)SelectEdge(*id);
-                        page_=2;
-                    }
+                    SelectEdge(*id);
+                    OpenAdvanced();
                 }
             }
+            else
+                context.MutedText("No valid road selected yet.");
         }
         if(context.Section("Construction inventory and diagnostics##road-inventory",false))
         {
@@ -1099,7 +1284,7 @@ private:
             if(context.Button("Refresh authored inventory##road-refresh"))
                 Refresh();
             if(context.Button("Inspect selected road in expert editor##road-expert-last"))
-                page_=2;
+                OpenAdvanced();
             context.MutedText(
                 "Native generation is asynchronous/budgeted; these counts "
                 "never imply that bridges or traffic simulations are ready.");
@@ -1114,16 +1299,34 @@ private:
             if (revision != knownWorldGeneration_)
                 Refresh();
         }
-        else if (!edges_.empty() || !networks_.empty() || !nodes_.empty())
+        else if (knownWorldGeneration_ != ~u64{0} ||
+                 !edges_.empty() || !networks_.empty() ||
+                 !nodes_.empty() || newNetworkId_ ||
+                 !selectedRoads_.empty())
         {
+            // A new world must never inherit network IDs, selected roads,
+            // construction errors or an armed placement tool.
             edges_.clear(); nodes_.clear(); networks_.clear();
             edgeId_.clear(); newNetworkId_ = {};
+            selectedRoads_.clear();
+            upgradeTargetEdgeId_.clear();
             report_ = rpc::Value{};
             junctionReport_ = rpc::Value{};
             driveReport_ = rpc::Value{};
             runtimeVehicleReport_=rpc::Value{};
             runtimeVehicleId_.clear();
             junctionNodeId_.clear();
+            error_.clear(); status_.clear();
+            roadInventoryPage_=0U;
+            if(viewportTool_)
+            {
+                viewportTool_->activePathNetwork.reset();
+                viewportTool_->ResetInfrastructureChain();
+                viewportTool_->infrastructureDrawMode=false;
+                viewportTool_->pathPlacementMode=false;
+                viewportTool_->infrastructurePlacementError.clear();
+                viewportTool_->infrastructureLastAction.clear();
+            }
             knownWorldGeneration_ = ~u64{0};
         }
         if(page_==0)
@@ -1135,17 +1338,24 @@ private:
                 page_=1;
             context.MutedText("Roads, railway tracks, reference paths and junctions. Open the city-builder style construction palette.");
             if(context.Button("Advanced infrastructure editor##proc-hub-advanced"))
-                page_=2;
+                OpenAdvanced();
             return;
         }
         if(page_==1)
         {
             DrawBuilder(context);
+            SavePreferencesIfChanged();
             return;
         }
-        if(context.Button("Back to Procedurals##proc-advanced-back"))
+        if(context.Button("Road builder##proc-advanced-builder"))
         {
-            page_=0;
+            OpenPathsAndRoads();
+            return;
+        }
+        context.SameLine();
+        if(context.Button("Procedurals home##proc-advanced-back"))
+        {
+            OpenOverview();
             return;
         }
         context.Heading("Build / Procedurals");
@@ -1652,11 +1862,13 @@ private:
     }
     StudioViewportPanel* viewportTool_{nullptr};
     i32 page_{1}; // Open directly in the road builder, including via View > Procedurals.
+    std::string savedPreferences_;
     f64 curveBias_{0.25};
     f64 elevationMeters_{0.0};
     std::string upgradeTargetEdgeId_;
     std::set<scene::ObjectId> selectedRoads_;
     std::string roadInventoryFilter_;
+    std::size_t roadInventoryPage_{0U};
     bool upgradeOnlyActiveNetwork_{false};
     bool showOnlyConstructionErrors_{false};
 
@@ -1677,7 +1889,7 @@ private:
     std::string newNetworkName_{"New Infrastructure"};
     scene::ObjectId startNodeId_{};
     scene::ObjectId endNodeId_{};
-    i32 newEdgeMode_{1};
+    i32 newEdgeMode_{0}; // Straight is the least surprising first-run default.
     std::string newEdgeName_{"New Segment"};
     math::Double3 newStartHandle_{5.0,0.0,0.0};
     math::Double3 newEndHandle_{-5.0,0.0,0.0};
@@ -1700,7 +1912,7 @@ private:
     std::string junctionError_;
     std::size_t selectedFinding_{0};
     i32 category_{0};
-    std::string catalogId_;
+    std::string catalogId_{"rural-road"};
     i64 catalogVersion_{1};
     std::string constructionMode_{"terrain"};
     std::string status_;
