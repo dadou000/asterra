@@ -9,6 +9,9 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <memory>
+#include <string>
+#include <span>
+#include <vector>
 
 namespace orbit::celestial_clouds
 {
@@ -66,6 +69,7 @@ public:
         bool anchorSet{false};
         bool active{false};
         u32 generation{0U};
+        std::shared_ptr<rhi::Buffer> terrainShadow;
 
         // Exact skip of redundant refreshes (see UpdateLightVolume): a hash of every input the
         // update reads, and how many consecutive frames it has been unchanged.
@@ -77,6 +81,48 @@ public:
         // Tests set this to false to get the original refresh-forever behaviour as a reference.
         bool allowRefreshSkip{true};
     };
+
+    // A point light that scatters into the clouds (ORBIT_CLOUD_POINT_LIGHTS=1): a lightning flash, street lamps, a lamp
+    // inside a cloud. positionMeters is in the same body-centric frame as the view's camera position. `intensity` is the
+    // radiant intensity per channel in scene-linear units, W/sr as a fraction of the 1361 W/m2 reference (so irradiance
+    // at distance d is intensity / d^2 and equals the sun's when they match). At most 16 are used.
+    struct PointLight
+    {
+        math::Double3 positionMeters{};
+        math::Float3 intensity{};
+    };
+    static constexpr u32 kMaxPointLights = 16U;
+
+    // Call once per frame before recording, with the frame slot that has completed and the number of frames in flight,
+    // so per-frame light buffers are retired only after the GPU is done with them (same contract as the glass renderer).
+    void BeginFrame(u32 completedSlot, u32 framesInFlight);
+    [[nodiscard]] bool PointLightsEnabled() const noexcept { return pointLights_; }
+
+    // A simulated storm domain (engine/weather_gpu): 32 placement floats then extinction per cell (see StormSigma in the shader).
+    // The buffer must stay alive and in ResourceState::ShaderResource while the clouds draw; nullptr restores the procedural clouds.
+    // Inside the domain the simulated extinction replaces the procedural density in the march, the cloud shadow and the sun light
+    // volume alike, so the storm shades itself and the ground. CLOUD_STORM=0 (shader defines) turns the lookup off for A/B work.
+    void SetStormBuffer(rhi::Buffer* buffer) noexcept { storm_ = buffer; }
+
+    // Developer hook (see tools/orbit_ab.py): the march, shadow and volume shaders are recompiled with
+    // "NAME=VALUE;NAME=VALUE" as #define lines (tunables such as CLOUD_MAX_STEPS). Returns the compile error, or an empty
+    // string; on error the previous shaders stay in use. Safe between frames: the replaced pipelines are retired by the RHI.
+    [[nodiscard]] std::string SetShaderDefines(const std::string& defines);
+    [[nodiscard]] const std::string& ShaderDefines() const noexcept { return defines_; }
+
+    // Split view (clouds.split_set): the left of the viewport shows the march with ShaderDefines(), the right a march and resolve
+    // compiled with these defines (the shadow and light-volume shaders stay as they are). `position` is the divider, 0..1 of the
+    // viewport width. Returns the compile error or an empty string; on error the split stays as it was.
+    [[nodiscard]] std::string SetCompareDefines(const std::string& defines, f32 position);
+    void ClearCompare();
+    [[nodiscard]] bool CompareActive() const noexcept { return compareActive_; }
+    [[nodiscard]] const std::string& CompareDefines() const noexcept { return definesB_; }
+    [[nodiscard]] f32 ComparePosition() const noexcept { return comparePosition_; }
+    [[nodiscard]] u32 CompareCheckerboardMode() const noexcept { return checkerboardB_; }
+    // True while CLOUD_CHECKERBOARD=1: the march target is half the cloud size in each dimension (one pixel of every 2x2 block per frame).
+    [[nodiscard]] bool CheckerboardEnabled() const noexcept { return checkerboard_ != 0U; }
+    // 2 while CLOUD_CHECKERBOARD=2: half the pixels per frame, the march target is half the width and the full height.
+    [[nodiscard]] u32 CheckerboardMode() const noexcept { return checkerboard_; }
 
     CloudRenderer(const CloudRenderer&) = delete;
     CloudRenderer& operator=(const CloudRenderer&) = delete;
@@ -105,7 +151,12 @@ public:
         // Scales the crepuscular rays (sunlight removed from cloud-shadowed air); 0 = off.
         f32 godrayStrength = 1.0F,
         // > 0 draws a horizontal slice of the sun light volume at this altitude (m) as a heatmap.
-        f32 volumeDebugAltitude = 0.0F);
+        f32 volumeDebugAltitude = 0.0F,
+        // Ignored unless PointLightsEnabled().
+        std::span<const PointLight> pointLights = {},
+        u32 variant = 0U,        // 1: the split view's second march (SetCompareDefines)
+        f32 regionLeft = 0.0F,   // the part of the target drawn, as fractions of its width
+        f32 regionRight = 1.0F);
 
     [[nodiscard]] std::unique_ptr<LightVolume> CreateLightVolume() const;
 
@@ -164,7 +215,11 @@ public:
         const CloudResolveView& now,
         const CloudResolveView& previous,
         bool historyValid,
-        f32 currentWeight);
+        f32 currentWeight,
+        u32 frameIndex = 0U,
+        u32 variant = 0U,
+        f32 regionLeft = 0.0F,
+        f32 regionRight = 1.0F);
 
     // Blends the reduced-resolution result over 'target' (scene colour):
     // scene * T + L, bilinearly upsampled.
@@ -175,16 +230,58 @@ public:
         u32 width,
         u32 height);
 
+    // The split view's composite: cloud target `cloudsLeft` left of `position` (0..1 of the width), `cloudsRight` right of it, and a
+    // white divider line.
+    void CompositeSplit(
+        rhi::CommandList& commands,
+        rhi::Texture& cloudsLeft,
+        rhi::Texture& cloudsRight,
+        rhi::Texture& target,
+        u32 width,
+        u32 height,
+        f32 position);
+
 private:
+    [[nodiscard]] static u32 CheckerboardModeOf(const std::string& defineText);
+    // Compiles the march, shadow and volume shaders and swaps them in; returns an error text or an empty string.
+    [[nodiscard]] std::string RebuildShaderPipelines(const std::string& defineText);
+    const shader::Compiler* compiler_{nullptr};
+    std::string farField_;
+    std::string defines_;
+    u32 checkerboard_{0U};
+    // Split view: the second march/resolve pair, and the composite that shows both.
+    bool compareActive_{false};
+    f32 comparePosition_{0.5F};
+    std::string definesB_;
+    u32 checkerboardB_{0U};
+    std::unique_ptr<rhi::GraphicsPipeline> pipelineB_;
+    std::unique_ptr<rhi::GraphicsPipeline> resolvePipelineB_;
+    std::unique_ptr<rhi::GraphicsPipeline> compositeSplitPipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> compositePipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> resolvePipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> shadowPipeline_;
     // Baked 32^3 tileable cellular noise (base shape + erosion octaves).
     std::unique_ptr<rhi::Buffer> noise_;
+    std::unique_ptr<rhi::Buffer> emptyTerrainShadow_;
+    std::unique_ptr<rhi::Buffer> stormDummy_;
+    rhi::Buffer* storm_{nullptr};
+    [[nodiscard]] rhi::Buffer& StormBuffer() const noexcept { return storm_ != nullptr ? *storm_ : *stormDummy_; }
     // Sun light volume (see UpdateLightVolume): voxels, the pipeline that fills them and the
     // tangent-frame anchor that makes toroidal addressing valid.
     std::unique_ptr<rhi::ComputePipeline> volumePipeline_;
     rhi::Device* device_{nullptr};
+
+    // Point lights (ORBIT_CLOUD_POINT_LIGHTS): a fourth shader buffer, rewritten every Draw. Buffers are kept alive until
+    // every frame in flight that could read them has completed (see BeginFrame).
+    struct RetiredBuffer
+    {
+        std::unique_ptr<rhi::Buffer> buffer;
+        u64 pendingFrames{0U};
+    };
+    [[nodiscard]] rhi::Buffer& UploadPointLights(std::span<const PointLight> lights, const math::Double3& cameraPositionMeters);
+    bool pointLights_{false};
+    std::vector<RetiredBuffer> lightBuffers_;
+    u64 pendingFramesMask_{~0ULL};
 };
 } // namespace orbit::celestial_clouds

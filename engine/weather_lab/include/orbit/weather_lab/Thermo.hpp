@@ -16,6 +16,8 @@ inline constexpr float kCp = 1005.7F;
 inline constexpr float kRd = 287.04F;
 inline constexpr float kRv = 461.5F;
 inline constexpr float kLv = 2.5e6F;
+inline constexpr float kLs = 2.834e6F;   // sublimation
+inline constexpr float kLf = kLs - kLv;  // fusion
 inline constexpr float kP00 = 100000.0F;
 inline constexpr float kRepsilon = kRv / kRd;
 } // namespace thermo
@@ -23,6 +25,8 @@ inline constexpr float kRepsilon = kRv / kRd;
 // Saturation mixing ratio over liquid water (Bolton 1980), temperature in K,
 // pressure in Pa.
 [[nodiscard]] float SaturationMixingRatio(float pressure, float temperature);
+// Saturation mixing ratio over ice (Murray 1967), temperature in K, pressure in Pa.
+[[nodiscard]] float SaturationMixingRatioIce(float pressure, float temperature);
 
 struct SupercellSoundingParams
 {

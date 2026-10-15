@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <array>
 #include <bit>
 #include <cfloat>
@@ -519,6 +520,10 @@ public:
             this->layoutPath.string();
         io.IniFilename =
             layoutPathUtf8.c_str();
+        // Save the current dock arrangement after the user stops dragging.
+        // ImGui tracks dirty dock/window settings and persists them on its
+        // built-in timer; shutdown save remains as a final fallback.
+        io.IniSavingRate = 2.0F;
 
         // ImGui loads this file on the first frame. If it does not dock
         // anything (missing, or every panel floating) the default arrangement
@@ -977,6 +982,7 @@ public:
     std::vector<PanelDefinition> panels;
     std::vector<u8> panelOpen;
     std::vector<u8> panelVisible;
+    std::unordered_map<std::string, std::array<f32, 4>> panelRects;
     std::vector<MenuAction> menuActions;
     bool automationExpandTrees{false};
     bool automationTraceWidgets{false};
@@ -985,6 +991,7 @@ public:
     std::string pendingFocusTitle;
     std::string automationOpenMenu;
     EditorUi::ProjectIndicator projectIndicator;
+    EditorUi::UpdateIndicator updateIndicator;
 
     struct ActiveNotification
     {
@@ -1529,6 +1536,8 @@ ImageInteraction PanelContext::InteractiveImage(
         ImGuiButtonFlags_MouseButtonLeft |
             ImGuiButtonFlags_MouseButtonRight);
     ImGui::SetCursorScreenPos(after);
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelX);
 
     ImageInteraction result;
     result.hovered = ImGui::IsItemHovered();
@@ -1648,6 +1657,11 @@ ImageInteraction PanelContext::Image(
 
     const bool hovered =
         ImGui::IsItemHovered();
+
+    // The wheel (Shift swaps it to the horizontal axis) belongs to the view's zoom; it must not also scroll the
+    // panel, which drifted the viewport sideways on Shift + wheel.
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelX);
 
     const bool clicked =
         ImGui::IsItemClicked(
@@ -2063,6 +2077,52 @@ ItemPointer PanelContext::LastItemPointer() const
     };
 }
 
+PanelMarqueePointer PanelContext::PanelMarqueeInput() const noexcept
+{
+    const auto& io=ImGui::GetIO();
+    const ImVec2 pos=ImGui::GetMousePos();
+    return {
+        .hoveredWindow=ImGui::IsWindowHovered(
+            ImGuiHoveredFlags_RootAndChildWindows),
+        .overItem=ImGui::IsAnyItemHovered(),
+        .pressed=ImGui::IsMouseClicked(ImGuiMouseButton_Left),
+        .down=ImGui::IsMouseDown(ImGuiMouseButton_Left),
+        .released=ImGui::IsMouseReleased(ImGuiMouseButton_Left),
+        .shift=io.KeyShift,
+        .ctrl=io.KeyCtrl,
+        .alt=io.KeyAlt,
+        .screen={pos.x,pos.y}
+    };
+}
+
+std::array<f32,4> PanelContext::LastItemScreenRect() const noexcept
+{
+    const ImVec2 a=ImGui::GetItemRectMin();
+    const ImVec2 b=ImGui::GetItemRectMax();
+    return {a.x,a.y,b.x,b.y};
+}
+
+void PanelContext::DrawPanelMarquee(
+    const math::Float2 a,const math::Float2 b) const
+{
+    const ImVec2 topLeft{
+        std::min(a.x,b.x),std::min(a.y,b.y)};
+    const ImVec2 bottomRight{
+        std::max(a.x,b.x),std::max(a.y,b.y)};
+    auto* window=ImGui::GetCurrentWindow();
+    auto* draw=ImGui::GetForegroundDrawList();
+    const ImVec2 windowMin=window->Pos;
+    const ImVec2 windowMax{
+        window->Pos.x+window->Size.x,
+        window->Pos.y+window->Size.y};
+    draw->PushClipRect(windowMin,windowMax,true);
+    draw->AddRectFilled(topLeft,bottomRight,
+        IM_COL32(75,155,255,45));
+    draw->AddRect(topLeft,bottomRight,
+        IM_COL32(110,185,255,230),0.0F,0,1.6F*g_uiScale);
+    draw->PopClipRect();
+}
+
 void PanelContext::CanvasText(
     const math::Float2 position,
     const math::Float4 color,
@@ -2298,6 +2358,22 @@ bool PanelContext::ControlDown() const noexcept
     return ImGui::GetIO().KeyCtrl;
 }
 
+bool PanelContext::ShiftDown() const noexcept
+{
+    return ImGui::GetIO().KeyShift;
+}
+
+bool PanelContext::AltDown() const noexcept
+{
+    return ImGui::GetIO().KeyAlt;
+}
+
+bool PanelContext::WindowFocusedForShortcuts() const noexcept
+{
+    return ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput;
+}
+
 bool PanelContext::BeginDragSource()
 {
     return ImGui::BeginDragDropSource(
@@ -2436,6 +2512,8 @@ bool PanelContext::KeyPressed(
     case UiKey::Down: imguiKey = ImGuiKey_DownArrow; break;
     case UiKey::Enter: imguiKey = ImGuiKey_Enter; break;
     case UiKey::Escape: imguiKey = ImGuiKey_Escape; break;
+    case UiKey::Delete: imguiKey = ImGuiKey_Delete; break;
+    case UiKey::A: imguiKey = ImGuiKey_A; break;
     }
 
     return imguiKey != ImGuiKey_None &&
@@ -3081,6 +3159,12 @@ void EditorUi::ResetLayout() noexcept
     impl_->layoutBuildPending = true;
 }
 
+void EditorUi::SetUpdateIndicator(
+    UpdateIndicator indicator)
+{
+    impl_->updateIndicator = std::move(indicator);
+}
+
 void EditorUi::SetProjectIndicator(
     ProjectIndicator indicator)
 {
@@ -3370,29 +3454,47 @@ void EditorUi::DrawStudioShell()
                 continue;
             }
 
-            for (const MenuAction& action :
-                 impl_->menuActions)
+            // Slash-separated action labels form shallow nested menus.
+            // This keeps Build > Procedurals > Paths & Roads in the single
+            // canonical EditorUi menu dispatcher, not a separate popup.
+            std::string currentSubmenu;
+            bool submenuOpen = false;
+            for (const MenuAction& action : impl_->menuActions)
             {
                 if (action.menu != menu)
-                {
                     continue;
-                }
-
-                const bool enabled =
-                    !action.enabled ||
-                    action.enabled();
-
-                if (ImGui::MenuItem(
-                        action.label.c_str(),
-                        action.shortcut.empty()
-                            ? nullptr
-                            : action.shortcut.c_str(),
-                        false,
-                        enabled))
+                const auto separator = action.label.find(" / ");
+                std::string displayLabel = action.label;
+                if (separator != std::string::npos)
                 {
-                    action.invoke();
+                    const auto parent = action.label.substr(0, separator);
+                    displayLabel = action.label.substr(separator + 3);
+                    if (currentSubmenu != parent)
+                    {
+                        if (submenuOpen)
+                            ImGui::EndMenu();
+                        currentSubmenu = parent;
+                        submenuOpen = ImGui::BeginMenu(parent.c_str());
+                    }
+                    if (!submenuOpen)
+                        continue;
                 }
+                else
+                {
+                    if (submenuOpen)
+                        ImGui::EndMenu();
+                    submenuOpen = false;
+                    currentSubmenu.clear();
+                }
+                const bool enabled = !action.enabled || action.enabled();
+                if (ImGui::MenuItem(
+                        displayLabel.c_str(),
+                        action.shortcut.empty() ? nullptr : action.shortcut.c_str(),
+                        false, enabled))
+                    action.invoke();
             }
+            if (submenuOpen)
+                ImGui::EndMenu();
 
             if (isView)
             {
@@ -3460,6 +3562,149 @@ void EditorUi::DrawStudioShell()
             }
 
             ImGui::EndMenu();
+        }
+
+        if (!impl_->updateIndicator.label.empty())
+        {
+            const UpdateIndicator& update=impl_->updateIndicator;
+            const ImGuiStyle& style=ImGui::GetStyle();
+            const std::string buttonLabel=update.label+"    ";
+            const f32 updateWidth=ImGui::CalcTextSize(
+                buttonLabel.c_str()).x+style.FramePadding.x*2.0F;
+            f32 projectWidth=0.0F;
+            if(!impl_->projectIndicator.name.empty())
+            {
+                std::string projectText="Project: "+
+                    impl_->projectIndicator.name;
+                if(!impl_->projectIndicator.detail.empty())
+                    projectText+="  |  "+impl_->projectIndicator.detail;
+                projectWidth=ImGui::CalcTextSize(projectText.c_str()).x+
+                    style.FramePadding.x*2.0F+style.ItemSpacing.x;
+            }
+            const f32 x=ImGui::GetWindowWidth()-updateWidth-
+                projectWidth-style.ItemSpacing.x*2.0F;
+            if(x>ImGui::GetCursorPosX())ImGui::SetCursorPosX(x);
+
+            const bool hasNewCommits=update.pendingCommits>0U &&
+                update.stage=="Update available";
+            const bool canInstall=hasNewCommits || update.rebuildPending;
+            ImGui::PushStyleColor(ImGuiCol_Button,hasNewCommits ?
+                ImVec4(0.22F,0.39F,0.80F,0.55F):
+                ImVec4(0.23F,0.35F,0.57F,0.26F));
+            if(ImGui::SmallButton(
+                (buttonLabel+"##orbit-github-update").c_str()))
+                ImGui::OpenPopup("Orbit updater##github-update-panel");
+            const ImVec2 edge=ImGui::GetItemRectMax();
+            const ImVec2 top=ImGui::GetItemRectMin();
+            const ImVec2 centre(edge.x-10.0F*g_uiScale,
+                (top.y+edge.y)*0.5F);
+            const ImU32 ink=ImGui::GetColorU32(ImGuiCol_Text);
+            const f32 phase=update.busy?
+                static_cast<f32>(ImGui::GetTime()*3.5):0.0F;
+            ImDrawList* draw=ImGui::GetWindowDrawList();
+            draw->PathArcTo(centre,4.0F*g_uiScale,
+                -2.35F+phase,2.1F+phase,18);
+            draw->PathStroke(ink,0,1.3F*g_uiScale);
+            draw->AddLine(
+                ImVec2(centre.x+3.2F*g_uiScale,centre.y-3.0F*g_uiScale),
+                ImVec2(centre.x+4.1F*g_uiScale,centre.y+0.7F*g_uiScale),
+                ink,1.3F*g_uiScale);
+            ImGui::PopStyleColor();
+            if(ImGui::IsItemHovered() && !update.tooltip.empty())
+                ImGui::SetTooltip("%s",update.tooltip.c_str());
+
+            ImGui::SetNextWindowSizeConstraints(
+                ImVec2(345.0F*g_uiScale,0.0F),
+                ImVec2(440.0F*g_uiScale,FLT_MAX));
+            if(ImGui::BeginPopup("Orbit updater##github-update-panel"))
+            {
+                ImGui::TextUnformatted("Orbit Studio updater");
+                ImGui::SameLine();
+                ImGui::TextDisabled("Shift+F5");
+                ImGui::Separator();
+                ImGui::TextDisabled("TRACKED BRANCH");
+                ImGui::TextUnformatted(update.branch.c_str());
+                ImGui::Spacing();
+                if(update.busy)
+                    ImGui::TextUnformatted(update.stage.c_str());
+                else if(update.rebuildPending)
+                    ImGui::TextColored(ImVec4(1.0F,0.78F,0.43F,1.0F),
+                        "Build required");
+                else if(hasNewCommits)
+                    ImGui::TextColored(ImVec4(0.61F,0.77F,1.0F,1.0F),
+                        "%llu new commit(s)",
+                        static_cast<unsigned long long>(update.pendingCommits));
+                else if(update.stage=="Up to date")
+                    ImGui::TextColored(ImVec4(0.51F,0.83F,0.65F,1.0F),
+                        "Up to date");
+                else
+                    ImGui::TextUnformatted(update.stage.c_str());
+                ImGui::PushTextWrapPos(
+                    ImGui::GetCursorPosX()+325.0F*g_uiScale);
+                if(!update.detail.empty())
+                    ImGui::TextWrapped("%s",update.detail.c_str());
+                ImGui::PopTextWrapPos();
+
+                if(!update.localCommit.empty() ||
+                   !update.remoteCommit.empty())
+                {
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Local");
+                    ImGui::SameLine(100.0F*g_uiScale);
+                    ImGui::TextUnformatted(update.localCommit.c_str());
+                    ImGui::TextDisabled("Remote");
+                    ImGui::SameLine(100.0F*g_uiScale);
+                    ImGui::TextUnformatted(update.remoteCommit.c_str());
+                }
+
+                if(update.lastCheckedUnixSeconds>0U)
+                {
+                    const auto now=std::chrono::system_clock::now();
+                    const auto secs=std::chrono::duration_cast<
+                        std::chrono::seconds>(now.time_since_epoch()).count();
+                    const auto age=std::max<std::int64_t>(
+                        0,secs-static_cast<std::int64_t>(
+                            update.lastCheckedUnixSeconds));
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Checked %lld %s ago",
+                        static_cast<long long>(age>=60?age/60:age),
+                        age>=60?"min":"sec");
+                }
+                else
+                    ImGui::TextDisabled("No successful check yet");
+                ImGui::TextDisabled("Automatic checks every 5 minutes");
+
+                ImGui::Separator();
+                ImGui::BeginDisabled(update.busy || !update.available ||
+                    !update.onCheck);
+                if(ImGui::Button("Check now##orbit-github-check") &&
+                   update.onCheck)
+                    update.onCheck();
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::BeginDisabled(update.busy || !update.available ||
+                    !canInstall || !update.onClick);
+                const char* installText=
+                    update.rebuildPending && !hasNewCommits ?
+                    "Retry build##orbit-github-apply":
+                    "Update and restart##orbit-github-apply";
+                if(ImGui::Button(installText) && update.onClick)
+                    update.onClick();
+                ImGui::EndDisabled();
+                if(!canInstall && !update.busy)
+                    ImGui::TextDisabled(
+                        "No update to install; no restart is needed.");
+                if(update.busy)
+                    ImGui::TextDisabled(
+                        "Running in the background; the editor stays responsive.");
+                if(update.hasLog && update.onOpenLog)
+                {
+                    ImGui::Separator();
+                    if(ImGui::SmallButton("Open update log##orbit-github-log"))
+                        update.onOpenLog();
+                }
+                ImGui::EndPopup();
+            }
         }
 
         if (!impl_->projectIndicator.name.empty())
@@ -3580,6 +3825,9 @@ void EditorUi::DrawStudioShell()
         impl_->panelVisible[index] = visible ? 1U : 0U;
         if (visible)
         {
+            const ImVec2 windowPos = ImGui::GetWindowPos();
+            const ImVec2 windowSize = ImGui::GetWindowSize();
+            impl_->panelRects[panel.title] = {windowPos.x, windowPos.y, windowSize.x, windowSize.y};
             ::orbit::profiler::Scope panelScope(
                 ::orbit::profiler::Enabled()
                     ? ::orbit::profiler::Intern("Panel " + panel.title)
@@ -3597,6 +3845,57 @@ void EditorUi::DrawStudioShell()
     impl_->DrawNotifications(
         *mainViewport,
         ImGui::GetIO().DeltaTime);
+}
+
+std::optional<std::array<f32, 4>> EditorUi::PanelScreenRect(const PanelId id) const
+{
+    for (const PanelDefinition& panel : impl_->panels)
+    {
+        if (panel.id != id)
+        {
+            continue;
+        }
+        const auto found = impl_->panelRects.find(panel.title);
+        if (found != impl_->panelRects.end())
+        {
+            return found->second;
+        }
+    }
+    return std::nullopt;
+}
+
+std::array<f32, 4> EditorUi::MainViewportRect() const
+{
+    ImGui::SetCurrentContext(impl_->context);
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    return {viewport->Pos.x, viewport->Pos.y, viewport->Size.x, viewport->Size.y};
+}
+
+void EditorUi::DrawImageOverlay(rhi::Texture& texture, const std::array<f32, 4>& rect)
+{
+    if (!impl_->frameBegun || rect[2] < 1.0F || rect[3] < 1.0F)
+    {
+        return;
+    }
+    ImGui::SetCurrentContext(impl_->context);
+    const f32 sourceAspect = texture.Height() > 0 ? static_cast<f32>(texture.Width()) / static_cast<f32>(texture.Height()) : 1.0F;
+    const f32 targetAspect = rect[2] / rect[3];
+    ImVec2 uv0{0.0F, 0.0F};
+    ImVec2 uv1{1.0F, 1.0F};
+    if (targetAspect > sourceAspect)
+    {
+        const f32 keep = sourceAspect / targetAspect;
+        uv0.y = 0.5F - keep * 0.5F;
+        uv1.y = 0.5F + keep * 0.5F;
+    }
+    else
+    {
+        const f32 keep = targetAspect / sourceAspect;
+        uv0.x = 0.5F - keep * 0.5F;
+        uv1.x = 0.5F + keep * 0.5F;
+    }
+    ImGui::GetForegroundDrawList(ImGui::GetMainViewport())->AddImage(
+        ToTextureId(texture), ImVec2(rect[0], rect[1]), ImVec2(rect[0] + rect[2], rect[1] + rect[3]), uv0, uv1);
 }
 
 bool EditorUi::DrawPanelFullscreen(const PanelId id)

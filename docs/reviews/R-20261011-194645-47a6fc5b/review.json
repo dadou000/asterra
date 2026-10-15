@@ -1,0 +1,491 @@
+{
+ "id": "R-20261011-194645-47a6fc5b",
+ "rubric": "v1",
+ "council": {
+  "title": "Cloud occupancy by height: leap above the column's cloud-top limit (negative result)",
+  "question": "Can an upward ray that has left the height band where its column can hold cloud leap to the end of the shell, using the same predicate Extinction() uses to return 0, and so cut the Clouds pass without changing the image?",
+  "chosen": "shipped",
+  "verdict": "No. The image did not change (changed pixels at the repeat-launch noise floor in all six scenes, which is what the exact predicate promised), but the Clouds pass got slower: +0.60 ms in sky_cumulus (8.28 to 8.89), +0.86 in sky_high at 60 degrees up (9.66 to 10.51), +0.38 horizon_bank, +0.30 cumulus_far, +0.43 cumulus_near; orbit_deck -0.06. The leap code was removed. Two causes: (1) Extinction()'s rejection limit (topFrac * 1.15 + 0.3 of the shell) leaves a large part of the shell classed as possible cloud, so little of an upward ray lies above it; even the 60 degree ray gained nothing. (2) The added lookahead column lookups and code made the already very large march shader slower everywhere, which fits a shader limited by registers or occupancy rather than by any one stage (stubbing three stages together freed 0.05 ms in the attribution review). The noise-occupancy idea was analysed but not built: at realistic coverage 0.2 to 0.3 the base noise exceeds its own empty threshold over a large share of the volume, so a conservative empty-distance field would be about a voxel or two once the safety margins are subtracted.",
+  "lenses": [
+   {
+    "name": "GPU Engineer",
+    "findings": "Per-pass Clouds time over two interleaved rounds in one launch: shipped / band_leap = 8.28 / 8.89, 9.66 / 10.51, 6.47 / 6.85, 8.88 / 9.18, 12.52 / 12.95, 1.22 / 1.16 ms. Adding code to a shader this size costs even where the new branch is never taken, so every new test in the march has to be paid for by fewer steps. The remaining levers that do not add per-step code are fewer pixels (resolution scale, currently 0.5) or fewer pixels per frame (temporal reuse, for example a checkerboard of updates with reprojected history)."
+   },
+   {
+    "name": "Architectural Skeptic",
+    "findings": "The march already owns its empty-space leap; a second leap keyed on height duplicated it with a looser predicate than the leap's own safety net would need. Removing it keeps one owner."
+   },
+   {
+    "name": "Minimalist / Anti-Overengineering Guardian",
+    "findings": "Exact, safe, and slower: delete it and keep the result in the docs so it is not retried. Do not build the noise-occupancy field on the strength of its own analysis either; the margins eat it."
+   },
+   {
+    "name": "Ruthless Shader Artist",
+    "findings": "No image difference to judge: the band leap is invisible by construction, which is the only good thing about it.",
+    "ratings": {
+     "shipped": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "reference"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "reference"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "reference"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "reference"
+      ],
+      "scale_depth": [
+       8,
+       "medium",
+       "reference"
+      ]
+     },
+     "band_leap": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "identical within noise"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "same"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "same"
+      ],
+      "scale_depth": [
+       8,
+       "medium",
+       "same"
+      ]
+     }
+    }
+   }
+  ],
+  "disagreements": [],
+  "hypotheses": [
+   "The march shader is limited by register pressure or occupancy (consistent with every added test costing time and with stubs of whole stages freeing nothing; not measured, there is no register readout).",
+   "Temporal reuse of the cloud march (update a fraction of the pixels per frame from reprojected history) is the lever that actually cuts the cost, at some risk of ghosting under fast motion (untested)."
+  ],
+  "verified_facts": [
+   "band_leap changed pixels over 12 equal the baseline repeat's noise in all six scenes (e.g. 228 vs 212, 40 vs 19, 273 vs 85).",
+   "band_leap slowed the Clouds pass by 0.30 to 0.86 ms in the five ground scenes and gained 0.06 ms in orbit.",
+   "cloud_resolution_scale defaults to 0.5 (a quarter of the pixels)."
+  ],
+  "open_issues": [
+   "No way to read the shader's register count or occupancy.",
+   "The harness captures stills, so temporal techniques (history reuse, ghosting, shimmer) cannot be judged yet.",
+   "The noise-occupancy field was analysed, not built or measured."
+  ],
+  "recommended_changes": [
+   "Add a motion-capture mode to tools/orbit_ab.py (a camera path, frames compared with a full-update reference) so temporal reuse can be evaluated, then try a checkerboard update of the cloud march.",
+   "Do not add per-step tests to the march without a measured step reduction."
+  ],
+  "completed_changes": [
+   "The band leap was implemented, measured and removed; nothing of it remains in the shader."
+  ]
+ },
+ "run": {
+  "baseline": "shipped",
+  "seconds": 159.5,
+  "provenance": {
+   "commit": "47a6fc5ba3e4c7d97fd25639c79f1c8c12a394cc",
+   "branch": "0.1.1-Harmony",
+   "dirty_files": [
+    "ngine/celestial_clouds/src/CloudRenderer.cpp",
+    "tools/ab_specs/cloud_band_leap.json"
+   ],
+   "exe": "C:\\Users\\david\\Documents\\GitHub\\asterra\\Orbit.exe",
+   "exe_sha256": "25283a6b90ea884c5eb845acaf2472934801cc05814efe95ceefa01a8b973e23",
+   "exe_mtime": "2026-10-11 19:42:47",
+   "gpu": "NVIDIA GeForce RTX 4090",
+   "date": "2026-10-11 19:45:36"
+  },
+  "variants": {
+   "shipped": {
+    "ORBIT_CLOUD_DEFINES": ""
+   },
+   "band_leap": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_BAND_LEAP=1"
+   }
+  },
+  "spec": {
+   "_comment": "Occupancy by height: an upward ray above its column's cloud-top limit leaps to the end of the shell (CLOUD_BAND_LEAP=1). The limit is Extinction()'s own early-return predicate, so the image must not change (changed pixels at the noise floor) while the Clouds pass drops.",
+   "mode": "in_process",
+   "rounds": 2,
+   "world": "Worlds/Main.orbitworld",
+   "body": "Earth",
+   "baseline": "shipped",
+   "gpu_passes": [
+    "Clouds"
+   ],
+   "gpu_window_ms": 1500,
+   "variants": {
+    "shipped": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": ""
+     }
+    },
+    "band_leap": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_BAND_LEAP=1"
+     }
+    }
+   },
+   "scenes": [
+    {
+     "name": "sky_cumulus",
+     "time_microseconds": 18070405751,
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 42,
+      "yaw_deg": 0,
+      "pitch_deg": 20
+     }
+    },
+    {
+     "name": "sky_high",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 42,
+      "yaw_deg": 0,
+      "pitch_deg": 60
+     }
+    },
+    {
+     "name": "horizon_bank",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 42,
+      "yaw_deg": 0,
+      "pitch_deg": 3
+     }
+    },
+    {
+     "name": "cumulus_far",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 1200,
+      "yaw_deg": 0,
+      "pitch_deg": 8
+     }
+    },
+    {
+     "name": "cumulus_near",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.05157,
+      "lon_deg": 0.03666,
+      "alt_m": 2600,
+      "yaw_deg": 35.3,
+      "pitch_deg": 21.74
+     }
+    },
+    {
+     "name": "orbit_deck",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "approach",
+      "target": {
+       "lat_deg": 5.3045,
+       "lon_deg": 0.0
+      },
+      "origin": {
+       "lat_deg": 0,
+       "lon_deg": 0,
+       "alt_km": 1590.95
+      },
+      "alt_km": 1500
+     }
+    }
+   ],
+   "project": "C:/Users/david/AppData/Local/Temp/claude/C--Users-david-Documents-GitHub-asterra/8929e869-7edf-4e5e-9d35-85da2894e8c6/scratchpad/proj"
+  },
+  "scenes": {
+   "sky_cumulus": {
+    "noise": [
+     {
+      "mean": 0.0602,
+      "max": 27.0,
+      "px_over": 212
+     }
+    ],
+    "variants": {
+     "band_leap": {
+      "mean": 0.0649,
+      "max": 43.0,
+      "px_over": 228
+     }
+    },
+    "frame_ms": {
+     "shipped": 13.06,
+     "band_leap": 13.76
+    },
+    "gpu_pass_ms": {
+     "shipped": {
+      "Clouds": 8.284
+     },
+     "band_leap": {
+      "Clouds": 8.889
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {}
+    ],
+    "frame_ms_drift": [
+     0.22
+    ],
+    "image_sha256": {
+     "shipped": "8c90839275292a72966ed0ff264213351b147dc4e414b3d7135323cdf1bd009c",
+     "band_leap": "c50414b28f393809bf74e7c85501ed8a19083c7ca38fae9a139542bd9c81dc94"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "sky_high": {
+    "noise": [
+     {
+      "mean": 0.0048,
+      "max": 45.0,
+      "px_over": 19
+     }
+    ],
+    "variants": {
+     "band_leap": {
+      "mean": 0.0044,
+      "max": 73.0,
+      "px_over": 40
+     }
+    },
+    "frame_ms": {
+     "shipped": 13.89,
+     "band_leap": 14.84
+    },
+    "gpu_pass_ms": {
+     "shipped": {
+      "Clouds": 9.657
+     },
+     "band_leap": {
+      "Clouds": 10.512
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {}
+    ],
+    "frame_ms_drift": [
+     0.18
+    ],
+    "image_sha256": {
+     "shipped": "91a94d5d9bd3c66bf6ffce1a45d7a80bbe3cbb090e0235d09f21a3f9d9c23ebf",
+     "band_leap": "572b911131030ea9d626341dd3ad29e0d7747f922c082dc6d5eb3c8b96edf2e2"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "horizon_bank": {
+    "noise": [
+     {
+      "mean": 0.053,
+      "max": 36.0,
+      "px_over": 2229
+     }
+    ],
+    "variants": {
+     "band_leap": {
+      "mean": 0.0384,
+      "max": 49.0,
+      "px_over": 2278
+     }
+    },
+    "frame_ms": {
+     "shipped": 11.23,
+     "band_leap": 11.59
+    },
+    "gpu_pass_ms": {
+     "shipped": {
+      "Clouds": 6.465
+     },
+     "band_leap": {
+      "Clouds": 6.848
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {}
+    ],
+    "frame_ms_drift": [
+     0.1
+    ],
+    "image_sha256": {
+     "shipped": "61299e966d105afed7300c40648be9e578b13693477f84d5998bbf93b70630de",
+     "band_leap": "401b14e5c1d4f9385a5b83e1079284ad80dd935cd4b0976d09dad7be0f0feb0a"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_far": {
+    "noise": [
+     {
+      "mean": 0.0569,
+      "max": 22.0,
+      "px_over": 85
+     }
+    ],
+    "variants": {
+     "band_leap": {
+      "mean": 0.0697,
+      "max": 34.0,
+      "px_over": 273
+     }
+    },
+    "frame_ms": {
+     "shipped": 14.65,
+     "band_leap": 14.91
+    },
+    "gpu_pass_ms": {
+     "shipped": {
+      "Clouds": 8.88
+     },
+     "band_leap": {
+      "Clouds": 9.181
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {}
+    ],
+    "frame_ms_drift": [
+     0.22
+    ],
+    "image_sha256": {
+     "shipped": "56974942f75c21864080bd2514547eb3dbe031ccda262dae3d79a6fcb5c93dfc",
+     "band_leap": "4d130e6be737ad465076935712e5474e3e6d30f21b462270ed125056aa19064c"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_near": {
+    "noise": [
+     {
+      "mean": 0.0337,
+      "max": 26.0,
+      "px_over": 146
+     }
+    ],
+    "variants": {
+     "band_leap": {
+      "mean": 0.0309,
+      "max": 31.0,
+      "px_over": 84
+     }
+    },
+    "frame_ms": {
+     "shipped": 18.44,
+     "band_leap": 18.55
+    },
+    "gpu_pass_ms": {
+     "shipped": {
+      "Clouds": 12.518
+     },
+     "band_leap": {
+      "Clouds": 12.953
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {}
+    ],
+    "frame_ms_drift": [
+     0.35
+    ],
+    "image_sha256": {
+     "shipped": "ae7ecd3e48c27ab3091c11a15dee833e77cead72895d7850c3c39af07d605885",
+     "band_leap": "822b64a081e863266240a9e5fc85120f2d89895c9eb94b9b630a6e6423de8080"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "orbit_deck": {
+    "noise": [
+     {
+      "mean": 0.0231,
+      "max": 8.0,
+      "px_over": 0
+     }
+    ],
+    "variants": {
+     "band_leap": {
+      "mean": 0.0342,
+      "max": 41.0,
+      "px_over": 298
+     }
+    },
+    "frame_ms": {
+     "shipped": 9.33,
+     "band_leap": 9.03
+    },
+    "gpu_pass_ms": {
+     "shipped": {
+      "Clouds": 1.222
+     },
+     "band_leap": {
+      "Clouds": 1.162
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {}
+    ],
+    "frame_ms_drift": [
+     0.16
+    ],
+    "image_sha256": {
+     "shipped": "db9f2105ef22992fba4c15b062f727007626b3dcc699799facd4c9309f2a5f5b",
+     "band_leap": "b38cad14ab478db1b29d675cffe0a824729502509e7e2db7ebf04bbf79a1d5cb"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   }
+  }
+ },
+ "images": "full-resolution PNGs stay outside git (see run.scenes[*].image_sha256 and the capture folder at C:\\Users\\david\\AppData\\Local\\Temp\\claude\\C--Users-david-Documents-GitHub-asterra\\8929e869-7edf-4e5e-9d35-85da2894e8c6\\scratchpad\\ab_band); sheet.png here is a downscaled contact sheet (top row variants, bottom row 5x difference vs baseline)"
+}

@@ -696,6 +696,11 @@ public:
         }
     }
 
+    [[nodiscard]] bool IsForeground() const noexcept override
+    {
+        return hwnd_ != nullptr && GetForegroundWindow() == hwnd_;
+    }
+
     [[nodiscard]] bool KeyDown(
         const Key key) const override
     {

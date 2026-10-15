@@ -5,6 +5,7 @@
 #include <orbit/studio_reports/IssueReport.hpp>
 
 #include <filesystem>
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
@@ -56,6 +57,18 @@ public:
     // then shows the problem at a glance, with no test to launch. False when no
     // screenshot could be taken (the error is in ScreenshotError()).
     bool CaptureScreenshot(u64 id, bool endCondition);
+    // Export a condition screenshot to the user-facing Captures folder.
+    // Does not alter the report's attached evidence.
+    [[nodiscard]] std::filesystem::path ExportCapture(u64 id, bool endCondition);
+    // Open the shared report capture directory in the native file browser.
+    [[nodiscard]] std::filesystem::path OpenCaptureFolder();
+    // Restores the report condition and records a profiler trace after settling.
+    // Returns false while the nonblocking capture is queued.
+    [[nodiscard]] bool CapturePerformanceIssue(u64 id);
+    [[nodiscard]] bool PerformanceCapturePending() const noexcept
+    {
+        return performanceCapture_.has_value();
+    }
 
     // Shows a file in the platform file browser.
     using OpenHook = std::function<void(const std::filesystem::path&)>;
@@ -127,6 +140,14 @@ private:
     rpc::Dispatcher* dispatcher_{nullptr};
     std::string viewId_;
     std::optional<PendingPose> pending_;
+    struct PendingPerformanceCapture
+    {
+        u64 reportId{0U};
+        u32 settleFrames{8U};
+        std::optional<std::chrono::steady_clock::time_point> profileStarted;
+        bool waitingForPose{false};
+    };
+    std::optional<PendingPerformanceCapture> performanceCapture_;
     std::string restoreStatus_;
 };
 

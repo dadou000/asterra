@@ -1,0 +1,197 @@
+#include <orbit/rpc/JsonRpc.hpp>
+#include <orbit/studio_ui/StormDomain.hpp>
+
+#include <cstdio>
+#include <string>
+
+using orbit::rpc::Value;
+using namespace orbit::studio_ui;
+
+namespace
+{
+int failures = 0;
+void Check(const bool ok, const char* what)
+{
+    if (!ok) { std::printf("FAIL: %s\n", what); ++failures; }
+}
+Value Call(const orbit::rpc::Dispatcher& d, const std::string& method, const std::string& params = "{}")
+{
+    const auto response = d.Dispatch(R"({"jsonrpc":"2.0","id":1,"method":")" + method + R"(","params":)" + params + "}");
+    return orbit::rpc::ParseValue(*response);
+}
+} // namespace
+
+int main()
+{
+    StormDomainMailbox mailbox;
+    Check(mailbox.Status().state == StormStatus::State::None, "starts with no storm");
+    Check(!mailbox.TakePlace().has_value() && !mailbox.TakeClear(), "nothing queued at the start");
+
+    StormPlaceRequest request;
+    request.latitudeDegrees = 12.5;
+    request.longitudeDegrees = -40.0;
+    Check(mailbox.Place(request).empty(), "a valid request is queued");
+    Check(mailbox.Status().state == StormStatus::State::Pending, "a queued request is pending");
+
+    StormPlaceRequest bad = request;
+    bad.cells = 100;
+    Check(!mailbox.Place(bad).empty(), "cells must be a power of two");
+    bad = request;
+    bad.cells = 512;
+    Check(!mailbox.Place(bad).empty(), "cells above 256 are rejected");
+    bad = request;
+    bad.latitudeDegrees = 95.0;
+    Check(!mailbox.Place(bad).empty(), "latitude beyond the pole is rejected");
+    bad = request;
+    bad.spongeCells = 60;
+    Check(!mailbox.Place(bad).empty(), "a sponge wider than a quarter of the domain is rejected");
+
+    // The render thread takes the request once, and its status cannot overwrite a newer request.
+    const auto taken = mailbox.TakePlace();
+    Check(taken.has_value() && taken->latitudeDegrees == 12.5 && taken->longitudeDegrees == -40.0, "the request arrives intact");
+    Check(!mailbox.TakePlace().has_value(), "a request is taken once");
+    StormStatus active;
+    active.state = StormStatus::State::Active;
+    active.stormSeconds = 3600.0;
+    mailbox.Publish(active);
+    Check(mailbox.Status().state == StormStatus::State::Active && mailbox.Status().stormSeconds == 3600.0, "the render thread publishes status");
+    Check(mailbox.Place(request).empty(), "a second placement replaces the first");
+    mailbox.Publish(active);
+    Check(mailbox.Status().state == StormStatus::State::Pending, "a stale status does not hide a queued request");
+    mailbox.Clear();
+    Check(mailbox.Status().state == StormStatus::State::None && mailbox.TakeClear() && !mailbox.TakeClear(), "clear is queued once");
+    Check(!mailbox.TakePlace().has_value(), "clear drops a queued placement");
+
+    orbit::rpc::Dispatcher dispatcher;
+    RegisterStormDomainRpc(dispatcher, mailbox);
+    Check(Call(dispatcher, "storm.status").Find("result")->Find("state")->AsString() == "none", "status over RPC");
+    const Value placed = Call(dispatcher, "storm.place", R"({"latitude_deg":30.0,"longitude_deg":-97.0,"cells":64,"spin_minutes":20,"ice":false})");
+    Check(placed.Find("result") != nullptr && placed.Find("result")->Find("error")->AsString().empty(), "place over RPC");
+    const auto queued = mailbox.TakePlace();
+    Check(queued.has_value() && queued->cells == 64U && queued->spinMinutes == 20.0F && !queued->ice && queued->latitudeDegrees == 30.0,
+        "the RPC parameters reach the request");
+    Check(Call(dispatcher, "storm.place", R"({"latitude_deg":30.0})").Find("error") != nullptr, "longitude is required");
+    Check(Call(dispatcher, "storm.place", R"({"latitude_deg":30.0,"longitude_deg":1.0,"ice":3})").Find("error") != nullptr, "ice must be a boolean");
+    const Value rejected = Call(dispatcher, "storm.place", R"({"latitude_deg":30.0,"longitude_deg":1.0,"cells":100})");
+    Check(rejected.Find("result") != nullptr && !rejected.Find("result")->Find("error")->AsString().empty(), "a bad value is reported, not thrown");
+    (void)Call(dispatcher, "storm.clear");
+    Check(mailbox.TakeClear(), "clear over RPC");
+
+    // Scheduled storms: validation, queuing once, and the RPC.
+    StormDomainMailbox other;
+    StormAutoRequest autoRequest;
+    autoRequest.enabled = true;
+    autoRequest.seed = 7;
+    Check(other.SetAuto(autoRequest).empty(), "a valid automatic request is queued");
+    const auto takenAuto = other.TakeAuto();
+    Check(takenAuto.has_value() && takenAuto->enabled && takenAuto->seed == 7U, "the automatic request arrives intact");
+    Check(!other.TakeAuto().has_value(), "an automatic request is taken once");
+    Check(other.AutoSetting().seed == 7U, "the setting is remembered for the panel");
+    StormAutoRequest badAuto = autoRequest;
+    badAuto.cells = 100;
+    Check(!other.SetAuto(badAuto).empty(), "automatic cells must be a power of two");
+    badAuto = autoRequest;
+    badAuto.searchKilometres = 10.0F;
+    Check(!other.SetAuto(badAuto).empty(), "the search radius has a floor");
+    orbit::rpc::Dispatcher autoDispatcher;
+    RegisterStormDomainRpc(autoDispatcher, other);
+    const Value autoResult = Call(autoDispatcher, "storm.auto", R"({"enabled":true,"seed":42,"search_km":300,"cells":64})");
+    Check(autoResult.Find("result") != nullptr && autoResult.Find("result")->Find("error")->AsString().empty(), "storm.auto over RPC");
+    const auto viaRpc = other.TakeAuto();
+    Check(viaRpc.has_value() && viaRpc->seed == 42U && viaRpc->cells == 64U && viaRpc->searchKilometres == 300.0F, "the RPC parameters reach the request");
+    Check(Call(autoDispatcher, "storm.auto", R"({"seed":1})").Find("error") != nullptr, "enabled is required");
+    (void)Call(autoDispatcher, "storm.auto", R"({"enabled":true,"nested":false})");
+    const auto flat = other.TakeAuto();
+    Check(flat.has_value() && !flat->nested, "nested can be turned off");
+    Check(Call(autoDispatcher, "storm.auto", R"({"enabled":true,"nested":3})").Find("error") != nullptr, "nested must be a boolean");
+    (void)Call(dispatcher, "storm.place", R"({"latitude_deg":1.0,"longitude_deg":2.0})");
+    const auto defaulted = mailbox.TakePlace();
+    Check(defaulted.has_value() && defaulted->nested, "a placed storm is nested by default");
+    Check(autoResult.Find("result")->Find("mode") != nullptr && autoResult.Find("result")->Find("storm_id") != nullptr, "the status reports mode and storm_id");
+
+    // Hot iteration of the storm kernels: queued once, and the render thread's result shows in the status.
+    StormDomainMailbox reloads;
+    Check(!reloads.TakeShaderReload().has_value(), "no reload is queued at the start");
+    orbit::rpc::Dispatcher reloadDispatcher;
+    RegisterStormDomainRpc(reloadDispatcher, reloads);
+    const Value queuedReload = Call(reloadDispatcher, "storm.reload_shaders", R"({"path":"engine/weather_gpu/shaders/storm.hlsl"})");
+    Check(queuedReload.Find("result") != nullptr && queuedReload.Find("result")->Find("shader_reloads") != nullptr, "storm.reload_shaders answers with the status");
+    const auto reloadPath = reloads.TakeShaderReload();
+    Check(reloadPath.has_value() && *reloadPath == "engine/weather_gpu/shaders/storm.hlsl", "the path reaches the render thread");
+    Check(!reloads.TakeShaderReload().has_value(), "a reload is taken once");
+    (void)Call(reloadDispatcher, "storm.reload_shaders");
+    const auto embedded = reloads.TakeShaderReload();
+    Check(embedded.has_value() && embedded->empty(), "no path means the embedded copy");
+    Check(Call(reloadDispatcher, "storm.reload_shaders", R"({"path":3})").Find("error") != nullptr, "path must be a string");
+    reloads.PublishShaderReload("ok storm.hlsl", true);
+    reloads.PublishShaderReload("failed: AdvectVelocity: Orbit failed to compile HLSL to SPIR-V.", false);
+    const StormStatus reloadStatus = reloads.Status();
+    Check(reloadStatus.shaderReloads == 1U && reloadStatus.shaderReload.rfind("failed", 0) == 0, "a failed reload is reported and not counted");
+    StormStatus published;
+    published.state = StormStatus::State::Active;
+    reloads.Publish(published);
+    Check(reloads.Status().shaderReloads == 1U && !reloads.Status().shaderReload.empty(), "the reload result survives the render thread's status updates");
+
+    // Lightning settings: validated, kept, read back.
+    StormDomainMailbox lightning;
+    Check(lightning.Lightning().enabled && lightning.Lightning().slowMotion == 1.0 && lightning.Lightning().chargeBoost == 1.0, "lightning defaults to real time and normal charging");
+    StormLightningSettings unstable;
+    unstable.slowMotion = 100.0;
+    unstable.chargeBoost = 50.0;
+    unstable.breakdownScale = 0.25;
+    Check(lightning.SetLightning(unstable).empty() && lightning.Lightning().chargeBoost == 50.0 && lightning.Lightning().breakdownScale == 0.25, "valid lightning settings are stored");
+    StormLightningSettings tooSlow = unstable;
+    tooSlow.slowMotion = 0.5;
+    Check(!lightning.SetLightning(tooSlow).empty(), "slow motion below 1 is rejected");
+    tooSlow = unstable;
+    tooSlow.breakdownScale = 0.0;
+    Check(!lightning.SetLightning(tooSlow).empty(), "a breakdown scale of 0 is rejected");
+    tooSlow = unstable;
+    tooSlow.chargeBoost = 1.0e9;
+    Check(!lightning.SetLightning(tooSlow).empty() && lightning.Lightning().slowMotion == 100.0, "a rejected request leaves the stored settings alone");
+
+    // Persistence: what survives a restart is saved on every change and restored through the same validating setters.
+    {
+        StormDomainMailbox saved;
+        int notifications = 0;
+        StormPersistentState last;
+        saved.SetChangeHandler([&](const StormPersistentState& state) { ++notifications; last = state; });
+        StormPlaceRequest storm;
+        storm.latitudeDegrees = 5.55;
+        storm.longitudeDegrees = -12.0;
+        storm.spinMinutes = 80.0F;
+        Check(saved.Place(storm).empty() && notifications == 1 && last.manual.has_value() && last.manual->spinMinutes == 80.0F, "placing a storm is saved");
+        StormLightningSettings tuned;
+        tuned.chargeBoost = 1000.0;
+        tuned.breakdownScale = 0.08;
+        tuned.groundStrikeChance = 0.4;
+        tuned.frameStrike = true;
+        Check(saved.SetLightning(tuned).empty() && notifications == 2 && last.lightning.chargeBoost == 1000.0, "changing the lightning settings is saved");
+        StormPlaceRequest badCells = storm;
+        badCells.cells = 100;
+        Check(!saved.Place(badCells).empty() && notifications == 2, "a rejected request is not saved");
+
+        // Round trip through the JSON form into a fresh mailbox, as a restart does.
+        const orbit::rpc::Value json = StormStateToValue(saved.Persistent());
+        const orbit::rpc::Value parsed = orbit::rpc::ParseValue(orbit::rpc::Serialize(json));
+        StormDomainMailbox restored;
+        const std::string problems = RestoreStormState(restored, parsed);
+        const StormPersistentState back = restored.Persistent();
+        Check(problems.empty(), "a saved state restores without problems");
+        Check(back.manual.has_value() && back.manual->latitudeDegrees == 5.55 && back.manual->longitudeDegrees == -12.0 && back.manual->spinMinutes == 80.0F,
+              "the placed storm comes back");
+        Check(back.lightning.chargeBoost == 1000.0 && back.lightning.breakdownScale == 0.08 && back.lightning.groundStrikeChance == 0.4 && back.lightning.frameStrike,
+              "the lightning settings come back");
+        Check(restored.TakePlace().has_value(), "the restored storm is queued for the render thread");
+
+        saved.Clear();
+        Check(notifications == 3 && !last.manual.has_value(), "clearing the storm is saved");
+        StormDomainMailbox empty;
+        Check(!RestoreStormState(empty, orbit::rpc::Value(1.0)).empty(), "something that is not a saved state is reported");
+        orbit::rpc::Value::Object invalid{{"manual", orbit::rpc::Value::Object{{"latitude_deg", 5.0}, {"longitude_deg", 0.0}, {"cells", 100.0}}}};
+        Check(!RestoreStormState(empty, orbit::rpc::Value(invalid)).empty() && !empty.Persistent().manual.has_value(), "an invalid saved storm is reported and not applied");
+    }
+
+    if (failures == 0) { std::printf("StormDomain: all checks passed\n"); }
+    return failures == 0 ? 0 : 1;
+}

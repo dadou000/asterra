@@ -4,6 +4,7 @@
 
 namespace
 {
+constexpr orbit::u32 kMinPhotonGridForTest = 96U;   // the size-based minimum (kMinPhotonGrid in GlassSurface.cpp)
 int failures = 0;
 
 void Check(const bool condition)
@@ -125,6 +126,34 @@ int main()
         Check(GlassPhotonGrid(0.5F) <= GlassPhotonGrid(1.0F));
         Check(GlassPhotonGrid(100.0F) == GlassPhotonGrid(1000.0F));
         Check(GlassPhotonGrid(1.0F) >= 96U && GlassPhotonGrid(1.0F) <= 224U);
+    }
+
+    // View-dependent budget: a body that covers few pixels needs few photons, but never fewer than
+    // kGlassPhotonsPerPixel per pixel across it, never more than the size-based grid, and an unknown size keeps the
+    // full budget.
+    {
+        const f32 radius = 1.0F;   // size-based grid is 200
+        const u32 full = GlassPhotonGrid(radius);
+        Check(GlassPhotonGrid(radius, 0.0F) == full);
+        Check(GlassPhotonGrid(radius, -5.0F) == full);
+        Check(GlassPhotonGrid(radius, 2000.0F) == full);
+        Check(GlassPhotonGrid(radius, 9.0F) == kGlassPhotonGridFloor);
+        Check(GlassPhotonGrid(radius, 60.0F) == 120U);
+        u32 previous = 0U;
+        bool monotone = true, atLeastTwoPerPixel = true, bounded = true;
+        for (f32 pixels = 1.0F; pixels < 400.0F; pixels += 1.0F)
+        {
+            const u32 grid = GlassPhotonGrid(radius, pixels);
+            monotone = monotone && grid >= previous;
+            bounded = bounded && grid <= full && grid >= kGlassPhotonGridFloor;
+            atLeastTwoPerPixel = atLeastTwoPerPixel &&
+                (grid == full || grid == kGlassPhotonGridFloor ||
+                 static_cast<f32>(grid) >= pixels * static_cast<f32>(kGlassPhotonsPerPixel));
+            previous = grid;
+        }
+        Check(monotone && bounded && atLeastTwoPerPixel);
+        // A distant small body costs a small fraction of the old fixed minimum (96 x 96 photons).
+        Check(GlassPhotonGrid(0.05F, 9.0F) * GlassPhotonGrid(0.05F, 9.0F) * 8U < kMinPhotonGridForTest * kMinPhotonGridForTest);
     }
 
     return failures;

@@ -30,6 +30,7 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/frames/FrameGraph.hpp>
+#include <orbit/hot_reload/HotIterationService.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/editor_rpc/ProfilerRpc.hpp>
 #include <orbit/studio_ui/StudioFlatMapRpc.hpp>
@@ -70,6 +71,7 @@
 #include <orbit/studio_ui/PlanningUi.hpp>
 #include <orbit/studio_ui/ReportThumbnailCache.hpp>
 #include <orbit/studio_ui/ReportsUi.hpp>
+#include <orbit/studio_ui/SessionState.hpp>
 #include <orbit/studio_ui/SimulationControlsUi.hpp>
 #include <orbit/studio_ui/ViewportCaptureService.hpp>
 #include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
@@ -80,6 +82,9 @@
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/StudioViewContinuity.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
+#include <orbit/studio_ui/CloudShaderRpc.hpp>
+#include <orbit/studio_ui/LightningRpc.hpp>
+#include <orbit/studio_ui/StormLightningController.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
 #include <orbit/studio_ui/SystemViewUi.hpp>
@@ -98,6 +103,7 @@
 #include "StudioBuildHost.hpp"
 #include "StudioPanels.hpp"
 #include "StudioPathNetworkHost.hpp"
+#include "StudioProceduralsPanel.hpp"
 
 #include <algorithm>
 #include <array>
@@ -109,6 +115,10 @@
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <mutex>
 #include <format>
 #include <functional>
 #include <optional>
@@ -726,7 +736,61 @@ int orbit::editor_app::StudioApplication::Run(
 
         orbit::platform::Window& window =
             runtime.Window();
-        std::atomic_bool ecoMode{false};
+        // Per-user preference shared between projects and Studio restarts.
+        const auto ecoSettingsPath =
+            orbit::platform::UserDataDirectory() / "studio_eco_mode.txt";
+        int storedEcoMode = 0;
+        try
+        {
+            std::ifstream file(ecoSettingsPath);
+            int value = 0;
+            if(file >> value && value >= 0 && value <= 2)
+                storedEcoMode = value;
+        }
+        catch(const std::exception&) {}
+        std::atomic_int ecoMode{storedEcoMode};
+        const auto setEcoMode = [&](int mode)
+        {
+            mode = std::clamp(mode, 0, 2);
+            ecoMode.store(mode, std::memory_order_relaxed);
+            try
+            {
+                std::filesystem::create_directories(ecoSettingsPath.parent_path());
+                std::ofstream file(ecoSettingsPath, std::ios::trunc);
+                if(file) file << mode << '\n';
+            }
+            catch(const std::exception& exception)
+            {
+                orbit::log::Warning(exception.what());
+            }
+            window.WakeForActivity();
+        };
+        // Requested state of the viewport's full-screen mode; the frame loop animates towards it.
+        std::atomic_bool viewportFullscreen{false};
+        rpcHost.Dispatcher().Register(
+            {.name = "viewport.fullscreen_get",
+             .description = "Whether the primary viewport is (animating into) full screen.",
+             .mutating = false},
+            [&viewportFullscreen](const orbit::rpc::Value&)
+            {
+                return orbit::rpc::Value::Object{
+                    {"enabled", viewportFullscreen.load(std::memory_order_relaxed)}};
+            });
+        rpcHost.Dispatcher().Register(
+            {.name = "viewport.fullscreen_set",
+             .description = "Animate the primary viewport into or out of full screen (same as F11 / the viewport's "
+                            "Full Screen button).",
+             .mutating = true},
+            [&viewportFullscreen](const orbit::rpc::Value& params)
+            {
+                const auto* enabled = params.Find("enabled");
+                if (enabled == nullptr || !enabled->IsBool())
+                {
+                    throw std::invalid_argument("enabled must be a boolean");
+                }
+                viewportFullscreen.store(enabled->AsBool(), std::memory_order_relaxed);
+                return orbit::rpc::Value::Object{{"enabled", enabled->AsBool()}};
+            });
         rpcHost.SetActivityCallback([&window] { window.WakeForActivity(); });
         rpcHost.Dispatcher().Register(
             {.name = "studio.eco_mode_get",
@@ -735,22 +799,27 @@ int orbit::editor_app::StudioApplication::Run(
             [&ecoMode](const orbit::rpc::Value&)
             {
                 return orbit::rpc::Value::Object{
-                    {"enabled", ecoMode.load(std::memory_order_relaxed)}};
+                    {"enabled", ecoMode.load(std::memory_order_relaxed) != 0},
+                    {"mode", static_cast<orbit::i64>(ecoMode.load(std::memory_order_relaxed))}};
             });
         rpcHost.Dispatcher().Register(
             {.name = "studio.eco_mode_set",
              .description = "Enable or disable Eco mode.",
              .mutating = true},
-            [&ecoMode](const orbit::rpc::Value& params)
+            [&setEcoMode, &ecoMode](const orbit::rpc::Value& params)
             {
+                const auto* mode = params.Find("mode");
                 const auto* enabled = params.Find("enabled");
-                if (enabled == nullptr || !enabled->IsBool())
-                {
-                    throw std::invalid_argument("enabled must be a boolean");
-                }
-                ecoMode.store(enabled->AsBool(), std::memory_order_relaxed);
+                if(mode && mode->IsInteger() &&
+                   mode->AsInteger() >= 0 && mode->AsInteger() <= 2)
+                    setEcoMode(static_cast<int>(mode->AsInteger()));
+                else if(enabled && enabled->IsBool())
+                    setEcoMode(enabled->AsBool() ? 1 : 0);
+                else
+                    throw std::invalid_argument("Provide mode (0=Normal, 1=Eco, 2=Eco+) or enabled (boolean).");
                 return orbit::rpc::Value::Object{
-                    {"enabled", enabled->AsBool()}};
+                    {"enabled", ecoMode.load(std::memory_order_relaxed) != 0},
+                    {"mode", static_cast<orbit::i64>(ecoMode.load(std::memory_order_relaxed))}};
             });
         orbit::rhi::Device& device =
             runtime.Device();
@@ -1033,10 +1102,7 @@ int orbit::editor_app::StudioApplication::Run(
         studioViewportPanels.SetContentService(&content);
         studioViewportPanels.SetEcoModeAccessors(
             [&ecoMode] { return ecoMode.load(std::memory_order_relaxed); },
-            [&ecoMode](const bool enabled)
-            {
-                ecoMode.store(enabled, std::memory_order_relaxed);
-            });
+            [&setEcoMode](const int mode) { setEcoMode(mode); });
 
         shortcuts.RegisterCallback(
             {
@@ -1089,8 +1155,19 @@ int orbit::editor_app::StudioApplication::Run(
 
         orbit::studio_ui::DebugViewUi
             debugViewUi(
-                studioViews);
+                studioViews, studioSession);
+        debugViewUi.SetEngineeringDispatcher(rpcHost.Dispatcher());
         debugViewUi.Register(ui);
+        orbit::editor_app::StudioProceduralsPanel proceduralsPanel(
+            studioSession, rpcHost.Dispatcher());
+        proceduralsPanel.Register(ui);
+        studioViewportPanels.SetOpenProceduralRoadsAction(
+            [&ui, &proceduralsPanel]
+            {
+                proceduralsPanel.OpenPathsAndRoads();
+                static_cast<void>(ui.FocusPanel(
+                    orbit::editor_app::StudioProceduralsPanel::kPanelId));
+            });
 
         struct ViewportOnlyCapture
         {
@@ -1349,10 +1426,95 @@ int orbit::editor_app::StudioApplication::Run(
             weatherLabSession,
             weatherLabView);
         weatherLabUi.Register(ui);
+        // The simulated storm domain in the viewport clouds: the panel section and the storm.* RPC share one mailbox.
+        weatherLabUi.SetStormDomain(&studioViewportRenderer.StormMailbox());
+        orbit::studio_ui::RegisterStormDomainRpc(rpcHost.Dispatcher(), studioViewportRenderer.StormMailbox());
+        // The storm placed in the project and the lightning settings are kept in Config/storm_domain.json: restored here, saved on every change,
+        // so they survive a restart and the handoff to a new generation of Studio (which starts from nothing).
+        {
+            const std::filesystem::path stormFile = project.RootDirectory() / "Config" / "storm_domain.json";
+            auto& stormMailbox = studioViewportRenderer.StormMailbox();
+            try
+            {
+                if (std::filesystem::exists(stormFile))
+                {
+                    std::ifstream in(stormFile, std::ios::binary);
+                    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                    if (const std::string problems = orbit::studio_ui::RestoreStormState(stormMailbox, orbit::rpc::ParseValue(text)); !problems.empty())
+                    {
+                        orbit::log::Warning("Saved storm state restored with problems: " + problems);
+                    }
+                }
+            }
+            catch (const std::exception& exception)
+            {
+                orbit::log::Warning(std::string("The saved storm state could not be read: ") + exception.what());
+            }
+            auto stormFileMutex = std::make_shared<std::mutex>();
+            stormMailbox.SetChangeHandler([stormFile, stormFileMutex](const orbit::studio_ui::StormPersistentState& state)
+            {
+                const std::scoped_lock lock(*stormFileMutex);
+                try
+                {
+                    std::filesystem::create_directories(stormFile.parent_path());
+                    std::ofstream out(stormFile, std::ios::binary | std::ios::trunc);
+                    out << orbit::rpc::Serialize(orbit::studio_ui::StormStateToValue(state));
+                }
+                catch (const std::exception& exception)
+                {
+                    orbit::log::Warning(std::string("The storm state could not be saved: ") + exception.what());
+                }
+            });
+        }
+        // Saving engine/weather_gpu/shaders/storm.hlsl reloads the storm kernels in place (no rebuild, no restart).
+        [[maybe_unused]] const auto stormShaderHandler = orbit::hot_reload::AddHotIterationHandler(
+            orbit::hot_reload::ChangeKind::EngineShader,
+            [&studioViewportRenderer](const orbit::hot_reload::HotIterationEvent& event)
+            { studioViewportRenderer.StormMailbox().RequestShaderReload(event.path.string()); });
         orbit::studio_ui::RegisterWeatherLabRpc(
             rpcHost.Dispatcher(),
             weatherLabSession,
             weatherLabView);
+
+        // Lightning flashes owned by the main viewport renderer; lit by the tiled-light pass and the cloud pass.
+        orbit::studio_ui::StormLightningController stormLightning(
+            weatherLabSession,
+            {
+                [&studioViewportRenderer](const orbit::lighting::StormAnchor& anchor)
+                { studioViewportRenderer.SetLightningStormAnchor(anchor); },
+                [&studioViewportRenderer](orbit::optical_transport::DischargeGraph graph)
+                { (void)studioViewportRenderer.AddLightningStormFlash(std::move(graph)); }
+            });
+        orbit::studio_ui::RegisterLightningRpc(
+            rpcHost.Dispatcher(),
+            {
+                [&studioViewportRenderer](const orbit::lighting::FlashRequest& request)
+                { return studioViewportRenderer.FireLightning(request); },
+                [&studioViewportRenderer] { return studioViewportRenderer.LightningStatus(); },
+                [&studioViewportRenderer] { studioViewportRenderer.ClearLightning(); },
+                [&stormLightning](const orbit::studio_ui::StormLightningRequest& request)
+                { return stormLightning.Start(request); },
+                [&stormLightning] { stormLightning.Stop(); },
+                [&stormLightning] { return stormLightning.Status(); }
+            });
+
+        // Cloud shader tunables at runtime (clouds.set_defines): A/B comparisons without a relaunch.
+        orbit::studio_ui::RegisterCloudShaderRpc(
+            rpcHost.Dispatcher(),
+            {
+                [&studioViewportRenderer] { return studioViewportRenderer.CloudShaderDefines(); },
+                [&studioViewportRenderer](const std::string& defines)
+                { return studioViewportRenderer.SetCloudShaderDefines(defines); },
+                [&studioViewportRenderer]
+                {
+                    return orbit::studio_ui::CloudSplitState{
+                        studioViewportRenderer.CloudSplitEnabled(),
+                        studioViewportRenderer.CloudSplitDefines(),
+                        studioViewportRenderer.CloudSplitPosition()};
+                },
+                [&studioViewportRenderer](const bool enabled, const std::string& defines, const orbit::f32 position)
+                { return studioViewportRenderer.SetCloudSplit(enabled, defines, position); }
+            });
 
         // Simulation transport (Simulate / Pause / Step) and time.* RPC, both
         // driving the one Studio clock that moves the planets, the sun and the
@@ -1363,6 +1525,32 @@ int orbit::editor_app::StudioApplication::Run(
             simulationControls,
             studioSession);
         simulationUi.Register(ui);
+        // The camera and the simulation clock are kept in the project and put back at startup (Config/session_state.json).
+        orbit::studio_ui::SessionStateKeeper sessionKeeper(rpcHost.Dispatcher(), project.RootDirectory() / "Config" / "session_state.json");
+        // Lightning: pause just before a flash in view so it can be played in slow motion (toggle in the bottom bar, storm.lightning).
+        studioViewportRenderer.SetStrikePauseHandler([&simulationControls]() { simulationControls.SetPlaying(false); });
+        const auto lightningToggle = [&studioViewportRenderer](std::string label, bool orbit::studio_ui::StormLightningSettings::* member)
+        {
+            return orbit::studio_ui::SimulationControlsUi::BandToggle{
+                std::move(label),
+                [&studioViewportRenderer, member]() { return studioViewportRenderer.StormMailbox().Lightning().*member; },
+                [&studioViewportRenderer, member](const bool on)
+                {
+                    auto settings = studioViewportRenderer.StormMailbox().Lightning();
+                    settings.*member = on;
+                    static_cast<void>(studioViewportRenderer.StormMailbox().SetLightning(settings));
+                }};
+        };
+        simulationUi.SetBandToggles({
+            lightningToggle("Strike pause", &orbit::studio_ui::StormLightningSettings::pauseOnStrike),
+            lightningToggle("Frame strike", &orbit::studio_ui::StormLightningSettings::frameStrike),
+            lightningToggle("E-grid", &orbit::studio_ui::StormLightningSettings::showGrid)});
+        // Frame strike: the renderer asks (while composing) for the camera to be turned to a flash; it is applied before the next compose.
+        struct PendingStrikeFrame { orbit::math::Double3 centre; orbit::f64 radius; orbit::f64 fov; orbit::f64 aspect; };
+        std::optional<PendingStrikeFrame> pendingStrikeFrame;
+        studioViewportRenderer.SetStrikeFrameHandler(
+            [&pendingStrikeFrame](const orbit::math::Double3& centre, const orbit::f64 radius, const orbit::f64 fov, const orbit::f64 aspect)
+            { pendingStrikeFrame = PendingStrikeFrame{centre, radius, fov, aspect}; });
         orbit::studio_ui::RegisterSimulationRpc(
             rpcHost.Dispatcher(),
             simulationControls,
@@ -1548,6 +1736,23 @@ int orbit::editor_app::StudioApplication::Run(
                     {
                         return studioViewportRenderer.
                             HasPendingTerrainWork();
+                    },
+                .debugMode =
+                    [&studioViews]()
+                    {
+                        for (const auto& view : studioViews.Catalog())
+                        {
+                            if (view.id == "studio.primary")
+                                return static_cast<orbit::u32>(view.surfaceDebugMode);
+                        }
+                        return 0U;
+                    },
+                .setDebugMode =
+                    [&studioViews](const orbit::u32 mode)
+                    {
+                        studioViews.SetSurfaceDebugMode(
+                            "studio.primary",
+                            static_cast<orbit::lighting::SurfaceDebugMode>(mode));
                     },
                 .openPath =
                     [](const std::filesystem::path& path)
@@ -1993,6 +2198,8 @@ int orbit::editor_app::StudioApplication::Run(
 
         orbit::editor_app::StudioViewportPanel viewportPanel(panelEnvironment);
         viewportPanel.Register();
+        // Build / Procedurals palette and the viewport share one tool state.
+        proceduralsPanel.BindViewportTool(viewportPanel);
         orbit::editor_app::StudioExplorerPanel explorerPanel(panelEnvironment);
         explorerPanel.Register();
         orbit::editor_app::StudioPropertiesPanel propertiesPanel(panelEnvironment);
@@ -2023,6 +2230,117 @@ int orbit::editor_app::StudioApplication::Run(
                     orbit::log::Info(
                         "Project and world checkpoint saved.");
                 }
+        });
+
+        // One authority path for the top-bar gizmo, Build menu and MCP.
+        // Save project/world data before the successful generation handoff.
+        std::atomic_bool manualUpdateAwaitingResult{false};
+        const auto updateOrbitFromGitHub =
+            [&project, &world, &worldSession,
+             &manualUpdateAwaitingResult]() -> bool
+            {
+                const auto current =
+                    orbit::hot_reload::QueryGitHubUpdate();
+                if (!current.available || current.busy)
+                    return false;
+                try
+                {
+                    project.Save();
+                    if (worldSession.HasWorld())
+                        world().Checkpoint();
+                }
+                catch (const std::exception& exception)
+                {
+                    orbit::log::Error(
+                        std::string("GitHub update: could not save project: ") +
+                        exception.what());
+                    return false;
+                }
+                if(orbit::hot_reload::RequestGitHubUpdate())
+                {
+                    manualUpdateAwaitingResult.store(
+                        true,std::memory_order_relaxed);
+                    return true;
+                }
+                return false;
+            };
+
+        const auto checkOrbitFromGitHub = []() -> bool
+        {
+            return orbit::hot_reload::RequestGitHubCheck();
+        };
+
+        shortcuts.RegisterCallback(
+            {
+                .key = orbit::platform::Key::F5,
+                .shift = true
+            },
+            [&updateOrbitFromGitHub]
+            {
+                static_cast<void>(updateOrbitFromGitHub());
+            });
+
+        rpcHost.Dispatcher().Register(
+            {.name = "studio.github_update_status",
+             .description = "Background GitHub update and rebuild state.",
+             .mutating = false},
+            [](const orbit::rpc::Value&)
+            {
+                const auto status =
+                    orbit::hot_reload::QueryGitHubUpdate();
+                return orbit::rpc::Value::Object{
+                    {"available", status.available},
+                    {"busy", status.busy},
+                    {"stage", status.stage},
+                    {"detail", status.detail},
+                    {"log_path", status.logPath.string()},
+                    {"pending_commits",static_cast<orbit::i64>(
+                        status.pendingCommits)},
+                    {"rebuild_pending",status.rebuildPending},
+                    {"local_commit",status.localCommit},
+                    {"remote_commit",status.remoteCommit},
+                    {"last_checked_unix",static_cast<orbit::i64>(
+                        status.lastCheckedUnixSeconds)}
+                };
+            });
+        rpcHost.Dispatcher().Register(
+            {.name = "studio.github_update_check",
+             .description = "Queue a non-mutating GitHub freshness check; does not save, merge, build or restart.",
+             .mutating = false},
+            [&checkOrbitFromGitHub](const orbit::rpc::Value&)
+            {
+                if(!checkOrbitFromGitHub())
+                    throw std::runtime_error(
+                        "Updater unavailable or already working.");
+                return orbit::rpc::Value::Object{{"queued",true}};
+            });
+        rpcHost.Dispatcher().Register(
+            {.name = "studio.github_update_start",
+             .description = "Save project and queue fast-forward-only origin Harmony update, incremental build and staged Studio handoff.",
+             .mutating = true},
+            [&updateOrbitFromGitHub](const orbit::rpc::Value&)
+            {
+                if (!updateOrbitFromGitHub())
+                    throw std::runtime_error(
+                        "GitHub update unavailable, busy or project save failed.");
+                return orbit::rpc::Value::Object{
+                    {"queued", true},
+                    {"branch", "0.1.1-Harmony"}
+                };
+            });
+        ui.RegisterMenuAction({
+            .menu = "Build",
+            .label = "Update Orbit from GitHub",
+            .invoke = [&updateOrbitFromGitHub]
+            {
+                static_cast<void>(updateOrbitFromGitHub());
+            },
+            .enabled = []
+            {
+                const auto status =
+                    orbit::hot_reload::QueryGitHubUpdate();
+                return status.available && !status.busy;
+            }
         });
 
         ui.RegisterMenuAction({
@@ -2199,6 +2517,38 @@ int orbit::editor_app::StudioApplication::Run(
             "Material Service",
             kContentPanel);
 
+        // Direct entry: keeps road construction discoverable even when
+        // nested submenus are collapsed or narrow menu navigation is awkward.
+        ui.RegisterMenuAction({
+            .menu="Build",
+            .label="Procedural Roads",
+            .invoke=[&ui,&proceduralsPanel]
+            {
+                proceduralsPanel.OpenPathsAndRoads();
+                static_cast<void>(ui.FocusPanel(
+                    orbit::editor_app::StudioProceduralsPanel::kPanelId));
+            }
+        });
+        ui.RegisterMenuAction({
+            .menu="Build",
+            .label="Procedurals / Procedural Paths & Roads",
+            .invoke=[&ui,&proceduralsPanel]
+            {
+                proceduralsPanel.OpenPathsAndRoads();
+                static_cast<void>(ui.FocusPanel(
+                    orbit::editor_app::StudioProceduralsPanel::kPanelId));
+            }
+        });
+        ui.RegisterMenuAction({
+            .menu="Build",
+            .label="Procedurals / All Procedural Tools",
+            .invoke=[&ui,&proceduralsPanel]
+            {
+                proceduralsPanel.OpenOverview();
+                static_cast<void>(ui.FocusPanel(
+                    orbit::editor_app::StudioProceduralsPanel::kPanelId));
+            }
+        });
         registerPanelMenu(
             "Build",
             "Build Settings",
@@ -2286,6 +2636,7 @@ int orbit::editor_app::StudioApplication::Run(
         }
         constexpr auto kIdleAfter = std::chrono::milliseconds(1500);
         auto lastActivity = Clock::now();
+        auto lastUserInteraction = Clock::now();
         auto lastIterationStart = Clock::now();
         orbit::u64 lastRpcRequestCount = 0U;
 
@@ -2320,6 +2671,11 @@ int orbit::editor_app::StudioApplication::Run(
                 }
             };
 
+        float fullscreenProgress = 0.0F;
+        std::array<float, 4> fullscreenDockedRect{};
+        bool fullscreenKeyWasDown = false;
+        auto fullscreenLastFrame = Clock::now();
+
         while (window.PumpEvents())
         {
             {
@@ -2327,6 +2683,7 @@ int orbit::editor_app::StudioApplication::Run(
                 const orbit::u64 rpcRequests = rpcHost.RequestCount();
                 const bool inputActivity = window.ConsumeInputActivity();
                 const bool rpcActivity = rpcRequests != lastRpcRequestCount;
+                if(inputActivity) lastUserInteraction = paceNow;
                 const bool busy =
                     inputActivity ||
                     rpcActivity ||
@@ -2377,15 +2734,12 @@ int orbit::editor_app::StudioApplication::Run(
                     lastActivity = paceNow;
                 }
                 else if (
-                    (ecoMode.load(std::memory_order_relaxed)
-                        ? 1
-                        : idleFramesPerSecond) > 0 &&
+                    ecoMode.load(std::memory_order_relaxed) == 0 &&
+                    idleFramesPerSecond > 0 &&
                     paceNow - lastActivity > kIdleAfter)
                 {
-                    const orbit::i32 targetFps =
-                        ecoMode.load(std::memory_order_relaxed)
-                            ? 1
-                            : idleFramesPerSecond;
+                    // Non-eco idle pacing remains independent of the Eco cap.
+                    const orbit::i32 targetFps = idleFramesPerSecond;
                     const auto target =
                         std::chrono::microseconds(
                             1'000'000 / targetFps);
@@ -2400,26 +2754,34 @@ int orbit::editor_app::StudioApplication::Run(
                     }
                 }
 
-                if (ecoMode.load(std::memory_order_relaxed) && busy &&
-                    !rpcActivity)
+                // Eco policy: foreground activity -> active cap; foreground
+                // inactivity -> idle cap; unfocused -> background cap.
+                // Use frame deadlines instead of integer FPS to support 0.05 FPS.
+                const int mode = ecoMode.load(std::memory_order_relaxed);
+                if(mode != 0 && !rpcActivity)
                 {
-                    constexpr auto kEcoActiveFrame =
-                        std::chrono::milliseconds(67);
-                    const auto elapsed =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            paceNow - lastIterationStart);
-                    if (elapsed < kEcoActiveFrame)
+                    const bool foreground = window.IsForeground();
+                    const bool active = foreground &&
+                        (inputActivity || paceNow - lastUserInteraction <= kIdleAfter);
+                    const double fps = !foreground
+                        ? (mode == 1 ? 1.0 : 0.05)
+                        : active
+                            ? (mode == 1 ? 60.0 : 45.0)
+                            : (mode == 1 ? 15.0 : 0.5);
+                    const auto target =
+                        std::chrono::duration_cast<Clock::duration>(
+                            std::chrono::duration<double>(1.0 / fps));
+                    const auto elapsed = paceNow - lastIterationStart;
+                    if(elapsed < target)
                     {
+                        const auto remaining = std::chrono::duration_cast<
+                            std::chrono::milliseconds>(target - elapsed).count();
+                        // Recheck messages and RPCs periodically; background
+                        // Eco+ must not introduce 20-second input latency.
                         window.WaitForActivity(static_cast<orbit::u32>(
-                            (kEcoActiveFrame - elapsed).count()));
-                        // Input wakes may arrive before the frame deadline.
-                        // Keep servicing the message queue, but defer CPU and
-                        // render work until 15 FPS is due. RPC bypasses this
-                        // gate so automation always gets its immediate frame.
-                        if (rpcHost.RequestCount() == lastRpcRequestCount)
-                        {
+                            std::clamp<std::int64_t>(remaining, 1, 100)));
+                        if(rpcHost.RequestCount() == lastRpcRequestCount)
                             continue;
-                        }
                     }
                 }
 
@@ -2851,6 +3213,14 @@ int orbit::editor_app::StudioApplication::Run(
                 viewportPanel.activePathNetwork.reset();
                 viewportPanel.lastPlacedPathNode.reset();
                 viewportPanel.pathPlacementMode = false;
+                viewportPanel.infrastructureDrawMode=false;
+                viewportPanel.infrastructureHoverValid=false;
+                viewportPanel.infrastructureSnapCache.clear();
+                viewportPanel.infrastructureSnapCacheRevision=~orbit::u64{0};
+                viewportPanel.infrastructureLastEdge={};
+                viewportPanel.infrastructureBuiltEdges=0U;
+                viewportPanel.infrastructureLastAction.clear();
+                viewportPanel.infrastructurePlacementError.clear();
             }
 
             pluginReloadAccumulator +=
@@ -2970,6 +3340,94 @@ int orbit::editor_app::StudioApplication::Run(
                 }
 
                 const auto& manifest = project.Manifest();
+                const auto gitUpdate =
+                    orbit::hot_reload::QueryGitHubUpdate();
+                // Shift+F5/Build-menu update requests must visibly report a
+                // no-op, without spamming notifications for 5-minute polls.
+                if(manualUpdateAwaitingResult.load(
+                    std::memory_order_relaxed) && !gitUpdate.busy)
+                {
+                    if(gitUpdate.stage=="Up to date")
+                    {
+                        ui.PushNotification({
+                            .title="Orbit is up to date",
+                            .detail="No new Harmony commits. No rebuild or restart.",
+                            .severity=orbit::editor_ui::EditorUi::
+                                NotificationSeverity::Info,
+                            .seconds=4.0F});
+                        manualUpdateAwaitingResult.store(
+                            false,std::memory_order_relaxed);
+                    }
+                    else if(gitUpdate.stage=="Failed" ||
+                            gitUpdate.stage=="Blocked")
+                    {
+                        ui.PushNotification({
+                            .title="Orbit update did not complete",
+                            .detail=gitUpdate.detail,
+                            .severity=orbit::editor_ui::EditorUi::
+                                NotificationSeverity::Error,
+                            .seconds=7.0F});
+                        manualUpdateAwaitingResult.store(
+                            false,std::memory_order_relaxed);
+                    }
+                }
+                ui.SetUpdateIndicator({
+                    .label = gitUpdate.busy ?
+                        (gitUpdate.stage == "Checking" ||
+                         gitUpdate.stage == "Fetching" ||
+                         gitUpdate.stage == "Queued check" ?
+                            "Checking..." : "Updating...") :
+                        gitUpdate.stage == "Up to date" ? "Up to date" :
+                        gitUpdate.stage == "Update available" ?
+                            "Update available ("+
+                            std::to_string(gitUpdate.pendingCommits)+")" :
+                        gitUpdate.stage == "Blocked" ? "Update blocked" :
+                        gitUpdate.rebuildPending ? "Build required" :
+                        gitUpdate.stage == "Failed" ? "Check failed" :
+                            "Orbit updater",
+                    .tooltip =
+                        "Orbit updater - click for details and actions."
+                        "\n" + gitUpdate.stage + ": " +
+                        gitUpdate.detail,
+                    .enabled = true,
+                    .available = gitUpdate.available,
+                    .stage = gitUpdate.stage,
+                    .detail = gitUpdate.detail,
+                    .branch = "origin/0.1.1-Harmony",
+                    .localCommit = gitUpdate.localCommit,
+                    .remoteCommit = gitUpdate.remoteCommit,
+                    .lastCheckedUnixSeconds =
+                        gitUpdate.lastCheckedUnixSeconds,
+                    .pendingCommits = gitUpdate.pendingCommits,
+                    .rebuildPending = gitUpdate.rebuildPending,
+                    .busy = gitUpdate.busy,
+                    .onClick = [&updateOrbitFromGitHub]
+                    {
+                        static_cast<void>(updateOrbitFromGitHub());
+                    },
+                    .onCheck = [&checkOrbitFromGitHub]
+                    {
+                        static_cast<void>(checkOrbitFromGitHub());
+                    },
+                    .hasLog = !gitUpdate.logPath.empty(),
+                    .onOpenLog = [path=gitUpdate.logPath]
+                    {
+                        try
+                        {
+                            if(std::filesystem::exists(path))
+                                orbit::platform::OpenInFileBrowser(path);
+                            else if(std::filesystem::exists(path.parent_path()))
+                                orbit::platform::OpenInFileBrowser(
+                                    path.parent_path());
+                        }
+                        catch(const std::exception& exception)
+                        {
+                            orbit::log::Warning(std::string(
+                                "Could not open updater log: ")+
+                                exception.what());
+                        }
+                    }
+                });
                 ui.SetProjectIndicator({
                     .name = manifest.displayName,
                     .detail =
@@ -3002,7 +3460,34 @@ int orbit::editor_app::StudioApplication::Run(
                 pendingRpcNotifications.clear();
             }
 
-            if (viewportOnlyCapture.active)
+            // Full-screen viewport: F11 / the toolbar button / viewport.fullscreen_set choose the target; the progress
+            // follows it over a short eased animation. While it runs the shell is still drawn and the viewport's last
+            // image grows (or shrinks) between the docked panel and the window; at 1 the panel alone fills the window.
+            if (viewportPanel.fullscreenToggleRequested ||
+                (window.KeyDown(orbit::platform::Key::F11) && !fullscreenKeyWasDown && !ui.WantsKeyboard()))
+            {
+                viewportFullscreen.store(!viewportFullscreen.load(), std::memory_order_relaxed);
+            }
+            viewportPanel.fullscreenToggleRequested = false;
+            fullscreenKeyWasDown = window.KeyDown(orbit::platform::Key::F11);
+            {
+                const auto fullscreenNow = Clock::now();
+                const float dt = std::min(0.1F, std::chrono::duration<float>(fullscreenNow - fullscreenLastFrame).count());
+                fullscreenLastFrame = fullscreenNow;
+                const bool wanted = viewportFullscreen.load(std::memory_order_relaxed);
+                constexpr float kSeconds = 0.28F;
+                fullscreenProgress = std::clamp(fullscreenProgress + (wanted ? dt : -dt) / kSeconds, 0.0F, 1.0F);
+                if (fullscreenProgress <= 0.0F)
+                {
+                    if (const auto rect = ui.PanelScreenRect(orbit::studio_ui::kPrimaryViewportPanel))
+                    {
+                        fullscreenDockedRect = *rect;
+                    }
+                }
+            }
+            const bool viewportFullyFullscreen = fullscreenProgress >= 1.0F && !viewportOnlyCapture.active;
+
+            if (viewportOnlyCapture.active || viewportFullyFullscreen)
             {
                 static_cast<void>(ui.DrawPanelFullscreen(
                     orbit::studio_ui::kPrimaryViewportPanel));
@@ -3015,6 +3500,20 @@ int orbit::editor_app::StudioApplication::Run(
                     "studio.map",
                     ui.PanelVisible(
                         orbit::studio_ui::kSecondaryViewportPanel));
+                if (fullscreenProgress > 0.0F)
+                {
+                    const float t = fullscreenProgress * fullscreenProgress * (3.0F - 2.0F * fullscreenProgress);
+                    const auto full = ui.MainViewportRect();
+                    std::array<float, 4> rect{};
+                    for (std::size_t i = 0; i < 4; ++i)
+                    {
+                        rect[i] = fullscreenDockedRect[i] + (full[i] - fullscreenDockedRect[i]) * t;
+                    }
+                    if (auto* primary = studioViews.Find("studio.primary"))
+                    {
+                        ui.DrawImageOverlay(primary->DisplayColor(), rect);
+                    }
+                }
             }
             cpuFrameTelemetry.Record(
                 CpuFrameTelemetry::Ui,
@@ -3049,6 +3548,14 @@ int orbit::editor_app::StudioApplication::Run(
                 viewportPanel.activePathNetwork.reset();
                 viewportPanel.lastPlacedPathNode.reset();
                 viewportPanel.pathPlacementMode = false;
+                viewportPanel.infrastructureDrawMode=false;
+                viewportPanel.infrastructureHoverValid=false;
+                viewportPanel.infrastructureSnapCache.clear();
+                viewportPanel.infrastructureSnapCacheRevision=~orbit::u64{0};
+                viewportPanel.infrastructureLastEdge={};
+                viewportPanel.infrastructureBuiltEdges=0U;
+                viewportPanel.infrastructureLastAction.clear();
+                viewportPanel.infrastructurePlacementError.clear();
             }
 
             if (worldSession.HasWorld())
@@ -3082,12 +3589,14 @@ int orbit::editor_app::StudioApplication::Run(
                 pendingProjectSwitch.reset();
             }
 
-            if (window.KeyDown(
-                    orbit::platform::
-                        Key::Escape) &&
-                !ui.WantsKeyboard())
+            // Escape may dismiss viewport fullscreen, but never terminates
+            // Orbit Studio. Popup and active-tool Escape handling is owned
+            // by the corresponding UI components.
+            if (window.KeyDown(orbit::platform::Key::Escape) &&
+                !ui.WantsKeyboard() &&
+                viewportFullscreen.load(std::memory_order_relaxed))
             {
-                break;
+                viewportFullscreen.store(false, std::memory_order_relaxed);
             }
 
             cpuFrameTelemetry.Record(
@@ -3302,6 +3811,49 @@ int orbit::editor_app::StudioApplication::Run(
                     std::min(
                         lightingPlan.radianceCacheUpdates,
                         perViewCpuCap);
+            }
+
+            sessionKeeper.Update(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+            if (pendingStrikeFrame.has_value())
+            {
+                // Turn the camera to the flash and move along the line from it (closer or farther, at the same altitude) until its sphere fills
+                // about 60 % of the narrower of the two fields of view: the whole channel in view, large enough to see.
+                const PendingStrikeFrame request = *pendingStrikeFrame;
+                pendingStrikeFrame.reset();
+                try
+                {
+                    if (auto pose = studioViews.ViewPose("studio.primary"); pose.has_value() && pose->hasCamera)
+                    {
+                        namespace m = orbit::math;
+                        const orbit::f64 halfVertical = 0.5 * request.fov;
+                        const orbit::f64 halfHorizontal = std::atan(std::tan(halfVertical) * request.aspect);
+                        const orbit::f64 needed = request.radius / std::sin(0.6 * std::min(halfVertical, halfHorizontal)) + 200.0;
+                        m::Double3 observer = pose->observerMeters;
+                        const m::Double3 offset = observer - request.centre;
+                        const orbit::f64 distance = std::sqrt(m::Dot(offset, offset));
+                        if (distance > 1.0)
+                        {
+                            // Move along the line at the same distance from the planet's centre (the same altitude).
+                            const m::Double3 moved = request.centre + offset * (needed / distance);
+                            observer = moved * (std::sqrt(m::Dot(observer, observer)) / std::sqrt(m::Dot(moved, moved)));
+                        }
+                        const m::Double3 up = observer * (1.0 / std::sqrt(m::Dot(observer, observer)));
+                        m::Double3 north = m::Double3{0.0, 1.0, 0.0} - up * up.y;
+                        north = north * (1.0 / std::sqrt(m::Dot(north, north)));
+                        const m::Double3 east = m::Cross(north, up);
+                        const m::Double3 toFlash = request.centre - observer;
+                        const m::Double3 look = toFlash * (1.0 / std::sqrt(m::Dot(toFlash, toFlash)));
+                        pose->observerMeters = observer;
+                        pose->surfaceFrame = {east, north, up};
+                        pose->yawRadians = std::atan2(m::Dot(look, east), m::Dot(look, north));
+                        pose->pitchRadians = std::asin(std::clamp(m::Dot(look, up), -1.0, 1.0));
+                        static_cast<void>(studioViews.RestoreViewPose("studio.primary", *pose));
+                    }
+                }
+                catch (const std::exception& exception)
+                {
+                    orbit::log::Warning(std::string("Frame strike failed: ") + exception.what());
+                }
             }
 
             const auto viewportComposeStarted = Clock::now();

@@ -1,0 +1,7 @@
+# Machine state and generated data: rebuilt on first launch.
+Config/session_state.json
+Bakes/
+Content/Volumes/
+Worlds/*-shm
+Worlds/*-wal
+Screenshots/

@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <future>
+#include <numbers>
 #include <cmath>
 #include <format>
 #include <string_view>
@@ -126,6 +129,8 @@ void WeatherLabUi::Draw(PanelContext& context)
     DrawControls(context);
     DrawSettings(context);
     DrawPlayback(context);
+    DrawStorm(context);
+    DrawZoneSurvey(context);
     DrawViews(context);
     DrawMetrics(context);
 }
@@ -270,6 +275,181 @@ void WeatherLabUi::DrawSettings(PanelContext& context)
         draft_.recordPath = recordPathText_;
         message_ = session_->Configure(draft_);
     }
+}
+
+void WeatherLabUi::DrawStorm(PanelContext& context)
+{
+    if (storm_ == nullptr || !context.Section("Storm domain (in the viewport clouds)", false))
+    {
+        return;
+    }
+    context.MutedText(
+        "Places the GPU storm core on the body under the primary view: the clouds inside the domain are the simulated ones, advanced with "
+        "the simulation clock. Same operation as the storm.* RPC. Compare with the procedural sky in the cloud split view (B = CLOUD_STORM=0).");
+    (void)context.InputDouble("Latitude (deg)##storm-lat", stormDraft_.latitudeDegrees);
+    (void)context.InputDouble("Longitude (deg)##storm-lon", stormDraft_.longitudeDegrees);
+    i64 cells = static_cast<i64>(stormDraft_.cells);
+    if (context.InputInteger("Cells (nx = ny)##storm-cells", cells))
+    {
+        stormDraft_.cells = static_cast<u32>(std::clamp<i64>(cells, 16, 256));
+    }
+    f64 spacing = static_cast<f64>(stormDraft_.spacingMeters);
+    if (context.InputDouble("Spacing (m)##storm-spacing", spacing))
+    {
+        stormDraft_.spacingMeters = static_cast<f32>(spacing);
+    }
+    f64 spin = static_cast<f64>(stormDraft_.spinMinutes);
+    if (context.InputDouble("Spin-up (minutes)##storm-spin", spin))
+    {
+        stormDraft_.spinMinutes = static_cast<f32>(spin);
+    }
+    (void)context.Checkbox("Ice##storm-ice", stormDraft_.ice);
+    (void)context.Checkbox("Nested 4:1 child grid (500 m)##storm-nested", stormDraft_.nested);
+    if (!stormAutoLoaded_)
+    {
+        stormAuto_ = storm_->AutoSetting();
+        stormAutoLoaded_ = true;
+    }
+    context.Separator();
+    context.MutedText("Scheduled storms: the nearest live storm of the deterministic schedule near the camera, a pure function of the simulation time.");
+    bool autoChanged = context.Checkbox("Automatic storms near the camera##storm-auto", stormAuto_.enabled);
+    autoChanged |= context.Checkbox("Nested child grid##storm-auto-nested", stormAuto_.nested);
+    i64 seed = static_cast<i64>(stormAuto_.seed);
+    if (context.InputInteger("Schedule seed##storm-seed", seed))
+    {
+        stormAuto_.seed = static_cast<u64>(std::max<i64>(seed, 0));
+        autoChanged = true;
+    }
+    if (autoChanged)
+    {
+        stormMessage_ = storm_->SetAuto(stormAuto_);
+    }
+    context.Separator();
+    if (context.Button("Place storm##storm-place"))
+    {
+        stormMessage_ = storm_->Place(stormDraft_);
+    }
+    context.SameLine();
+    if (context.Button("Remove##storm-clear"))
+    {
+        storm_->Clear();
+        stormMessage_.clear();
+    }
+    const StormStatus status = storm_->Status();
+    context.KeyValue("State", std::format("{} ({})", StormStateName(status.state), status.mode));
+    context.KeyValue("Cross-zone disturbances",
+        std::format("{} time-stamped sources (experimental)", status.zoneCrossZoneSources));
+    context.KeyValue("Convective surrogate",
+        std::format("{} completed steps, {} retained precipitation exchange records",
+            status.zoneCompletedSteps, status.zonePendingExchanges));
+    context.KeyValue("Multirate scheduler",
+        std::format("{} tickets, {} awaiting long-step backend, {} deferred; maximum lag {:.0f} s",
+            status.zoneWorkTickets, status.zoneBlockedLongSteps,
+            status.zoneDeferredTasks, status.zoneMaximumLagSeconds));
+    context.KeyValue("Live atmospheric zones",
+        std::format("{} zones from {} candidate probes (generation {}, {}{})",
+            status.discoveredZones, status.zoneCandidateProbes, status.zoneGeneration,
+            status.zoneGeneration ? std::format("at t={:.0f} s", status.zoneSnapshotSeconds) :
+                std::string("no snapshot"),
+            status.zoneSurveyBusy ? ", worker active" : ""));
+
+    if (status.state == StormStatus::State::Active)
+    {
+        context.KeyValue("Centre", std::format("{:.3f}, {:.3f} deg", status.latitudeDegrees, status.longitudeDegrees));
+        context.KeyValue("Storm time", std::format("{:.1f} min ({} steps, {:.2f} ms per step)", status.stormSeconds / 60.0, status.steps,
+            status.stepMilliseconds));
+        context.KeyValue("Domain", std::format("{0} x {0} cells at {1:.0f} m{2}, {3:.0f} MiB", status.cells,
+            static_cast<f64>(status.spacingMeters),
+            status.nested ? std::format(" with a child at {:.0f} m", static_cast<f64>(status.childSpacingMeters)) : std::string(),
+            status.residentMiB));
+        if (status.lifetimeSeconds > 0.0)
+        {
+            context.KeyValue("Age", std::format("{:.0f} of {:.0f} min, intensity {:.2f}{}", status.ageSeconds / 60.0,
+                status.lifetimeSeconds / 60.0, status.intensity, status.catchingUp ? ", catching up" : ""));
+        }
+        context.KeyValue("Checkpoints", std::format("{} for this storm, {:.0f} MiB cached", status.checkpoints, status.checkpointMiB));
+    }
+    if (!status.message.empty() && status.state != StormStatus::State::Active)
+    {
+        context.MutedText(status.message);
+    }
+    if (!stormMessage_.empty())
+    {
+        context.ErrorText(stormMessage_);
+    }
+}
+
+void WeatherLabUi::DrawZoneSurvey(PanelContext& context)
+{
+    if (!context.Section("Sparse weather zones (experimental diagnostic)", false))
+    {
+        return;
+    }
+    context.MutedText(
+        "Read-only planetary scan of the existing analytic weather map. "
+        "Zone scores are cloud-derived screening proxies, NOT CAPE, shear or "
+        "a meteorological prediction. This does not spawn or modify storms.");
+    if (zoneSurveyFuture_.valid() &&
+        zoneSurveyFuture_.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+    {
+        try
+        {
+            auto probes=zoneSurveyFuture_.get();
+            zoneSurveyProbeCount_=static_cast<u32>(probes.size());
+            zoneSurveyZones_.Discover(probes, zoneSurveyJobTime_);
+        }
+        catch (const std::exception& e)
+        {
+            message_=std::string("Zone survey failed: ")+e.what();
+        }
+    }
+    (void)context.InputDouble("Survey time (simulated seconds)##zones-time", zoneSurveyTime_);
+    (void)context.InputInteger("Equal-area samples##zones-samples", zoneSurveySamples_);
+    zoneSurveySamples_=std::clamp<i64>(zoneSurveySamples_,64,4096);
+    const bool running=zoneSurveyFuture_.valid();
+    if (running)
+    {
+        context.MutedText("Survey running independently of the viewport.");
+    }
+    else if (context.Button("Scan atmosphere##zones-scan"))
+    {
+        zoneSurveyJobTime_=zoneSurveyTime_;
+        const f64 seconds=zoneSurveyJobTime_;
+        const auto samples=static_cast<u32>(zoneSurveySamples_);
+        zoneSurveyFuture_=std::async(std::launch::async,[seconds,samples]
+        {
+            celestial_clouds::AnalyticZoneSurveyConfig config;
+            config.samples=samples;
+            config.maxCandidates=512U;
+            return celestial_clouds::SurveyAnalyticStormZones(
+                seconds,celestial_clouds::WeatherParameters{},
+                celestial_clouds::WeatherClimate{},config);
+        });
+    }
+    context.KeyValue("Scan results",
+        std::format("{} candidate samples, {} persistent zones",
+            zoneSurveyProbeCount_,zoneSurveyZones_.Zones().size()));
+    const auto& zones=zoneSurveyZones_.Zones();
+    for (std::size_t i=0; i<std::min<std::size_t>(zones.size(),12); ++i)
+    {
+        const auto& zone=zones[i];
+        const f64 lat=std::asin(std::clamp(zone.centre.y,-1.0,1.0))*180.0/std::numbers::pi_v<f64>;
+        const f64 lon=std::atan2(-zone.centre.z,zone.centre.x)*180.0/std::numbers::pi_v<f64>;
+        context.KeyValue(std::format("Zone #{}",zone.id),
+            std::format("{:.1f} / {:.1f} deg, {} probes, extent {:.1f} deg, initiation {:.2f}, "
+                        "convection {:.2f}, moisture {:.2f}",
+                lat,lon,zone.contributingProbes,
+                zone.radiusRadians*180.0/std::numbers::pi_v<f64>,
+                static_cast<f64>(zone.weights.initiation),
+                static_cast<f64>(zone.weights.convection),
+                static_cast<f64>(zone.weights.moisture)));
+    }
+    if (zones.size()>12)
+    {
+        context.MutedText(std::format("{} additional zones omitted from this preview.",
+            zones.size()-12));
+    }
+    context.Separator();
 }
 
 void WeatherLabUi::DrawPlayback(PanelContext& context)

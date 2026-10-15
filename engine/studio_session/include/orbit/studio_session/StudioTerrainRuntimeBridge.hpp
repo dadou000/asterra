@@ -1,5 +1,8 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
+
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/studio_session/ViewportTargetRegistry.hpp>
 #include <orbit/terrain/TerrainContracts.hpp>
@@ -90,6 +93,25 @@ struct StudioTerrainViewportRuntimeSnapshot
     terrain_gpu::PersistentGpuTerrainCacheStats
         cacheStats{};
 };
+
+// Bounded viewport-driven physical page interest. Physical pages are costly
+// geological products: promote nearby clipmap coverage but never allocate an
+// entire horizon-wide physical atlas. Distant terrain remains analytic.
+[[nodiscard]] inline u32 PhysicalPageCoverageRadius(
+    const StudioTerrainViewportRuntimeSnapshot& runtime) noexcept
+{
+    const f64 tileWidth = world::ApproximateTileWidthMeters(
+        runtime.planet, runtime.observerPhysicalPage.tile);
+    if (!std::isfinite(tileWidth) || tileWidth <= 0.0) return 1U;
+    f64 visibleExtent = 0.0;
+    for (const auto& level : runtime.layout.levels)
+        if (level.active && std::isfinite(level.outerHalfExtentMeters))
+            visibleExtent = std::max(visibleExtent, level.outerHalfExtentMeters);
+    // 2 tiles of halo accommodates the observer's off-centre position.
+    // The 2-tile budget caps residency at 25 local pages per viewport.
+    return static_cast<u32>(std::clamp(
+        std::ceil(visibleExtent / tileWidth + 0.5), 1.0, 2.0));
+}
 
 struct StudioTerrainObserverSite
 {

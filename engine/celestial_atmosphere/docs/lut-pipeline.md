@@ -19,9 +19,10 @@ sources = [
 ]
 symbols = ["AtmosphereLutConfig", "BuildStaticLuts", "BuildSkyView", "AtmosphereFingerprint", "AtmosphereSkyFingerprint", "SkyViewInput", "ReplaceSkyView", "SkyFrameSunDirection", "QuantizedSkyObserverRadius"]
 invariants = [
+  "CPU interpolation explicitly converts texel-centre coordinates to LutRgb endpoint coordinates. The homogeneous-shell grazing test compares against closed-form exp(-sigma*distance), with absolute error below 0.004. The LUT fingerprint format changed so old derived textures are rebuilt.",
   "Density is exponential with altitude above bottomRadiusMeters: rho_R = exp(-h/H_R), rho_M = exp(-h/H_M); the absorber is a triangular vertical layer with an explicit centre height and half width.",
   "sigma_s = beta_R rho_R + beta_M_s rho_M; sigma_t = beta_R rho_R + beta_M_e rho_M + beta_abs rho_abs. Mie extinction must be >= Mie scattering per channel and ground albedo must be in [0, 1] (both validated).",
-  "Transmittance is a 2D LUT over (radius within the shell, direction cosine to the local radial), integrated deterministically with trapezoids; rays blocked by the ground return zero transmittance to the top boundary; the radius mapping derives from bottom/top radius, not Earth constants.",
+  "Transmittance stores only rays above the local spherical horizon: mu = horizon + (1-horizon)*u*u, with the existing squared-radius coordinate. The CPU SunTransmittanceAt and GPU AtmosphereStellarTransmittance invert this mapping; blocked point-sun CPU queries return zero separately. The horizon mask must not be interpolated into extinction texels.",
   "Multiple scattering is a low-dimensional isotropic response over (radius, source zenith cosine) inspired by Hillaire: a bounded geometric series of the recirculating component, with the authored ground albedo for ground-intersecting directions. It is an approximation seam, not an Earth preset.",
   "The sky view is parameterised by view zenith and relative azimuth to the source and holds scene-linear radiance-like RGB before the display transform; each ray integrates view transmittance, source transmittance, Rayleigh and Henyey-Greenstein Mie phase, local single scattering and the multiple-scattering response.",
   "Observers inside the shell integrate to the nearest boundary; observers outside intersect the view ray with the top sphere and integrate only the actual segment, stopping at the ground if it is reached first.",
@@ -38,7 +39,7 @@ verify = [
   "StudioAtmosphereDiagnostics: body, static fingerprint, sky fingerprint, observer radius/altitude, direct irradiance and all LUT dimensions.",
   "Climbing from the ground to orbit rebuilds the sky view a few times per altitude decade, not every frame (profile with orbit_profiler_capture: atmosphere.build_sky_view scope).",
 ]
-verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
+verified = "283b7b066432087a3acd420afc2e112b30ca3482"
 
 [[diagnose]]
 symptom = "sky or limb looks wrong after editing atmosphere properties (stale or unchanged)"

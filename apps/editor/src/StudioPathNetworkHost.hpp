@@ -108,5 +108,6 @@ private:
     std::unordered_map<scene::ObjectId, u64> derivedRouteGeneration_;
     u64 derivedObjectRevision_{~u64{0}};
     u64 derivedContentRevision_{~u64{0}};
+    u64 observedJunctionPublicationRevision_{~u64{0}};
 };
 } // namespace orbit::editor_app

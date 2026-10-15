@@ -17,7 +17,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         lightingPlan, lightingTimestamps, cpuTimingRecorder, recordComposeStage,
         sharedRadianceCellsHandle, sharedRadianceLevelsHandle, sharedRadianceLevelCount, shape,
         bodies, frames, resolvedMagnetosphereForView, composeStageStarted,
-        nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters
+        nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters,
+        terrainSunShadow
     ] = context;
 
     const auto* logicalTarget = session.Viewports().Find(info.id);
@@ -176,6 +177,15 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 authored.object.high ^
                 authored.object.low
         });
+    }
+
+    {
+        lighting::CameraPlacement placement;
+        placement.positionMeters = lightingView.cameraPositionInFrameMeters;
+        placement.forward = {lightingView.forward.x, lightingView.forward.y, lightingView.forward.z};
+        placement.up = {lightingView.up.x, lightingView.up.y, lightingView.up.z};
+        const auto flashLights = TransientFlashLights(placement);
+        localLights.insert(localLights.end(), flashLights.begin(), flashLights.end());
     }
 
     const lighting::TiledLightGrid
@@ -1234,9 +1244,11 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         !cloudFound->second.field->layers.empty() &&
         logicalTarget->target.has_value() &&
         cloudFound->second.body == logicalTarget->target->body &&
-        (info.layers.fullClipmap || !info.layers.macroGlobe) &&
+        ShouldRenderCloudVolume(info.layers) &&
         studioDirectLight.direct.has_value() &&
-        logicalTarget->mode != studio_session::ViewportMode::Debug)
+        logicalTarget->mode != studio_session::ViewportMode::Debug &&
+        (!info.layers.cloudBPreview ||
+            (!info.layers.cloudLab.enabled && EnsureUnifiedCloudRenderer())))
     {
         if (const auto shadowAtmosphere =
                 atmospherePresentations_.find(info.id);
@@ -1245,7 +1257,12 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         {
             const u32 shadowWidth = std::max(1U, (width + 1U) / 2U);
             const u32 shadowHeight = std::max(1U, (height + 1U) / 2U);
-            auto& shadowTarget = cloudShadowTargets_[info.id];
+            if (!info.layers.cloudBPreview ||
+                celestial_clouds::unified::ResourceBudget{}.
+                    FitsPreviewTarget(shadowWidth, shadowHeight))
+            {
+            auto& shadowTarget = info.layers.cloudBPreview
+                ? unifiedCloudShadowTargets_[info.id] : cloudShadowTargets_[info.id];
             if (shadowTarget == nullptr ||
                 shadowTarget->Width() != shadowWidth ||
                 shadowTarget->Height() != shadowHeight)
@@ -1258,7 +1275,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
             }
             cloudShadowTexture = shadowTarget.get();
             const auto shadowHandle = graph.ImportTexture(
-                prefix + ".CloudShadowTarget",
+                prefix + (info.layers.cloudBPreview ?
+                    ".UnifiedB.CloudShadowTarget" : ".CloudShadowTarget"),
                 *cloudShadowTexture,
                 rhi::ResourceState::ShaderResource);
 
@@ -1288,7 +1306,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 .irradianceScale = studioDirectLight.irradianceScale};
 
             graph.AddPass(
-                prefix + ".CloudShadow",
+                prefix + (info.layers.cloudBPreview ?
+                    ".UnifiedB.ReceiverShadow" : ".CloudShadow"),
                 {
                     {
                         .texture = targets.depth,
@@ -1304,33 +1323,39 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 [this,
                  lightingDepth,
                  shadowGpu,
+                 shadowSource = cloudFound->second.field.get(),
                  shadowLayer,
                  shadowReferenceRadius,
                  shadowView,
                  shadowLab,
                  shadowTexture = cloudShadowTexture,
                  shadowWidth,
-                 shadowHeight](
+                 shadowHeight,
+                 useUnifiedB = info.layers.cloudBPreview](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
-                    cloudRenderer_.DrawShadow(
-                        commands,
-                        *lightingDepth,
-                        *shadowGpu,
-                        *shadowTexture,
-                        shadowWidth,
-                        shadowHeight,
-                        shadowReferenceRadius,
-                        shadowLayer,
-                        shadowView,
-                        shadowLab);
+                    if (useUnifiedB)
+                    {
+                        unifiedCloudRenderer_->DrawReceiverShadow(
+                            commands, *lightingDepth, *shadowGpu,
+                            *shadowTexture, shadowReferenceRadius,
+                            *shadowSource, shadowView, sharedStormCloudExport_);
+                    }
+                    else
+                    {
+                        cloudRenderer_.DrawShadow(
+                            commands, *lightingDepth, *shadowGpu, *shadowTexture,
+                            shadowWidth, shadowHeight, shadowReferenceRadius,
+                            shadowLayer, shadowView, shadowLab);
+                    }
                 });
 
             cloudShadowUse = render_graph::TextureUse{
                 .texture = shadowHandle,
                 .state = rhi::ResourceState::ShaderResource,
                 .access = render_graph::Access::Read};
+            }
         }
     }
 
@@ -1960,6 +1985,16 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         return uses;
     };
 
+    const bool sunAuditDebug = (info.layers.sunAuditMethod == 1U &&
+        info.layers.sunAuditDiscDebug) ||
+        (info.layers.sunAuditMethod == 2U && info.layers.sunAuditReliefDebug) ||
+        (info.layers.sunAuditMethod == 3U && info.layers.sunAuditSourcesDebug);
+    // Debug 3 observes the composed scene without altering its lighting.
+    // Mode 3 without debug continues to be the intentional GI isolation.
+    if ((sunAuditDebug && info.layers.sunAuditMethod != 3U) ||
+        (info.layers.sunAuditMethod == 3U && !sunAuditDebug))
+        nearFieldIndirect = false;
+
     // The sky-only radiance cache fill is read by direct lighting, so
     // the cache buffers join its inputs when it is active.
     const bool skyCacheFill =
@@ -2073,7 +2108,13 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
          radianceLevelCount,
          lightingTimestamps,
          frameIndex,
-         nearFieldIndirect](
+         nearFieldIndirect,
+         shape,
+         studioDirectLight,
+         terrainSunShadow,
+         sunAuditDebug,
+         auditMethod = info.layers.sunAuditMethod,
+         auditInputsOnly = info.layers.sunAuditMethod == 3U && sunAuditDebug](
             rhi::CommandList& commands,
             const render_graph::Resources&
                 resources)
@@ -2125,7 +2166,15 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                     // side, so ambient comes from the atmosphere/GI
                     // sky summary rather than a constant floor.
                     .ambientIrradianceScale =
-                        0.0F
+                        0.0F,
+                    .planetRadiusMeters = shape.has_value()
+                        ? static_cast<f32>(ReferenceRadiusForShape(*shape))
+                        : 0.0F,
+                    .stellarAngularRadiusRadians =
+                        studioDirectLight.sunAngularRadiusRadians,
+                    .sunAuditMethod = auditInputsOnly ? 0U : auditMethod,
+                    .sunAuditDebug = sunAuditDebug,
+                    .sunAuditTerrain = terrainSunShadow.get()
                 });
 
             if (lightingTimestamps != nullptr)
@@ -3306,7 +3355,13 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
     }
 
     recordComposeStage("gi");
-    ComposeAtmospherePasses(context);
+    // Debug heatmaps must not be overwritten by later air/cloud layers.
+    // Method 3 is a genuine isolation: leave out atmosphere and clouds
+    // as well as GI. Otherwise the late volumetric contributions hide what
+    // removing the near-field lighting sources changed.
+    if ((!sunAuditDebug && info.layers.sunAuditMethod != 3U) ||
+        (sunAuditDebug && info.layers.sunAuditMethod == 3U))
+        ComposeAtmospherePasses(context);
 
     // Glass Primitives: sun caustics onto the receivers behind them, a copy of
     // the lit scene, then the refracting bodies themselves over it. After the

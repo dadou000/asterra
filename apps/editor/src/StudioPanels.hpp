@@ -277,15 +277,65 @@ public:
     // Viewport and path-placement interaction state. The frame loop reads and resets the parts it
     // drives (frame mouse delta, right-button gesture, path placement mode).
     bool pathPlacementMode = false;
-    bool pathDebugVisualization = true;
+    // Presentation-only construction tool state. Authored geometry remains
+    // exclusively in PathNetworkService/CommandService.
+    bool infrastructureDrawMode = false;
+    i32 infrastructureAlignmentMode = 0; // 0 direct, 1 Bezier, 2 routed.
+    std::string infrastructureCatalogId{"rural-road"}; // empty = reference path
+    std::string infrastructureConstructionMode{"terrain"};
+    f64 infrastructureDesignSpeedKmh{60.0};
+    bool infrastructureEaseTurns = true;
+    f64 infrastructureCurveBias = 0.25;
+    bool infrastructureSnapNodes = true;
+    std::function<void(bool)> infrastructureSnapPreferenceChanged;
+    f64 infrastructureNodeSnapMeters = 10.0;
+    f64 infrastructureElevationMeters = 0.0;
+    bool infrastructurePageUpWasDown = false;
+    bool infrastructurePageDownWasDown = false;
+    // Live placement readout shared with the Procedurals dock panel.
+    std::string infrastructureLastAction;
+    std::string infrastructurePlacementError;
+    scene::ObjectId infrastructureLastEdge{};
+    u64 infrastructureBuiltEdges{0U};
+    f64 infrastructurePreviewLengthMeters{0.0};
+    bool infrastructurePreviewSnapped{false};
+    bool infrastructureHoverValid{false};
+    // Revision-fenced node snap cache: never scan a large network on each
+    // mouse-motion event. The source scene remains the only authority.
+    u64 infrastructureSnapCacheRevision{~u64{0}};
+    paths::NetworkId infrastructureSnapCacheNetwork{};
+    frames::FrameId infrastructureSnapCacheFrame{};
+    std::vector<std::pair<scene::ObjectId,math::Double3>>
+        infrastructureSnapCache;
+    bool pathDebugVisualization = false;
     std::optional<orbit::paths::NetworkId>
         activePathNetwork;
     std::optional<orbit::scene::ObjectId>
         lastPlacedPathNode;
+    // Curve-mode staged interaction: start node -> outgoing tangent -> end node.
+    // The direction click is transient and never creates authored geometry.
+    std::optional<math::Double3> infrastructureCurveDirectionPoint;
+    scene::ObjectId infrastructureCurveDirectionNode{};
+    void ResetInfrastructureChain() noexcept
+    {
+        lastPlacedPathNode.reset();
+        infrastructureCurveDirectionPoint.reset();
+        infrastructureCurveDirectionNode = {};
+    }
     orbit::f64 viewportNavigationSpeedScale = 1.0;
     orbit::f64 viewportFrameDeltaSeconds = 0.0;
     orbit::platform::MouseDelta viewportFrameMouseDelta{};
     bool viewportRightGestureActive = false;
+    bool fullscreenToggleRequested = false;   // set by the viewport toolbar button; the frame loop animates it
+    bool cloudSplitGrabbed = false;
+    // Hold left mouse over the viewport to marquee-select spatial objects.
+    // A click below the movement threshold retains existing click behavior.
+    bool boxSelectHeld = false;
+    bool boxSelectDragging = false;
+    math::Float2 boxSelectStart{};
+    math::Float2 boxSelectCurrent{};
+    bool boxSelectAdditive = false;
+    std::vector<scene::ObjectId> boxSelectBase;   // the cloud split divider is being dragged
     bool viewportRightGestureDragged = false;
     orbit::i32 viewportRightGestureDistance = 0;
     bool viewportHomeWasDown = false;

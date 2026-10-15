@@ -158,6 +158,7 @@ struct ResolvedStudioDirectLight
     math::Float3 directionBody{
         0.55F, 0.72F, -0.48F};
     f32 irradianceScale{0.0F};
+    f32 sunAngularRadiusRadians{0.0F};
     std::optional<
         world_model::DirectBodyLighting>
         direct;
@@ -375,5 +376,6 @@ struct StudioLightingPassContext
     f64 nearFieldWaterWeight;
     const std::optional<world_model::ResolvedOceanBody>& resolvedOceanForView;
     f32 nearFieldSeaLevelMeters;
+    std::shared_ptr<rhi::Buffer> terrainSunShadow;
 };
 } // namespace orbit::studio_ui

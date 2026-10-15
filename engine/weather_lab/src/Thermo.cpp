@@ -12,6 +12,13 @@ float SaturationMixingRatio(const float pressure, const float temperature)
     return 0.622F * es / std::max(pressure - es, 1.0F);
 }
 
+float SaturationMixingRatioIce(const float pressure, const float temperature)
+{
+    const float es = 611.2F * std::exp(
+        21.875F * (temperature - 273.15F) / (temperature - 7.66F));
+    return 0.622F * es / std::max(pressure - es, 1.0F);
+}
+
 namespace
 {
 struct Profile

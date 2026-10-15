@@ -6,18 +6,21 @@
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/editor_session/WorldDocumentsModel.hpp>
 #include <orbit/studio_session/SimulationClock.hpp>
+#include <orbit/studio_session/CorridorConstructionRegistry.hpp>
 #include <orbit/studio_session/StudioTerrainPerformanceDiagnostics.hpp>
 #include <orbit/studio_session/StudioTerrainBakeController.hpp>
 #include <orbit/studio_session/StudioTerrainPhysicalPageService.hpp>
 #include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
+#include <orbit/studio_session/StudioRoadJunctionPipeline.hpp>
 #include <orbit/studio_session/UniverseBoundRoutePlanner.hpp>
 #include <orbit/studio_session/ViewportTargetRegistry.hpp>
 #include <orbit/studio_session/WorldBoundPathNetwork.hpp>
 #include <orbit/terrain_debug/TerrainDebugLivePages.hpp>
 
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -81,11 +84,24 @@ public:
     PathProducts() noexcept;
     [[nodiscard]] const UniverseBoundPathCache&
     PathProducts() const noexcept;
+    [[nodiscard]] const StudioRoadJunctionPipeline& RoadJunctions() const noexcept;
+    [[nodiscard]] StudioRoadJunctionPipeline& RoadJunctions() noexcept;
+    [[nodiscard]] const path_geometry::RoadVehicleRuntimeWorld&
+    Vehicles() const noexcept;
+
 
     [[nodiscard]] terrain_debug::TerrainDebugLivePages&
     TerrainDebugPages() noexcept;
     [[nodiscard]] const terrain_debug::TerrainDebugLivePages&
     TerrainDebugPages() const noexcept;
+
+    // Select a bounded sparse set of authored construction pages for the
+    // viewport GPU compositor and asynchronous physical residency.
+    [[nodiscard]] std::vector<terrain::PhysicalTerrainPageAddress>
+    ConstructionPhysicalPages(universe::BodyId body,
+        std::size_t maximumPages = 8U,
+        const math::Double3* observerDirection = nullptr,
+        std::string_view viewportId = {}) const;
 
     [[nodiscard]] StudioTerrainPhysicalPageService&
     TerrainPhysicalPages() noexcept;
@@ -109,6 +125,23 @@ public:
     // drains them into the production rebuild scheduler.
     void QueueTerrainInvalidation(
         const terrain_dependency::TerrainInvalidationRequest& request);
+
+    // Explicit physical-page bridge for infrastructure construction. The caller
+    // must project from the owning planetary body before calling this method.
+    // One radius-zero authoring request per unique page; never global.
+    // Returns the number of newly queued requests.
+    // Resolve a derived corridor from its authored frame into an explicitly
+    // selected body's rotating frame. Rejects missing/ambiguous body bindings,
+    // excessive spans, and unavailable terrain runtime pages.
+    [[nodiscard]] std::size_t QueueInfrastructureCorridorTerrain(
+        const path_geometry::PathDerivedProduct& product,
+        universe::BodyId body,
+        f64 influenceRadiusMeters,
+        std::size_t maximumPages = 4096);
+
+    [[nodiscard]] std::size_t QueueInfrastructureTerrainPages(
+        std::span<const terrain::PhysicalTerrainPageAddress> pages,
+        std::size_t maximumPages = 4096);
 
     void QueueTerrainInvalidations(
         std::span<const terrain_dependency::TerrainInvalidationRequest> requests);
@@ -167,6 +200,17 @@ private:
     WorldBoundPathNetwork pathNetwork_;
     UniverseBoundRoutePlanner pathRouting_;
     UniverseBoundPathCache pathProducts_;
+    StudioRoadJunctionPipeline roadJunctionPipeline_;
+    path_geometry::RoadVehicleRuntimeWorld vehicleWorld_;
+    CorridorConstructionRegistry corridorConstruction_;
+    struct ConstructionSelection
+    {
+        universe::BodyId body{};
+        u64 worldGeneration{0U};
+        std::vector<terrain::PhysicalTerrainPageAddress> pages;
+    };
+    mutable std::map<std::string, ConstructionSelection>
+        constructionSelections_;
     terrain_debug::TerrainDebugLivePages terrainDebugPages_;
     StudioTerrainBakeController terrainBake_;
     StudioTerrainPhysicalPageService terrainPhysicalPages_;
@@ -179,6 +223,8 @@ private:
     u64 terrainDebugUniverseGeneration_{~u64{0}};
     // World generation the physical page service was last reconciled with.
     u64 terrainPagesWorldGeneration_{~u64{0}};
+    u64 infrastructureDiscoveryRevision_{~u64{0}};
+    u64 infrastructureDiscoveryWorldGeneration_{~u64{0}};
     editor_rpc::EditorSessionRpcHost rpc_;
 };
 } // namespace orbit::studio_session

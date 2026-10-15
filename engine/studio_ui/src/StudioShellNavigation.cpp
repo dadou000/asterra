@@ -89,6 +89,17 @@ void StudioExpansionShell::DrawCreationMenus(editor_ui::PanelContext& context, b
                     catch (const std::exception& e) { owner_->status_=e.what(); }
                 }});
         };
+        if (category == CreationCategory::Procedurals)
+        {
+            actions.push_back({
+                .label="Procedural Paths & Roads",
+                .enabled=true,
+                .invoke=[this, &context]
+                {
+                    owner_->OpenProceduralRoads();
+                    context.CloseCurrentPopup();
+                }});
+        }
         if (category == CreationCategory::Meshes)
         {
             builtin("Box",[this] { owner_->CreateVisibilityProxyAtViewport("studio.primary",true); });

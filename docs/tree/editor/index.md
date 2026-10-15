@@ -20,6 +20,7 @@ related = ["/rules/ui", "/rules/placement"]
 "terrain runtime bridge, rebuild scheduler, project browser, bezier handle drag" = "studio-session"
 "ImGui shell, panel extensions, DPI scale, previews" = "ui-toolkit"
 "issue reports, capturing a reproducible problem" = "reports"
+"debug tab, validation runs, test experiments, diagnostic panels, debugging location" = "/editor/studio-ui/debug-center"
 "button/shortcut/toolbar change" = "/rules/placement"
 "profiler, hitch capture, performance trace" = "/editor/profiler"
 "shading assets, shader contract" = "/rendering/shading"
@@ -31,3 +32,56 @@ Studio modules (all under `engine/`): `studio_ui` (panels, viewport renderer, re
 
 The authoring rule is: a UI element **requests**, a domain owner **executes**, and the same
 operation is reachable over RPC and MCP (`/editor/mcp-rpc`).
+
+
+## Explorer selection and hierarchy deletion (Harmony)
+
+The canonical scene Explorer lives in `apps/editor/src/StudioExplorerPanel.cpp`. Scene IDs use the shared `SelectionService`; a click selects one object, Ctrl+click toggles an object, and Shift+click selects a contiguous range in the currently visible tree/search order. Ctrl+Shift+click adds the range to the existing selection. Ctrl+A selects visible scene rows when Explorer has keyboard focus; Delete removes the selected scene subtrees, but never while a text field is active. The toolbar supports Select visible, Clear selection, Select parent, Select children and Select subtree; right-click on an already selected row preserves the existing multi-selection. The world root is protected.
+
+**Deletion is an atomic undoable domain operation, not a UI-specific tree hack.** `CommandService::DeleteObject` calls `DeleteObjects` and recursively deletes all descendants, even when they are nested arbitrarily deep. The command snapshots object records and explicit properties, collapses overlapping selected ancestors/descendants, erases children before parents, and restores parents before children on Undo using original stable IDs and property values. A failed validation leaves every object intact. A multi-selection uses exactly one undo entry. The low-level `ObjectStore::Erase` remains leaf-only; do not bypass the command service.
+
+**Validation:** `tests/ExplorerInspectorTests.cpp` checks overlapping selections, deletion/Undo/Redo, multiple siblings, property restoration and invalid-target atomicity. Source changes are committed; the Windows executable and native CTest remain to be verified.
+
+
+## Orbit updater status bubble (Harmony)
+
+The **single Studio top-bar updater chip** opens a non-modal detail popover; clicking the chip itself never downloads source or restarts the editor. It displays the tracked `origin/0.1.1-Harmony` branch, verified local and remote short commit IDs, remote-behind commit count, the last successful check time, and the current worker stage. A new-commit state is visually emphasized; active work shows an animated refresh glyph. The popup has separate actions:
+
+- **Check now:** `hot_reload::RequestGitHubCheck()`, exposed also as `studio.github_update_check`. This runs on the existing hot-iteration worker; no project checkpoint, checkout, compilation, or restart. The automatic check runs at startup and every five minutes.
+- **Update and restart:** The existing `RequestGitHubUpdate()` command, also used by **Shift+F5**, the Build menu, and `studio.github_update_start`. It checkpoints the project/world, fetches GitHub, checks fast-forward eligibility and dirty working files, skips rebuild/restart when zero new commits exist, and otherwise updates, builds, and stages the replacement Studio. The popover disables the action unless newer commits were verified.
+- **Retry build:** When Git has fast-forwarded successfully but building or activating the new executable failed, the worker retains `rebuildPending`. With zero new commits it may retry building without another merge; it must *not* incorrectly report that the currently running binary was updated.
+- **Open update log:** Navigates to the existing worker log via the platform file browser. Excessively long Git error output is capped in the status popover but retained in the log.
+
+The status RPC `studio.github_update_status` includes `pending_commits`, `rebuild_pending`, `local_commit`, `remote_commit`, and `last_checked_unix` in addition to the previous status fields. Verified check times reflect a successful Git comparison, not a failed or queued attempt. Git commands are non-interactive and time-bounded; failures leave the editor running. Check requests and updates never create competing Git/build workers.
+
+### Manual verification gate
+
+1. Launch Studio online: confirm automatic status check and recorded local/remote commit hashes. Open and close the chip popover; it must not queue an update.
+2. Press **Check now**: stage updates, then one of Up to date / Update available / Blocked / Failed. Verify the project is not saved or Studio restarted by this action.
+3. With no new commits, press **Shift+F5**: confirm an informational *Up to date* notification, and no rebuild/restart. The popup install action should be disabled.
+4. With newer commits, confirm count, update action, successful fast-forward, rebuild and handoff. Check no duplicate watcher-triggered build is launched.
+5. Simulate offline GitHub, wrong branch, divergent history, and dirty tracked worktree; verify clear status/log and unchanged source where applicable.
+6. Simulate build and handoff failure **after** a successful fetch/merge; verify the source-updated state exposes **Retry build**, rather than masquerading as an up-to-date running executable.
+7. With a delayed Git command, ensure the status worker times out instead of stalling indefinitely; the editor viewport and UI must remain responsive.
+
+**Verification status:** Source changes and manual gate documented; Windows compilation, native execution, and automated UI checks have not been run in this session.
+
+
+## Box selection in Explorer and viewport (Harmony)
+
+**Explorer:** Hold left mouse and drag from a scene tree/search row or blank space to draw a screen-space selection rectangle; rows intersecting it become selected live. A drag shorter than 6 screen pixels remains a normal click. Ctrl+drag adds to the prior selection (selection snapshot captured when pressed); otherwise the marquee replaces the prior selection. **Alt+drag** a tree row to reparent it with the existing drag-and-drop payload. Shift+click still selects a visible range, Ctrl+click toggles an individual object. Asset rows are not scene-object marquee targets.
+
+**Viewport:** Without an active construction tool or gizmo, hold left mouse on the actual rendered image and drag a rectangle. Crossing a 6-pixel threshold activates selection; the rectangle is drawn over the image and scene selection updates live. The selected candidates are **rendered authored primitives, static meshes, local light gizmos and visibility proxies under the active body's scene hierarchy**. Their scene-space centers (and approximate bounding spheres for sized objects) are transformed through the canonical frame graph into the active camera frame and projected using `render_view::ProjectToViewport`. This is *not* GPU ID/depth-buffer or occlusion picking: occluded candidates can be included, and currently there is no marquee projection for road edges, terrain layers or every other semantic type. Ctrl/Shift+drag adds to the prior selection; a short click retains normal body selection. Active road placement, the cloud split divider, viewport gizmos, and right-mouse navigation take precedence over box selection. Letterboxed viewports use the actual image item rectangle, not the enclosing panel dimensions.
+
+**Shared UI helpers:** `PanelContext::PanelMarqueeInput`, `LastItemScreenRect`, and `DrawPanelMarquee` are presentation/input only; they do not mutate authored data. Explorer/viewport resolve the candidate ObjectIds and update the same `SelectionService`, which also drives Properties and Explorer highlighting.
+
+### Runtime validation checklist
+
+1. Drag left-to-right and right-to-left across several Explorer rows (including nested open subtrees and filtered search results). Verify the translucent rectangle and live highlights, Ctrl-add, normal Ctrl-click/Shift-click, and Alt+drag reparenting.
+2. Drag outside the Explorer window and release. Ensure selection completes and no drag state remains stuck. Switch worlds while a selection existed; ensure no stale ObjectIds carry over.
+3. Select multiple nearby primitives/lights/meshes in the viewport from both drag directions, with native and scaled/letterboxed image sizes. Verify the visible border tracks the cursor and selection matches the scene hierarchy.
+4. Repeat with Ctrl additive selection and a small click (under 6 px) to verify that ordinary single-click behavior is preserved.
+5. Enter Roads/Paths construction, drag a cloud split divider, use a transform gizmo, and navigate with RMB. These gestures must not start an unintended marquee.
+6. The viewport marquee currently uses approximate bounds, not occlusion-aware picking. Explicitly verify its limitations rather than claiming all semantic object types or hidden-object filtering are supported.
+
+**Validation status:** Source committed to Harmony; Windows native build and manual pointer-interaction tests have not been executed in this session.

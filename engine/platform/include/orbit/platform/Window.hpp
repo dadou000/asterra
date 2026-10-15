@@ -52,6 +52,8 @@ enum class Key : u8
     F2,
     F3,
     F4,
+    F5,
+    F11,
     ArrowLeft,
     ArrowRight,
     ArrowUp,
@@ -108,6 +110,9 @@ public:
     // Wake a throttled application loop from an external activity source
     // such as an RPC request.
     virtual void WakeForActivity() = 0;
+
+    // Whether this window is currently foreground (not merely hovered).
+    [[nodiscard]] virtual bool IsForeground() const noexcept = 0;
 
     virtual void SetTitle(std::string_view title) = 0;
 

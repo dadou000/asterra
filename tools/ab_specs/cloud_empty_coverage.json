@@ -1,0 +1,30 @@
+{
+  "_comment": "Empty-space skipping: the leap treats a column as empty only when its coverage is <= CLOUD_EMPTY_COVERAGE (shipped 1e-4 = exactly empty). Empty sky pixels burn most of the step budget (see cloud_stepvis.json); a realistic threshold lets them leap. Must keep the image (changed-pixel count) and cut the Clouds pass.",
+  "mode": "in_process",
+  "rounds": 2,
+  "world": "Worlds/Main.orbitworld",
+  "body": "Earth",
+  "baseline": "shipped",
+  "gpu_passes": ["Clouds"],
+  "gpu_window_ms": 1500,
+  "variants": {
+    "shipped":    {"env": {"ORBIT_CLOUD_DEFINES": ""}},
+    "cov02":      {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.02"}},
+    "cov05":      {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.05"}},
+    "cov10":      {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.10"}},
+    "cov05_skip8": {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.05;CLOUD_EMPTY_SKIP=8.0"}}
+  },
+  "scenes": [
+    {"name": "sky_cumulus", "time_microseconds": 18070405751, "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 42, "yaw_deg": 0, "pitch_deg": 20}},
+    {"name": "horizon_bank", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 42, "yaw_deg": 0, "pitch_deg": 3}},
+    {"name": "cumulus_far", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 1200, "yaw_deg": 0, "pitch_deg": 8}},
+    {"name": "cumulus_near", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.05157, "lon_deg": 0.03666, "alt_m": 2600, "yaw_deg": 35.3, "pitch_deg": 21.74}},
+    {"name": "orbit_deck", "local_time_seconds": 43200,
+     "pose": {"kind": "approach", "target": {"lat_deg": 5.3045, "lon_deg": 0.0},
+              "origin": {"lat_deg": 0, "lon_deg": 0, "alt_km": 1590.95}, "alt_km": 1500}}
+  ]
+}

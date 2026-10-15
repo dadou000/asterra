@@ -1,0 +1,82 @@
+{
+  "_comment": "Spec scenario 'extreme timewarp': an absolute far-future time must give the same weather in two separate launches (deterministic) without a stall (no backlog). One variant plus its repeat launch.",
+  "world": "Worlds/Main.orbitworld",
+  "body": "Earth",
+  "baseline": "a",
+  "controls": 1,
+  "variants": {
+    "a": {
+      "env": {}
+    }
+  },
+  "scenes": [
+    {
+      "name": "t_plus_1_day",
+      "time_microseconds": 104470405751,
+      "pose": {
+        "kind": "approach",
+        "target": {
+          "lat_deg": 5.3045,
+          "lon_deg": 0.0
+        },
+        "origin": {
+          "lat_deg": 0,
+          "lon_deg": 0,
+          "alt_km": 1590.95
+        },
+        "alt_km": 1500
+      }
+    },
+    {
+      "name": "t_plus_30_days",
+      "time_microseconds": 2610070405751,
+      "pose": {
+        "kind": "approach",
+        "target": {
+          "lat_deg": 5.3045,
+          "lon_deg": 0.0
+        },
+        "origin": {
+          "lat_deg": 0,
+          "lon_deg": 0,
+          "alt_km": 1590.95
+        },
+        "alt_km": 1500
+      }
+    },
+    {
+      "name": "t_plus_1_year",
+      "time_microseconds": 31554070405751,
+      "pose": {
+        "kind": "approach",
+        "target": {
+          "lat_deg": 5.3045,
+          "lon_deg": 0.0
+        },
+        "origin": {
+          "lat_deg": 0,
+          "lon_deg": 0,
+          "alt_km": 1590.95
+        },
+        "alt_km": 1500
+      }
+    },
+    {
+      "name": "t_plus_10_years",
+      "time_microseconds": 315378070405751,
+      "pose": {
+        "kind": "approach",
+        "target": {
+          "lat_deg": 5.3045,
+          "lon_deg": 0.0
+        },
+        "origin": {
+          "lat_deg": 0,
+          "lon_deg": 0,
+          "alt_km": 1590.95
+        },
+        "alt_km": 1500
+      }
+    }
+  ]
+}

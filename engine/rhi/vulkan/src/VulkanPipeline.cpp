@@ -3,6 +3,7 @@
 
 #include <array>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace orbit::rhi::vulkan::detail
@@ -537,7 +538,8 @@ std::unique_ptr<GraphicsPipeline> VulkanDevice::CreateGraphicsPipeline(
         }
 
         throw std::runtime_error(
-            "Orbit failed to create a Vulkan graphics pipeline.");
+            "Orbit failed to create a Vulkan graphics pipeline (VkResult " +
+            std::to_string(static_cast<int>(result)) + ").");
     }
 
     return std::make_unique<VulkanGraphicsPipeline>(

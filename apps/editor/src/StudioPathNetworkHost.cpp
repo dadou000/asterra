@@ -9,6 +9,13 @@
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_geometry/PathDerived.hpp>
+#include <orbit/path_geometry/RoadCatalog.hpp>
+#include <orbit/path_geometry/CorridorEngineering.hpp>
+#include <orbit/path_geometry/RailCantDesign.hpp>
+#include <orbit/path_geometry/TransportJunctions.hpp>
+#include <orbit/path_geometry/JunctionConflicts.hpp>
+#include <orbit/path_geometry/JunctionSignalPhases.hpp>
+#include <orbit/path_geometry/RoadJunctionConstruction.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
 #include <orbit/path_routing/RoutePlanner.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
@@ -16,6 +23,7 @@
 #include <orbit/universe/ReferenceSurface.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <stdexcept>
 #include <string>
@@ -410,6 +418,23 @@ void StudioPathNetworkHost::RefreshDerivedPaths()
         }
     }
 
+    if(observedJunctionPublicationRevision_!=
+        studioSession_.RoadJunctions().Revision())
+        requiresRefresh=true;
+    // The StudioSession infrastructure cache owns the actual swept
+    // construction geometry. Detect its later asynchronous publication even
+    // when scene/content revisions did not change this particular frame.
+    for (const auto* built : studioSession_.PathProducts().Products())
+    {
+        const auto existing = derivedPaths_.find(built->edge);
+        if (existing == derivedPaths_.end() ||
+            existing->second.buildSignature != built->buildSignature)
+        {
+            requiresRefresh = true;
+            break;
+        }
+    }
+
     if (!requiresRefresh)
     {
         return;
@@ -587,16 +612,20 @@ void StudioPathNetworkHost::RefreshDerivedPaths()
                         : failure);
             }
 
-            auto product =
-                orbit::path_geometry::
-                    BuildPathDerived(
-                        *centerline,
-                        resolvedProfile.
-                            profile,
-                        {
-                            .sampleSpacingMeters =
-                                sampleSpacing
-                        });
+            // Always prefer the committed physical construction product
+            // when one exists. This is the identical geometry used by the
+            // world terrain/collision consumers, rather than a second
+            // generic ribbon with inconsistent banks or railheads.
+            const auto* constructed =
+                studioSession_.PathProducts().Find(edgeId);
+            const auto* replacement =
+                studioSession_.RoadJunctions().FindEdge(edgeId);
+            auto product = replacement != nullptr ?
+                replacement->product :
+                constructed != nullptr ? *constructed :
+                orbit::path_geometry::BuildPathDerived(
+                    *centerline, resolvedProfile.profile,
+                    {.sampleSpacingMeters = sampleSpacing});
 
             const auto existing =
                 derivedPaths_.find(
@@ -690,6 +719,8 @@ void StudioPathNetworkHost::RefreshDerivedPaths()
         objects().Revision();
     derivedContentRevision_ =
         content_.Revision();
+    observedJunctionPublicationRevision_=
+        studioSession_.RoadJunctions().Revision();
 }
 
 void StudioPathNetworkHost::AttachRpc()
@@ -1110,5 +1141,406 @@ void StudioPathNetworkHost::AttachRpc()
                     });
             }
     });
+
+    // Read-only engineering RPC consumes the same revisioned derived
+    // geometry used by Studio's path viewport and path.geometry RPC.
+    rpcHost_.Dispatcher().Register(
+        {.name = "path.engineering",
+         .description = "Road/rail grade, curvature, lateral acceleration and suggested banking for a derived path edge. Params: edge (UUID), optional design_speed_mps.",
+         .mutating = false},
+        [this](const orbit::rpc::Value& params) -> orbit::rpc::Value
+        {
+            const auto* id = params.Find("edge");
+            if (!id || !id->IsString())
+                throw orbit::rpc::Error(-32602, "edge must be a UUID string");
+            const auto edge = orbit::scene::ObjectId::Parse(id->AsString());
+            if (!edge)
+                throw orbit::rpc::Error(-32602, "Invalid edge UUID");
+            const auto found = derivedPaths_.find(*edge);
+            if (found == derivedPaths_.end())
+                return orbit::rpc::Value::Object{
+                    {"ready", false}, {"edge", id->AsString()}};
+            const auto authored = studioSession_.PathNetwork().Service().FindEdge(*edge);
+            if (!authored)
+                return orbit::rpc::Value::Object{
+                    {"ready", false}, {"edge", id->AsString()}};
+            const auto resolved = ResolveRoutingProfile(
+                *authored, studioSession_.PathNetwork().Service(),
+                content_, project_.RootDirectory());
+            // Construction catalog owns the native built-in engineering
+            // classification, even if its network has no external
+            // .orbitpathprofile asset attached.
+            auto designProfile = resolved.profile;
+            const bool isRail =
+                authored->infrastructureCatalogId == "ballasted-rail";
+            const auto* roadPreset=orbit::path_geometry::FindRoadCatalog(
+                authored->infrastructureCatalogId);
+            const bool isRoad=roadPreset!=nullptr;
+            if (isRail || isRoad)
+            {
+                designProfile.kind = isRail ?
+                    orbit::paths::PathProfileKind::Rail :
+                    orbit::paths::PathProfileKind::Road;
+                designProfile.maximumGrade = isRail ? 0.035 : 0.10;
+                designProfile.minimumRadiusMeters = isRail ? 150.0 : 0.0;
+                if(roadPreset)
+                {
+                    designProfile.widthMeters=roadPreset->pavedWidthMeters;
+                    designProfile.lanes=roadPreset->laneCount;
+                }
+            }
+            orbit::path_geometry::CorridorEngineeringRules rules;
+            if (const auto* speed = params.Find("design_speed_mps"))
+            {
+                if (!speed->IsNumber())
+                    throw orbit::rpc::Error(-32602, "design_speed_mps must be numeric");
+                rules.designSpeedMetersPerSecond = speed->AsNumber();
+            }
+            rules = orbit::path_geometry::EngineeringRulesForProfile(
+                designProfile, rules);
+            const auto report = orbit::path_geometry::AnalyzeCorridorEngineering(
+                found->second.stations, rules);
+            orbit::rpc::Value::Array warnings;
+            for (const auto& finding : report.findings)
+            {
+                // Include the exact derived station coordinate so clients
+                // never need to reconstruct a location from the distance.
+                const auto& stations = found->second.stations;
+                const auto closest = std::min_element(stations.begin(), stations.end(),
+                    [&finding](const auto& lhs, const auto& rhs) {
+                        return std::abs(lhs.stationMeters - finding.stationMeters) <
+                               std::abs(rhs.stationMeters - finding.stationMeters);
+                    });
+                orbit::rpc::Value::Array position;
+                if (closest != stations.end())
+                    position = {closest->position.x, closest->position.y, closest->position.z};
+                warnings.emplace_back(orbit::rpc::Value::Object{
+                    {"position_frame", found->second.frame.ToString()},
+                    {"position_local_meters", std::move(position)},
+                    {"kind", static_cast<orbit::i64>(finding.issue)},
+                    {"station_meters", finding.stationMeters},
+                    {"measured", finding.measured},
+                    {"permitted", finding.permitted},
+                    {"message", finding.explanation}
+                });
+            }
+            const auto suggested =
+                orbit::path_geometry::SuggestCorridorBankProfile(report, rules);
+            orbit::rpc::Value::Array banks;
+            for (const double angle : suggested)
+                banks.emplace_back(angle);
+            orbit::rpc::Value::Object output{
+                {"ready", true}, {"valid", report.Valid()},
+                {"edge", id->AsString()},
+                {"signature", static_cast<orbit::i64>(
+                    found->second.buildSignature & 0x7fffffffffffffffULL)},
+                {"station_count", static_cast<orbit::i64>(report.stations.size())},
+                {"construction_ready",
+                    studioSession_.PathProducts().Find(*edge) != nullptr},
+                {"construction_dirty",
+                    studioSession_.PathProducts().IsDirty(*edge)},
+                {"warnings", std::move(warnings)},
+                {"suggested_bank_radians", std::move(banks)}
+            };
+            if (isRail)
+            {
+                orbit::path_geometry::RailCantLimits limits;
+                limits.designSpeedMetersPerSecond =
+                    rules.designSpeedMetersPerSecond;
+                limits.minimumOperatingSpeedMetersPerSecond =
+                    rules.designSpeedMetersPerSecond * 0.5;
+                limits.maximumOperatingSpeedMetersPerSecond =
+                    rules.designSpeedMetersPerSecond;
+                const auto cant =
+                    orbit::path_geometry::DesignRailCant(report, limits);
+                orbit::rpc::Value::Array values;
+                orbit::rpc::Value::Array railWarnings;
+                for (const auto& station : cant.stations)
+                    values.emplace_back(station.suggestedCantMeters);
+                for (const auto& finding : cant.findings)
+                    railWarnings.emplace_back(orbit::rpc::Value::Object{
+                        {"kind", static_cast<orbit::i64>(finding.issue)},
+                        {"station_meters", finding.stationMeters},
+                        {"measured_meters", finding.measuredMeters},
+                        {"permitted_meters", finding.permittedMeters}
+                    });
+                output.emplace("rail_cant_meters", std::move(values));
+                output.emplace("rail_cant_warnings", std::move(railWarnings));
+            }
+            return orbit::rpc::Value(std::move(output));
+        });
+
+    // The Studio panel, CLI and agents all use the same transactional path
+    // mutation, preserving the original first edge's stable ID and shape.
+    rpcHost_.Dispatcher().Register(
+        {.name="path.edge_split",
+         .description="Split a direct or Bezier FramePoint infrastructure edge without altering its curve. Params: edge (UUID), fraction (strictly 0..1), optional node_name.",
+         .mutating=true},
+        [this](const orbit::rpc::Value& params)->orbit::rpc::Value
+        {
+            const auto* id=params.Find("edge");
+            const auto* fraction=params.Find("fraction");
+            if(!id || !id->IsString() || !fraction || !fraction->IsNumber())
+                throw orbit::rpc::Error(-32602,
+                    "edge must be UUID and fraction must be numeric.");
+            const auto edge=orbit::scene::ObjectId::Parse(id->AsString());
+            if(!edge)throw orbit::rpc::Error(-32602,"Invalid edge UUID");
+            if(!worldSession_.HasWorld())
+                throw orbit::rpc::Error(-32001,"Open a world first.");
+            std::string name="Split Junction";
+            if(const auto* n=params.Find("node_name"))
+            {
+                if(!n->IsString())throw orbit::rpc::Error(-32602,
+                    "node_name must be a string");
+                name=n->AsString();
+            }
+            try
+            {
+                const auto result=studioSession_.PathNetwork().Service().SplitEdge(
+                    *edge,fraction->AsNumber(),std::move(name));
+                // Existing semantic revision invalidation handles both new
+                // and shortened edges through the normal StudioSession tick.
+                return orbit::rpc::Value::Object{
+                    {"original_edge",result.firstEdge.id.ToString()},
+                    {"first_edge",result.firstEdge.id.ToString()},
+                    {"junction_node",result.junctionNode.id.ToString()},
+                    {"second_edge",result.secondEdge.id.ToString()},
+                    {"fraction",fraction->AsNumber()}
+                };
+            }
+            catch(const std::invalid_argument& error)
+            {
+                throw orbit::rpc::Error(-32602,error.what());
+            }
+        });
+
+    // Bounded, on-demand junction preview. It consumes exactly the same
+    // revisioned path products as path.geometry, not a second editable graph.
+    rpcHost_.Dispatcher().Register(
+        {.name = "path.junction_preview",
+         .description = "Preview a semantic node's road turn connectors, railway branch candidates, and road footprint without mutating geometry. Params: node (UUID), optional include_samples (bool).",
+         .mutating = false},
+        [this](const orbit::rpc::Value& params) -> orbit::rpc::Value
+        {
+            const auto* requested=params.Find("node");
+            if (!requested || !requested->IsString())
+                throw orbit::rpc::Error(-32602,"node must be a UUID string");
+            const auto node=orbit::scene::ObjectId::Parse(requested->AsString());
+            if (!node)throw orbit::rpc::Error(-32602,"Invalid node UUID");
+            bool includeConstruction=false;
+            if(const auto* value=params.Find("include_construction"))
+            {
+                if(!value->IsBool())
+                    throw orbit::rpc::Error(-32602,
+                        "include_construction must be a boolean");
+                includeConstruction=value->AsBool();
+            }
+            bool includeSamples=false;
+            if (const auto* value=params.Find("include_samples"))
+            {
+                if (!value->IsBool())
+                    throw orbit::rpc::Error(-32602,"include_samples must be a boolean");
+                includeSamples=value->AsBool();
+            }
+            if (!worldSession_.HasWorld())
+                return orbit::rpc::Value::Object{
+                    {"ready",false},{"reason","No world open"}};
+            auto& service=studioSession_.PathNetwork().Service();
+            const auto semantic=service.FindNode(*node);
+            if (!semantic)
+                return orbit::rpc::Value::Object{
+                    {"ready",false},{"reason","Node not found"},
+                    {"node",node->ToString()}};
+            bool constructionSourcesDirty=false;
+            std::vector<orbit::path_geometry::JunctionApproach> approaches;
+            const auto edgeIds=FindPathEdges(objects(),service);
+            for (const auto id:edgeIds)
+            {
+                const auto edge=service.FindEdge(id);
+                if (!edge || (edge->startNode!=*node && edge->endNode!=*node))
+                    continue;
+                const bool road=orbit::path_geometry::FindRoadCatalog(
+                    edge->infrastructureCatalogId)!=nullptr;
+                const bool rail=edge->infrastructureCatalogId=="ballasted-rail";
+                if (!road && !rail)continue;
+                if(studioSession_.PathProducts().IsDirty(id))
+                    constructionSourcesDirty=true;
+                const auto* geometry=studioSession_.PathProducts().Find(id);
+                if (!geometry)
+                {
+                    const auto it=derivedPaths_.find(id);
+                    if (it!=derivedPaths_.end())geometry=&it->second;
+                }
+                approaches.push_back({
+                    .edge=id,
+                    .frame=geometry?geometry->frame:orbit::frames::FrameId{},
+                    .mode=road?orbit::path_geometry::TransportMode::Road:
+                               orbit::path_geometry::TransportMode::Rail,
+                    .atStart=edge->startNode==*node,
+                    // The current authored edge has no directional restriction.
+                    // Never infer one-way behaviour from lane count.
+                    .bidirectional=true,
+                    .geometry=geometry
+                });
+                if (approaches.size()>16U)break;
+            }
+            const auto plan=orbit::path_geometry::BuildTransportJunction(
+                *node,approaches);
+            orbit::path_geometry::RoadJunctionConstruction construction;
+            orbit::path_geometry::JunctionPlan navigationPlan=plan;
+            if(includeConstruction && !constructionSourcesDirty)
+            {
+                construction=orbit::path_geometry::BuildRoadJunctionConstruction(
+                    plan,approaches);
+                if(construction.Ready())
+                    navigationPlan.movements=construction.laneConnectors;
+            }
+            const auto conflictReport =
+                orbit::path_geometry::AnalyzeJunctionConflicts(navigationPlan);
+            const auto phasePlan =
+                orbit::path_geometry::SuggestRoadJunctionPhases(
+                    navigationPlan,conflictReport);
+            orbit::rpc::Value::Array advisoryPhases;
+            for(const auto& phase:phasePlan.phases)
+            {
+                orbit::rpc::Value::Array indices;
+                for(const auto move:phase.movementIndices)
+                    indices.emplace_back(static_cast<orbit::i64>(move));
+                advisoryPhases.emplace_back(std::move(indices));
+            }
+            orbit::rpc::Value::Array findings, movements;
+            for(const auto& finding:plan.findings)
+                findings.emplace_back(orbit::rpc::Value::Object{
+                    {"kind",static_cast<orbit::i64>(finding.issue)},
+                    {"edge",finding.edge.ToString()},
+                    {"message",finding.explanation}
+                });
+            for(const auto& move:navigationPlan.movements)
+            {
+                orbit::rpc::Value::Object record{
+                    {"from_edge",move.incomingEdge.ToString()},
+                    {"to_edge",move.outgoingEdge.ToString()},
+                    {"from_lane",static_cast<orbit::i64>(move.incomingLane)},
+                    {"to_lane",static_cast<orbit::i64>(move.outgoingLane)},
+                    {"mode",move.mode==orbit::path_geometry::TransportMode::Rail?
+                        "rail":"road"},
+                    {"length_meters",move.lengthMeters}
+                };
+                if(includeSamples)
+                {
+                    orbit::rpc::Value::Array samples;
+                    for(const auto& p:move.points)
+                        samples.emplace_back(orbit::rpc::Value::Array{p.x,p.y,p.z});
+                    record.emplace("points_frame_local_meters",std::move(samples));
+                }
+                movements.emplace_back(std::move(record));
+            }
+            orbit::rpc::Value::Array footprint;
+            if(includeSamples)
+                for(const auto& vertex:plan.roadFootprint.vertices)
+                    footprint.emplace_back(orbit::rpc::Value::Array{
+                        vertex.position.x,vertex.position.y,vertex.position.z});
+            const bool hasRail=std::any_of(approaches.begin(),approaches.end(),
+                [](const auto& a){return a.mode==orbit::path_geometry::TransportMode::Rail;});
+            orbit::rpc::Value::Array constructionFindings;
+            orbit::rpc::Value::Array constructionEdges;
+            orbit::rpc::Value::Array constructionMesh;
+            orbit::rpc::Value::Array constructionIndices;
+            if(includeConstruction)
+            {
+                if(constructionSourcesDirty)
+                    constructionFindings.emplace_back(orbit::rpc::Value::Object{
+                        {"edge",""},
+                        {"kind",static_cast<orbit::i64>(
+                            orbit::path_geometry::RoadJunctionBuildIssue::MissingCorridor)},
+                        {"message","Input corridor generation is dirty; wait for current products before construction."}
+                    });
+                for(const auto& finding:construction.findings)
+                    constructionFindings.emplace_back(orbit::rpc::Value::Object{
+                        {"edge",finding.edge.ToString()},
+                        {"kind",static_cast<orbit::i64>(finding.issue)},
+                        {"message",finding.message}
+                    });
+                if(construction.Ready())
+                {
+                    for(const auto& edge:construction.edges)
+                        constructionEdges.emplace_back(orbit::rpc::Value::Object{
+                            {"edge",edge.edge.ToString()},
+                            {"cut_station_index",
+                                static_cast<orbit::i64>(edge.sourceCutStation)},
+                            {"cut_station_meters",edge.cutStationMeters},
+                            {"retained_vertices",static_cast<orbit::i64>(
+                                edge.retainedMesh.vertices.size())},
+                            {"retained_collision_triangles",static_cast<orbit::i64>(
+                                edge.collision.size())}
+                        });
+                    if(includeSamples)
+                    {
+                        for(const auto& vertex:construction.pavement.vertices)
+                            constructionMesh.emplace_back(
+                                orbit::rpc::Value::Array{
+                                    vertex.position.x,vertex.position.y,
+                                    vertex.position.z});
+                        for(const auto index:construction.pavement.indices)
+                            constructionIndices.emplace_back(
+                                static_cast<orbit::i64>(index));
+                    }
+                }
+            }
+            return orbit::rpc::Value::Object{
+                {"ready",true},{"valid",plan.Valid()},
+                {"node",node->ToString()},
+                {"frame",plan.frame.ToString()},
+                {"approaches",static_cast<orbit::i64>(approaches.size())},
+                {"valid_edges",static_cast<orbit::i64>(plan.validEdges.size())},
+                {"movement_count",static_cast<orbit::i64>(navigationPlan.movements.size())},
+                {"construction_requested",includeConstruction},
+                {"construction_ready",
+                    includeConstruction && !constructionSourcesDirty &&
+                        construction.Ready()},
+                {"construction_sources_dirty",constructionSourcesDirty},
+                {"construction_dependency_signature",static_cast<orbit::i64>(
+                    construction.dependencySignature & 0x7fffffffffffffffULL)},
+                {"construction_committed_to_world",false},
+                {"construction_published_cpu",
+                    studioSession_.RoadJunctions().CurrentContact(
+                        *node,studioSession_.PathProducts())!=nullptr},
+                {"construction_contact_scene_active",
+                    studioSession_.RoadJunctions().CurrentContact(
+                        *node,studioSession_.PathProducts())!=nullptr},
+                {"construction_physics_world_committed",false},
+                {"construction_publication_revision",
+                    static_cast<orbit::i64>(
+                        studioSession_.RoadJunctions().Revision())},
+                {"construction_findings",std::move(constructionFindings)},
+                {"construction_trimmed_edges",std::move(constructionEdges)},
+                {"construction_patch_vertices",static_cast<orbit::i64>(
+                    construction.pavement.vertices.size())},
+                {"construction_patch_collision_triangles",static_cast<orbit::i64>(
+                    construction.pavementCollision.size())},
+                {"construction_patch_frame_local_vertices",std::move(constructionMesh)},
+                {"construction_patch_triangle_indices",std::move(constructionIndices)},
+                {"construction_lane_connectors",static_cast<orbit::i64>(
+                    construction.laneConnectors.size())},
+                {"conflict_count",static_cast<orbit::i64>(
+                    conflictReport.conflicts.size())},
+                {"conflict_analysis_truncated",conflictReport.truncated},
+                {"conflict_analysis_valid",conflictReport.valid},
+                {"advisory_road_phase_count",
+                    static_cast<orbit::i64>(phasePlan.phases.size())},
+                {"advisory_road_phase_valid",phasePlan.valid},
+                {"advisory_phase_requires_rail_interlocking",
+                    phasePlan.requiresRailInterlocking},
+                {"advisory_road_phases",std::move(advisoryPhases)},
+                {"road_footprint_vertices",
+                    static_cast<orbit::i64>(plan.roadFootprint.vertices.size())},
+                {"road_footprint_triangles",
+                    static_cast<orbit::i64>(plan.roadFootprint.indices.size()/3U)},
+                {"rail_requires_explicit_turnout",hasRail},
+                {"movements",std::move(movements)},
+                {"findings",std::move(findings)},
+                {"footprint_frame_local_meters",std::move(footprint)}
+            };
+        });
 }
 } // namespace orbit::editor_app

@@ -1,5 +1,9 @@
 #include <orbit/celestial_clouds/CloudRenderer.hpp>
 
+#include <orbit/celestial_clouds/CloudFarField.hpp>
+#include <orbit/lighting/SunVisibilityShader.hpp>
+#include <orbit/lighting/TerrainSunShadow.hpp>
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -55,7 +59,7 @@ struct Constants
     float4 upNear;            // camera up, near plane (m)
     float4 sunFar;            // unit sun direction, far plane (m)
     float4 shell;             // planet radius, base alt, top alt, face resolution
-    float4 optics;            // albedo, anisotropy, irradiance scale, opacity scale
+    float4 optics;            // albedo, stellar angular radius, irradiance scale, opacity scale
     float4 atmosphere;        // atmosphere bottom radius, top radius, detail scale, depth pixels per output pixel
     float4 lod;               // x: angular size of one output pixel (rad), y: coverage threshold, z: peak optical depth, w: density exponent
     float4 lab;               // cloud lab: centre direction (xyz), radius in metres (w, 0 = off)
@@ -75,6 +79,8 @@ struct Constants
 [[vk::binding(0, 0)]] ByteAddressBuffer g_clouds : register(t0);
 // 32^3 tileable cellular noise: R base shape, G/B/A erosion octaves (16 B)
 [[vk::binding(1, 0)]] ByteAddressBuffer g_noise : register(t1);
+// Simulated storm domain (engine/weather_gpu): 32 header floats, then extinction (1/m) per cell, [k][j][i]. See StormSigma.
+[[vk::binding(3, 0)]] StructuredBuffer<float> g_storm;
 
 // Marching budget. Steps are distance-adaptive (fine near the camera, coarse far
 // away) but never fewer than the budget needs to cross the whole shell segment.
@@ -82,9 +88,9 @@ struct Constants
 // 0.3 growing, 0.6 mature with anvil, 0.9 dissipating; and its density multiplier.
 static float gMature = 0.6;
 static float gDensity = 1.0;
-// Density used for distant samples (footprint > ~150 m): natural storms are dense up close
-// but a continent-wide convective region must stay translucent from orbit.
-static float gDensityFar = 1.0;
+// Length (m) of the march step the next Extinction() sample stands for. The filtered far field
+// needs it to turn the sample into a step transmittance; 0 = point sample.
+static float gStep = 0.0;
 // Surface relief of the last sample (set by Extinction): crevices between billows read darker.
 static float gRelief = 1.0;
 // 1 where the high layer is a cumulonimbus anvil (lab cloud, or natural weather directly
@@ -93,34 +99,90 @@ static float gAnvilGate = 1.0;
 // Anvil optical-depth multiplier: a lab storm is a thick anvil; whole-planet anvils are
 // hundreds of km wide and must stay translucent or they fog the planet.
 static float gHighDensity = 1.0;
-// Pixel footprint (m) over which the near-field cloud density fades to the thin far-field
-// weather density. A pixel is ~2.2 mrad at the default resolution, so 100 m is about 45 km:
-// clouds seen at ordinary flying distances stay opaque (starting the fade at 40 m, ~18 km,
-// let the terrain and horizon show through clouds 20-60 km away).
-static const float kFarFadeStart = 100.0;
-static const float kFarFadeEnd = 400.0;
 // Opacity-weighted distance of the cloud along the ray the march just traced (1e9 = none);
 // the god-ray pass reads it to know which air lies behind the cloud.
 static float gCloudDistance = 1.0e9;
-static const uint kMaxSteps = 224u;
+// March cost constants. ORBIT_CLOUD_DEFINES="CLOUD_MAX_STEPS=160;..." overrides them for A/B work (see tools/orbit_ab.py);
+// the defaults are the shipped values.
+#ifndef CLOUD_MAX_STEPS
+#define CLOUD_MAX_STEPS 320
+#endif
+#ifndef CLOUD_SCHEDULE_STEPS
+#define CLOUD_SCHEDULE_STEPS 140
+#endif
+#ifndef CLOUD_FOOTPRINT_STEP
+#define CLOUD_FOOTPRINT_STEP 0.5
+#endif
+#ifndef CLOUD_BASE_STEP
+#define CLOUD_BASE_STEP 60.0
+#endif
+#ifndef CLOUD_EMPTY_SKIP
+#define CLOUD_EMPTY_SKIP 4.0
+#endif
+// 1: once a sample's footprint has saturated the far-field blend (baseBlend = 1) the point-sampled noise shape is not
+// used any more (the filtered table replaces it), so skip those noise fetches and use the noise mean for the one
+// remaining dependence, the height variation of the cloud top. 1 is the default (council review R-20261011-182716-2c7c9797);
+// ORBIT_CLOUD_DEFINES=CLOUD_FAR_EARLYOUT=0 restores the noise fetches for A/B.
+#ifndef CLOUD_SUN_VOLUME
+#define CLOUD_SUN_VOLUME 0
+#endif
+#ifndef CLOUD_SUN_KNOTS
+#define CLOUD_SUN_KNOTS 0
+#endif
+// Profiling stubs (all 0 = the shipped shader). They change the image on purpose: each removes one part of the march so the
+// Clouds pass time it frees (tools/orbit_ab.py in_process, gpu_passes) attributes the cost. Not for production.
+// 1: the march returns a heat map of the steps each pixel took (blue few, cyan, yellow, red, white = the whole budget).
+// Column coverage at or below which the march treats a column as empty and leaps over it (CLOUD_EMPTY_SKIP). The shipped value
+// 1e-4 means 'exactly empty'; real weather has tiny nonzero coverage nearly everywhere, where the noise rarely makes any cloud.
+#ifndef CLOUD_EMPTY_COVERAGE
+#define CLOUD_EMPTY_COVERAGE 1.0e-4
+#endif
+// Temporal reuse of the march. 1: only one pixel of every 2x2 block of the cloud target is marched per frame (the march target is half
+// the width and height; the phase rotates over four frames) at the footprint of a full-resolution cloud pixel, and the resolve fills the
+// rest from reprojected history. CLOUD_CHECKERBOARD_WEIGHT is the weight of a fresh sample in the resolve (default 0.4).
+#ifndef CLOUD_CHECKERBOARD
+#define CLOUD_CHECKERBOARD 0
+#endif
+#ifndef CLOUD_PROF_STEPVIS
+#define CLOUD_PROF_STEPVIS 0
+#endif
+#ifndef CLOUD_PROF_OPACITY
+#define CLOUD_PROF_OPACITY 0
+#endif
+#ifndef CLOUD_PROF_CHEAPNOISE
+#define CLOUD_PROF_CHEAPNOISE 0
+#endif
+#ifndef CLOUD_PROF_NOSUNDEPTH
+#define CLOUD_PROF_NOSUNDEPTH 0
+#endif
+#ifndef CLOUD_PROF_NOOCTAVES
+#define CLOUD_PROF_NOOCTAVES 0
+#endif
+#ifndef CLOUD_PROF_NOAERIAL
+#define CLOUD_PROF_NOAERIAL 0
+#endif
+#ifndef CLOUD_FAR_EARLYOUT
+#define CLOUD_FAR_EARLYOUT 1
+#endif
+static const uint kMaxSteps = uint(CLOUD_MAX_STEPS);
 // Transmittance below which the march stops and the pixel counts as opaque.
 static const float kOpaqueCutoff = 0.004;
 // The geometric step schedule is solved to cross the segment in this many steps,
 // leaving the rest of kMaxSteps for the fine steps taken inside cloud. Solving it
 // for all of kMaxSteps let in-cloud steps near the camera use up the budget before
 // a ray reached distant cloud (they vanished from altitude).
-static const uint kScheduleSteps = 140u;
+static const uint kScheduleSteps = uint(CLOUD_SCHEDULE_STEPS);
 // Smallest step as a fraction of the footprint of one pixel at the sample distance:
 // finer than that cannot be seen. Without it a camera far from the shell (orbit)
 // marched empty space in 60 m steps for pixels hundreds of metres wide.
-static const float kFootprintStep = 0.5;
+static const float kFootprintStep = CLOUD_FOOTPRINT_STEP;
 // Inside cloud the step is at least this fraction of the schedule step, so a dense
 // deck does not spend the whole budget before the distance is covered.
 static const float kInCloudScheduleFraction = 0.35;
-static const float kBaseStep = 60.0;
+static const float kBaseStep = CLOUD_BASE_STEP;
 static const float kAdaptiveStep = 0.006;
 static const float kMaxStep = 12000.0;
-static const float kEmptySkip = 4.0;
+static const float kEmptySkip = CLOUD_EMPTY_SKIP;
 static const float kBaseVoxelMeters = 700.0;   // 22 km noise period
 static const float kDetailVoxelMeters = 78.0;  // 2.5 km noise period at detailScale 14
 static const uint kShadowSteps = 16u;
@@ -192,7 +254,6 @@ float4 ColumnData(float3 d)
 {
     gMature = 0.6;
     gDensity = 1.0;
-    gDensityFar = 1.0;
     gRelief = 1.0;
     gAnvilGate = 1.0;
     gHighDensity = g.labLife.z;
@@ -244,10 +305,9 @@ float4 ColumnData(float3 d)
     // translucent (a 6 km storm is thick, a 300 km convective region is not solid).
     // Near the camera a cumulus interior is opaque (extinction 0.01-0.05 per metre: you
     // see a few tens of metres into it). At 1.0 the interior was translucent: sky showed
-    // through it and the per-pixel march jitter read as grain. The factor fades to
-    // gDensityFar with the pixel footprint (see Extinction), so distant weather is unchanged.
+    // through it and the per-pixel march jitter read as grain. Distance does not change it:
+    // the far field is filtered by FarFieldTransmittance (see Extinction), not thinned.
     gDensity = 8.0;
-    gDensityFar = 0.4;
     gAnvilGate = smoothstep(0.02, 0.25, coverage);
     gHighDensity = 0.03;
     // Faint planet-wide cirrus (coverage below ~0.1) is not worth a layer: it would only
@@ -264,6 +324,9 @@ float4 NoiseVoxel(int3 c)
 // Trilinear lookup of the tileable noise; p is in voxel units.
 float4 SampleNoise(float3 p)
 {
+#if CLOUD_PROF_CHEAPNOISE
+    return frac(sin(dot(p, float3(12.9898, 78.233, 37.719)) + float4(0.0, 1.7, 3.1, 4.9)) * 43758.5453);
+#endif
     const float3 fl = floor(p);
     // Smoothstep weights: plain linear interpolation of the baked noise shows its
     // voxel lattice as axis-aligned blocks on cloud tops.
@@ -404,7 +467,7 @@ constexpr const char* kCloudCommonE = R"(
 // erosion) plus the high layer (cirrus and cumulonimbus anvil outflow).
 // 'footprint' is the metres one sample covers; it filters the noise so far
 // clouds are smooth instead of speckled.
-float Extinction(float4 column, float3 position, float radius, float footprint)
+float ExtinctionProcedural(float4 column, float3 position, float radius, float footprint)
 {
     const float thickness = max(g.shell.z - g.shell.y, 1.0);
     const float h = (radius - g.shell.x - g.shell.y) / thickness;
@@ -455,9 +518,14 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
     // limit); fading from 0.5 cells left features right at the limit, which showed as a regular
     // lattice of pebbles (strongest from orbit, where one march pixel spans ~900 m).
     const float baseBlend = SmoothRange(0.2, 0.9, footprint / baseFeature);
-    float baseMix =
-        0.6 * SampleNoise(shapePosition / kBaseVoxelMeters).r +
-        0.4 * SampleNoise(rotated / (kBaseVoxelMeters * 2.6) + 5.0).r;
+#if CLOUD_FAR_EARLYOUT
+    const bool farMean = baseBlend >= 1.0;
+#else
+    const bool farMean = false;
+#endif
+    float baseMix = farMean ? 0.5 :
+        (0.6 * SampleNoise(shapePosition / kBaseVoxelMeters).r +
+         0.4 * SampleNoise(rotated / (kBaseVoxelMeters * 2.6) + 5.0).r);
     const float coarseMix = baseMix;   // without the billow octave (the anvil uses this)
     // Billow octave (cells of 0.4-1.7 km): lobes on the silhouette, so towers read as
     // cauliflower instead of smooth columns. Filtered out once a pixel covers them.
@@ -510,7 +578,7 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
         // eat its interior), so the silhouette is lumpy at 200-800 m. Without this a
         // small cloud is a smooth blob wherever the base noise has a single peak.
         float erosionValue = 0.5;
-        if (detailAmount > 0.0)
+        if (detailAmount > 0.0 && !farMean)
         {
             const float4 d0 = SampleNoise(rotated / detailMeters + 17.0);
             erosionValue = 0.5 * d0.g + 0.3 * d0.b + 0.2 * d0.a;
@@ -521,7 +589,6 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
         // threshold against a reduced coverage so the iso-surface sits inside the mass.
         const float skinCoverage = coverage * lerp(1.0, 0.88, towerness);
         float shape = saturate(type.w * (shifted - (1.0 - skinCoverage)) / max(skinCoverage, 0.05));
-        shape = lerp(shape, coverage, baseBlend);
         if (detailAmount > 0.0 && shape > 0.0)
         {
             const float erosion = erosionValue;
@@ -543,8 +610,25 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
         const float rainBase = 1.0 + 1.2 * column.w * (1.0 - SmoothRange(0.0, 0.35, hn));
         // Real storm clouds are far denser than fair-weather cumulus (the reference
         // clouds use 0.006-0.012 per metre); towers shade themselves hard.
-        sigma += g.lod.z * saturate(column.x) / thickness * profile * shape * 1.7 * g.optics.w * rainBase
-            * lerp(1.0, 12.0, towerness) * lerp(gDensity, gDensityFar, SmoothRange(kFarFadeStart, kFarFadeEnd, footprint)) * density;
+        // Extinction of this sample for shape 1; the sample's own value is unit * shape.
+        const float unitSigma = g.lod.z * saturate(column.x) / thickness * profile * 1.7 * g.optics.w * rainBase
+            * lerp(1.0, 12.0, towerness) * gDensity * density;
+        float mainSigma = unitSigma * shape;
+        if (gStep > 0.0 && baseBlend > 0.0)
+        {
+            // The noise is no longer resolved by the pixel: replace the point sample by the average of exp(-K s)
+            // over the noise distribution (K = unit extinction x step), blended in as the footprint grows.
+            // Unresolved billows have a physical correlation length. Using the
+            // numerical march step here changes extinction whenever the step
+            // schedule changes (and saturated LUT depths create camera rings).
+            // Filter one noise cell, then integrate that coefficient over the
+            // chosen interval. View and sun rays use the same material response.
+            const float correlationLength = kBaseVoxelMeters;
+            const float farT = FarFieldTransmittance(skinCoverage, type.w, unitSigma * correlationLength);
+            const float nearT = exp(-mainSigma * correlationLength);
+            mainSigma = -log(max(lerp(nearT, farT, baseBlend), 1.0e-6)) / correlationLength;
+        }
+        sigma += mainSigma;
     }
 
     // ---- high cloud: cirrus fibres and cumulonimbus anvil ----
@@ -605,6 +689,216 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
     }
     return sigma;
 }
+)" R"(
+#ifndef CLOUD_STORM
+#define CLOUD_STORM 1
+#endif
+// The simulated storm replaces the procedural density inside its domain. Header (g_storm): [0] active, [1..3] domain centre on the
+// ground (m, planet-centred), [4..6] east, [7..9] north (unit), [13] planet radius, [14] dx, [15] dy, [16] dz (m), [17..19] nx ny nz,
+// [20] width of the fade at the domain edge (m), [22..31] the nest's child level (see StormCellChild), [21] intensity 0..1 (a dying storm dissolves into the procedural clouds). The domain translates with its Galilean frame, so the host moves the centre.
+// Where the simulation has cloud within about 40 km (header [10] = index of the 0..1 map over the parent grid, 0 = no map): the procedural
+// clouds stay everywhere else inside the domain.
+float StormInfluence(float x, float y)
+{
+    const int offset = (int)g_storm[10];
+    if (offset <= 0) { return 1.0; }
+    const int nx = (int)g_storm[17], ny = (int)g_storm[18];
+    const float fx = x / g_storm[14] + 0.5 * nx - 0.5;
+    const float fy = y / g_storm[15] + 0.5 * ny - 0.5;
+    const float2 f = floor(float2(fx, fy));
+    const float2 t = float2(fx, fy) - f;
+    const int2 c = int2(f);
+    const int2 a = clamp(c, int2(0, 0), int2(nx - 1, ny - 1));
+    const int2 b = clamp(c + int2(1, 1), int2(0, 0), int2(nx - 1, ny - 1));
+    return lerp(lerp(g_storm[offset + a.y * nx + a.x], g_storm[offset + a.y * nx + b.x], t.x),
+        lerp(g_storm[offset + b.y * nx + a.x], g_storm[offset + b.y * nx + b.x], t.x), t.y);
+}
+
+float StormMask(float3 position, float radius)
+{
+    const float3 dir = position / max(radius, 1.0);
+    const float3 centre = normalize(float3(g_storm[1], g_storm[2], g_storm[3]));
+    const float planetRadius = g_storm[13];
+    const float x = planetRadius * dot(dir, float3(g_storm[4], g_storm[5], g_storm[6]));
+    const float y = planetRadius * dot(dir, float3(g_storm[7], g_storm[8], g_storm[9]));
+    if (dot(dir, centre) < 0.0) { return 0.0; }
+    const float halfX = 0.5 * g_storm[17] * g_storm[14];
+    const float halfY = 0.5 * g_storm[18] * g_storm[15];
+    const float edge = min(halfX - abs(x), halfY - abs(y));
+    return SmoothRange(0.0, max(g_storm[20], 1.0), edge) * g_storm[21] * StormInfluence(x, y);
+}
+
+// x: the whole extinction of the cell, y: the rain's part of it (header [11] = index of that region, 0 = none).
+float2 StormCell(int3 c)
+{
+    const int nx = (int)g_storm[17], ny = (int)g_storm[18], nz = (int)g_storm[19];
+    const int3 q = int3(clamp(c.x, 0, nx - 1), clamp(c.y, 0, ny - 1), clamp(c.z, 0, nz - 1));
+    const int i = (q.z * ny + q.y) * nx + q.x;
+    const int rain = (int)g_storm[11];
+    return float2(g_storm[32 + i], rain > 0 ? g_storm[rain + i] : 0.0);
+}
+
+// The nest's child level (header [22] present, [23..24] dx dy, [25..27] dimensions, [28..29] centre offset from the parent's centre,
+// [30] index of its first cell, [31] blend width): the same vertical grid, finer in the horizontal.
+float2 StormCellChild(int3 c)
+{
+    const int nx = (int)g_storm[25], ny = (int)g_storm[26], nz = (int)g_storm[27];
+    const int3 q = int3(clamp(c.x, 0, nx - 1), clamp(c.y, 0, ny - 1), clamp(c.z, 0, nz - 1));
+    const int i = (q.z * ny + q.y) * nx + q.x;
+    const int rain = (int)g_storm[11];
+    return float2(g_storm[(int)g_storm[30] + i], rain > 0 ? g_storm[rain + (int)g_storm[30] - 32 + i] : 0.0);
+}
+
+// Surface detail of the simulated storm (CLOUD_STORM_DETAIL, default 1): the grid is 500 m to 2 km, so up close the density is a smooth
+// bloom. The sample position is displaced by a low-frequency noise (billows, up to CLOUD_STORM_WARP metres) and the fringe is carved with two
+// noise octaves, hard where the density is low and barely in the dense core; both fade out as a pixel gets wider than the features, so
+// the far view is the smooth density as before. CLOUD_STORM_CARVE scales how much of the fringe is carved away.
+#ifndef CLOUD_STORM_DETAIL
+#define CLOUD_STORM_DETAIL 1
+#endif
+#ifndef CLOUD_STORM_WARP
+#define CLOUD_STORM_WARP 500.0
+#endif
+#ifndef CLOUD_STORM_CARVE
+#define CLOUD_STORM_CARVE 1.0
+#endif
+// Density (1/m) above which the carve stops: the visible surface of a thick cloud is where the line of sight has gathered an optical depth
+// of about 1, so the carve has to reach well past the thin fringe.
+// Rain shafts (CLOUD_STORM_SHAFTS_ON=0 removes them, CLOUD_STORM_SHAFTS = how much of the streak pattern shows).
+#ifndef CLOUD_STORM_SHAFTS_ON
+#define CLOUD_STORM_SHAFTS_ON 1
+#endif
+#ifndef CLOUD_STORM_RAIN
+#define CLOUD_STORM_RAIN 1.0
+#endif
+#ifndef CLOUD_STORM_SHAFTS
+#define CLOUD_STORM_SHAFTS 1.0
+#endif
+#ifndef CLOUD_STORM_CORE
+#define CLOUD_STORM_CORE 0.12
+#endif
+
+float StormSigma(float3 position, float radius, float footprint)
+{
+    float3 samplePosition = position;
+#if CLOUD_STORM_DETAIL
+    const float warpAmount = 1.0 - SmoothRange(0.4, 1.6, footprint / 150.0);
+    if (warpAmount > 0.0)
+    {
+        samplePosition += (SampleNoise(position / 380.0 + 17.0).rgb - 0.5) * (2.0 * CLOUD_STORM_WARP * warpAmount);
+    }
+#endif
+    const float sampleRadius = length(samplePosition);
+    const float3 dir = samplePosition / max(sampleRadius, 1.0);
+    const float planetRadius = g_storm[13];
+    const float x = planetRadius * dot(dir, float3(g_storm[4], g_storm[5], g_storm[6]));
+    const float y = planetRadius * dot(dir, float3(g_storm[7], g_storm[8], g_storm[9]));
+    const float altitude = sampleRadius - planetRadius;
+    const float fx = x / g_storm[14] + 0.5 * g_storm[17] - 0.5;
+    const float fy = y / g_storm[15] + 0.5 * g_storm[18] - 0.5;
+    const float fz = altitude / g_storm[16] - 0.5;
+    if (fz > g_storm[19]) { return 0.0; }
+    const float3 f = floor(float3(fx, fy, fz));
+    float3 t = float3(fx, fy, fz) - f;
+#if CLOUD_STORM_DETAIL
+    // Smoothstep weights, as for the noise: plain linear interpolation has slope kinks on the cell planes, and the carved iso-surface shows
+    // them as a stair of one-cell steps.
+    t = t * t * (3.0 - 2.0 * t);
+#endif
+    const int3 c = int3(f);
+    const float2 a = lerp(lerp(StormCell(c), StormCell(c + int3(1, 0, 0)), t.x),
+        lerp(StormCell(c + int3(0, 1, 0)), StormCell(c + int3(1, 1, 0)), t.x), t.y);
+    const float2 b = lerp(lerp(StormCell(c + int3(0, 0, 1)), StormCell(c + int3(1, 0, 1)), t.x),
+        lerp(StormCell(c + int3(0, 1, 1)), StormCell(c + int3(1, 1, 1)), t.x), t.y);
+    float2 both = lerp(a, b, t.z);
+    if (g_storm[22] > 0.5)
+    {
+        const float childX = x - g_storm[28];
+        const float childY = y - g_storm[29];
+        const float edge = min(0.5 * g_storm[25] * g_storm[23] - abs(childX), 0.5 * g_storm[26] * g_storm[24] - abs(childY));
+        const float inside = SmoothRange(0.0, max(g_storm[31], 1.0), edge);
+        if (inside > 0.0)
+        {
+            const float cfx = childX / g_storm[23] + 0.5 * g_storm[25] - 0.5;
+            const float cfy = childY / g_storm[24] + 0.5 * g_storm[26] - 0.5;
+            const float2 cf = floor(float2(cfx, cfy));
+            float2 ct = float2(cfx, cfy) - cf;
+#if CLOUD_STORM_DETAIL
+            ct = ct * ct * (3.0 - 2.0 * ct);
+#endif
+            const int2 cc = int2(cf);
+            const float2 ca = lerp(lerp(StormCellChild(int3(cc, c.z)), StormCellChild(int3(cc + int2(1, 0), c.z)), ct.x),
+                lerp(StormCellChild(int3(cc + int2(0, 1), c.z)), StormCellChild(int3(cc + int2(1, 1), c.z)), ct.x), ct.y);
+            const float2 cb = lerp(lerp(StormCellChild(int3(cc, c.z + 1)), StormCellChild(int3(cc + int2(1, 0), c.z + 1)), ct.x),
+                lerp(StormCellChild(int3(cc + int2(0, 1), c.z + 1)), StormCellChild(int3(cc + int2(1, 1), c.z + 1)), ct.x), ct.y);
+            both = lerp(both, lerp(ca, cb, t.z), inside);
+        }
+    }
+    float sigma = both.x;
+#if CLOUD_STORM_SHAFTS_ON
+    // Rain falls in shafts: streaks a few hundred metres wide, leaning with height, with clear air between them. The mean stays about 1
+    // so the far view keeps the simulated amount; the streaks fade out as a pixel gets wider than them.
+    if (both.y > 1.0e-6)
+    {
+        const float amount = 1.0 - SmoothRange(0.5, 3.0, footprint / 150.0);
+        if (amount > 0.0)
+        {
+            const float lean = altitude * 0.25;
+            const float3 q = float3(x + lean, y + 0.4 * lean, altitude * 0.03);
+            const float streaks = 0.6 * SampleNoise(q / 320.0 + 5.0).g + 0.4 * SampleNoise(q / 110.0 + 23.0).b;
+            const float shaft = saturate(0.5 + (streaks - 0.5) * 2.6);
+            const float rain = min(both.y, sigma);
+            sigma += rain * (CLOUD_STORM_RAIN * lerp(1.0, 0.04 + 2.0 * shaft, amount * CLOUD_STORM_SHAFTS) - 1.0);
+        }
+    }
+#endif
+#if CLOUD_STORM_DETAIL
+    if (sigma > 1.0e-6)
+    {
+        const float amount = 1.0 - SmoothRange(0.5, 3.0, footprint / 70.0);
+        if (amount > 0.0)
+        {
+            // Three octaves (600, 250 and 100 m): a continuous modulation, strong in the thin fringe and absent in the dense core. A hard
+            // threshold left isolated flecks and holes instead of connected billows.
+            const float4 n1 = SampleNoise(position / 600.0 + 41.0);
+            const float4 n2 = SampleNoise(position / 250.0 + 9.0);
+            const float4 n3 = SampleNoise(position / 100.0 + 63.0);
+            const float cauli = 0.5 * n1.g + 0.3 * n2.b + 0.2 * n3.a;
+            const float core = saturate(sigma / CLOUD_STORM_CORE);   // 1 deep inside the cloud, 0 at its fringe
+            const float modulation = lerp(1.0, 0.1 + 1.8 * saturate(0.5 + (cauli - 0.5) * 1.6), (1.0 - core) * 0.9 * CLOUD_STORM_CARVE);
+            sigma *= lerp(1.0, modulation * (0.85 + 0.3 * n2.r), amount);
+        }
+    }
+#else
+    if (sigma > 1.0e-6)
+    {
+        // Without the detail pass: the grid is 500 m to 2 km, the erosion noise only modulates the density.
+        const float amount = 1.0 - SmoothRange(0.4, 1.5, footprint / 140.0);
+        if (amount > 0.0)
+        {
+            const float e = SampleNoise(position / 140.0 + 41.0).g;
+            sigma *= lerp(1.0, 0.35 + 1.3 * e, 0.85 * amount);
+        }
+    }
+#endif
+    return sigma;
+}
+
+float Extinction(float4 column, float3 position, float radius, float footprint)
+{
+#if CLOUD_STORM
+    if (g_storm[0] > 0.5)
+    {
+        const float w = StormMask(position, radius);
+        if (w > 0.0)
+        {
+            const float sim = StormSigma(position, radius, footprint);
+            return w >= 1.0 ? sim : lerp(ExtinctionProcedural(column, position, radius, footprint), sim, w);
+        }
+    }
+#endif
+    return ExtinctionProcedural(column, position, radius, footprint);
+}
 
 )";
 
@@ -630,36 +924,6 @@ float2 LutUv(float radius, float sunMu)
     const float rt = g.atmosphere.y;
     const float unit = saturate((radius * radius - rb * rb) / max(rt * rt - rb * rb, 1.0));
     return float2(saturate(sunMu * 0.5 + 0.5), unit);
-}
-
-// Optical depth towards the sun: four increasing steps over 1.2 km on the base
-// shape, plus a coarse tail for the rest of the way out of the layer.
-// 'tailTau' >= 0 is the optical depth beyond the explicit steps (from the light volume); negative
-// falls back to extrapolating the last sample.
-float SunOpticalDepth(float3 position, float3 sun, float outer, float footprint, float jit, float tailTau)
-{
-    float sunT0;
-    float sunT1;
-    if (!RaySphere(position, sun, outer, sunT0, sunT1) || sunT1 <= 0.0)
-    {
-        return 0.0;
-    }
-    const float marches[6] = { 120.0, 260.0, 520.0, 1000.0, 1800.0, 3000.0 }; // six
-    float depth = 0.0;
-    float travelled = 0.0;
-    float lastSigma = 0.0;
-    [unroll]
-    for (uint i = 0u; i < 6u; ++i)
-    {
-        const float stepLength = min(marches[i], max(sunT1 - travelled, 0.0));
-        const float3 samplePosition = position + sun * (travelled + (0.15 + 0.7 * jit) * stepLength);
-        const float radius = length(samplePosition);
-        lastSigma = Extinction(ColumnData(samplePosition / max(radius, 1.0)), samplePosition, radius, max(0.7 * stepLength, footprint));
-        depth += lastSigma * stepLength;
-        travelled += stepLength;
-    }
-    const float tail = clamp(sunT1 - travelled, 0.0, 6000.0);
-    return depth + (tailTau >= 0.0 ? tailTau : lastSigma * tail * 0.5);
 }
 
 // Optical depth towards the sun from 'origin', sampled once per slab of equal altitude between the
@@ -691,6 +955,7 @@ float AltitudeSunTau(float3 origin, float3 sun, uint slabs)
         const float pathLength = s1 - previousExit;
         const float3 p = origin + sun * (previousExit + 0.5 * pathLength);
         const float r = length(p);
+        gStep = pathLength;
         tau += Extinction(ColumnData(p / max(r, 1.0)), p, r, max(0.7 * pathLength, 120.0)) * pathLength;
         previousExit = s1;
     }
@@ -787,20 +1052,19 @@ float4 LabColumn(float3 d)
     const float sheetShare = sheet / max(high, 1.0e-4);
     gMature = dominant > 0.02 ? dominantAge : anvilAge;
     gDensity = g.labLife.z;
-    gDensityFar = g.labLife.z;
     return float4(g.labParams.y * coverage, high, lerp(g.labParams.x, 0.0, sheetShare), g.labParams.w * coverage);
 }
 )";
 
 constexpr const char* kDepthBindings = R"(
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
+[[vk::binding(CLOUD_DEPTH_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
+[[vk::binding(CLOUD_DEPTH_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
 )";
 
-constexpr const char* kMarchBindings = R"([[vk::binding(4, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
-[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
-[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
-[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
+constexpr const char* kMarchBindings = R"([[vk::binding(CLOUD_TRANSMITTANCE_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
+[[vk::binding(CLOUD_TRANSMITTANCE_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
+[[vk::binding(CLOUD_MULTI_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
+[[vk::binding(CLOUD_MULTI_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
 )";
 
 // ---- Sun light volume --------------------------------------------------------------------
@@ -865,49 +1129,20 @@ float3 VolPosition(float2 t, float altitude)
 constexpr const char* kVolumeRead = R"(
 [[vk::binding(2, 0)]] ByteAddressBuffer g_volume : register(t2);
 
-bool VolSampleVoxel(uint cascade, uint layer, int ai, int aj, out float tau)
+bool VolSampleVoxel(uint cascade, uint layer, int ai, int aj, out float tau, out float visibility)
 {
     const float4 v = asfloat(g_volume.Load4(VolAddress(cascade, layer, VolWrap(aj), VolWrap(ai))));
-    tau = v.x;
+    tau = f16tof32(asuint(v.x) & 65535u);
+    visibility = f16tof32(asuint(v.x) >> 16u);
     return v.y == float(ai) + kVolTagOffset && v.z == float(aj) + kVolTagOffset && v.w == g.temporal.w;
 }
 
 // Optical depth towards the sun from 'position' out of the cloud shell, trilinear from the volume.
 // False when the volume is off, the position is outside both cascades or a voxel is not ready.
-bool VolumeTau(float3 position, out float tau)
+bool VolumeCascade(uint cascade, float2 t, float altitude, out float tau, out float visibility)
 {
     tau = 0.0;
-    if (!VolActive())
-    {
-        return false;
-    }
-    float2 t;
-    float altitude;
-    VolCoords(position, t, altitude);
-    if (altitude >= VolTop())
-    {
-        return true;                       // above the shell: nothing between here and the sun
-    }
-    float2 cameraT;
-    float cameraAltitude;
-    VolCoords(g.cameraAspect.xyz, cameraT, cameraAltitude);
-    const float2 offset = abs(t - cameraT);
-    const float limit0 = (float(kVolN) * 0.5 - 2.0) * kVolCell0;
-    const float limit1 = (float(kVolN) * 0.5 - 2.0) * kVolCell1;
-    const float limit2 = (float(kVolN) * 0.5 - 2.0) * kVolCell2;
-    uint cascade = 0u;
-    if (offset.x >= limit0 || offset.y >= limit0)
-    {
-        cascade = 1u;
-        if (offset.x >= limit1 || offset.y >= limit1)
-        {
-            if (offset.x >= limit2 || offset.y >= limit2)
-            {
-                return false;
-            }
-            cascade = 2u;
-        }
-    }
+    visibility = 1.0;
     const float2 f = t / VolCell(cascade) - 0.5;
     const int2 i0 = int2(floor(f));
     const float2 w = f - float2(i0);
@@ -916,6 +1151,7 @@ bool VolumeTau(float3 position, out float tau)
     const uint k1 = min(k0 + 1u, kVolLayers - 1u);
     const float wk = fk - float(k0);
     float sum = 0.0;
+    float visibleSum = 0.0;
     [unroll]
     for (uint dk = 0u; dk < 2u; ++dk)
     {
@@ -925,17 +1161,63 @@ bool VolumeTau(float3 position, out float tau)
             [unroll]
             for (int dx = 0; dx < 2; ++dx)
             {
-                float v;
-                if (!VolSampleVoxel(cascade, dk == 0u ? k0 : k1, i0.x + dx, i0.y + dy, v))
+                float v, visible;
+                if (!VolSampleVoxel(cascade, dk == 0u ? k0 : k1, i0.x + dx, i0.y + dy, v, visible))
                 {
                     return false;
                 }
-                sum += (dk == 0u ? 1.0 - wk : wk) * (dx == 0 ? 1.0 - w.x : w.x) * (dy == 0 ? 1.0 - w.y : w.y) * v;
+                const float weight = (dk == 0u ? 1.0 - wk : wk) * (dx == 0 ? 1.0 - w.x : w.x) * (dy == 0 ? 1.0 - w.y : w.y);
+                sum += weight * v;
+                visibleSum += weight * visible;
             }
         }
     }
     tau = sum;
+    visibility = visibleSum;
     return true;
+}
+bool VolumeLighting(float3 position, out float tau, out float visibility)
+{
+    tau = 0.0;
+    visibility = 1.0;
+    if (!VolActive()) return false;
+    float2 t;
+    float altitude;
+    VolCoords(position, t, altitude);
+    if (altitude >= VolTop()) return false;
+    float2 cameraT;
+    float cameraAltitude;
+    VolCoords(g.cameraAspect.xyz, cameraT, cameraAltitude);
+    const float offset = max(abs(t.x - cameraT.x), abs(t.y - cameraT.y));
+    uint cascade = 0u;
+    for (; cascade < kVolCascades; ++cascade)
+        if (offset < (float(kVolN) * 0.5 - 2.0) * VolCell(cascade)) break;
+    if (cascade >= kVolCascades) return false;
+    float fineTau, fineVisibility;
+    const bool fineReady = VolumeCascade(cascade, t, altitude, fineTau, fineVisibility);
+    if (cascade + 1u < kVolCascades)
+    {
+        const float limit = (float(kVolN) * 0.5 - 2.0) * VolCell(cascade);
+        const float blend = SmoothRange(limit * 0.65, limit * 0.95, offset);
+        if (!fineReady || blend > 0.0)
+        {
+            float coarseTau, coarseVisibility;
+            if (VolumeCascade(cascade + 1u, t, altitude, coarseTau, coarseVisibility))
+            {
+                tau = fineReady ? lerp(fineTau, coarseTau, blend) : coarseTau;
+                visibility = fineReady ? lerp(fineVisibility, coarseVisibility, blend) : coarseVisibility;
+                return true;
+            }
+        }
+    }
+    tau = fineTau;
+    visibility = fineVisibility;
+    return fineReady;
+}
+bool VolumeTau(float3 position, out float tau)
+{
+    float visibility;
+    return VolumeLighting(position, tau, visibility);
 }
 )";
 
@@ -979,7 +1261,7 @@ uint VolumeDebugSample(float3 position, out float tau, out uint cascade)
     const int2 cellIndex = int2(floor(t / VolCell(cascade)));
     const uint layer = min(uint(altitude / VolTop() * float(kVolLayers)), kVolLayers - 1u);
     const float4 v = asfloat(g_volume.Load4(VolAddress(cascade, layer, VolWrap(cellIndex.y), VolWrap(cellIndex.x))));
-    tau = v.x;
+    tau = f16tof32(asuint(v.x) & 65535u);
     const bool tagX = v.y == float(cellIndex.x) + kVolTagOffset;
     const bool tagY = v.z == float(cellIndex.y) + kVolTagOffset;
     const bool generation = v.w == g.temporal.w;
@@ -999,6 +1281,7 @@ uint VolumeDebugSample(float3 position, out float tau, out uint cascade)
 
 constexpr const char* kVolumeCompute = R"(
 [[vk::binding(2, 0)]] RWByteAddressBuffer g_volumeRw : register(u2);
+[[vk::binding(4, 0)]] ByteAddressBuffer g_terrainSunShadow;
 
 // Optical depth from 'origin' along the sun to the edge of the shell (altitude-stratified).
 float VolumeMarch(float3 origin, float3 sun)
@@ -1043,11 +1326,112 @@ void main(uint3 id : SV_DispatchThreadID)
     const float altitude = (float(layer) + 0.5) / float(kVolLayers) * VolTop();
     const float3 origin = VolPosition((float2(ai, aj) + 0.5) * cell, altitude);
     const float tau = VolumeMarch(origin, normalize(g.sunFar.xyz));
-    g_volumeRw.Store4(address, asuint(float4(tau, float(ai) + kVolTagOffset, float(aj) + kVolTagOffset, g.temporal.w)));
+    const float visibility = TerrainSunReliefVisibility(g_terrainSunShadow, origin,
+        normalize(g.sunFar.xyz), g.shell.x, g.optics.y);
+    const uint packed = f32tof16(min(tau, 65504.0)) | (f32tof16(visibility) << 16u);
+    g_volumeRw.Store4(address, uint4(packed, asuint(float(ai) + kVolTagOffset),
+        asuint(float(aj) + kVolTagOffset), asuint(g.temporal.w)));
 }
 )";
 
-constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
+// ---- Point lights (ORBIT_CLOUD_POINT_LIGHTS) ----------------------------------------------------
+// Up to 16 point lights (a lightning flash, street lamps, a lamp inside a cloud) scatter into the cloud the same way the
+// sun does. g_cloudLights[0].x = count; light i: [1 + 2i] = camera-relative position (m), [2 + 2i] = scene-linear radiant
+// intensity (rgb, W/sr as a fraction of the 1361 W/m2 reference, so irradiance at distance d is intensity / d^2 and a
+// light whose irradiance equals the sun's lights the cloud exactly as bright). The path to the light is not marched: its
+// optical depth is the sample's own extinction over at most 150 m (the diffusion length), which keeps the term cheap and
+// bounded; a light buried in a dense cloud therefore lights a ball of about that radius, not the whole storm.
+constexpr const char* kCloudLights = R"(
+#if ORBIT_CLOUD_POINT_LIGHTS
+[[vk::binding(5, 0)]] StructuredBuffer<float4> g_cloudLights;
+static float gLightPeak = 0.0;
+
+float3 PointLightSource(float3 position, float3 origin, float3 direction, float sigma, float sampleAlbedo, float shading)
+{
+    float3 sum = 0.0;
+    const uint count = min((uint)g_cloudLights[0].x, 16u);
+    [loop]
+    for (uint i = 0u; i < count; ++i)
+    {
+        const float3 delta = g_cloudLights[1u + 2u * i].xyz + origin - position;
+        const float distance2 = max(dot(delta, delta), 25.0);   // 5 m floor: a light inside the cloud does not blow up
+        const float3 toLight = delta * rsqrt(distance2);
+        const float3 irradiance = g_cloudLights[2u + 2u * i].rgb / distance2;
+        const float c = dot(direction, toLight);
+        const float phase = 0.1 * Hg(c, 0.95) + 0.2 * Hg(c, 0.8);
+        const float depth = sigma * min(sqrt(distance2), 150.0);
+        const float multi = 0.35 * (3.0 * Hg(c, 0.2) + 0.3 * Hg(c, -0.4)) * exp(-1.28 * sqrt(depth));
+        const float lit = phase * 12.0 * exp(-depth * 1.6) + multi;
+        const float limited = lit / (1.0 + 0.25 * lit);
+        sum += irradiance * sampleAlbedo * limited * 4.6 * shading;
+        gLightPeak = max(gLightPeak, max(irradiance.r, max(irradiance.g, irradiance.b)));
+    }
+    return sum;
+}
+#endif
+)";
+
+// Step cap for the thin high layer plus the march tunables. CLOUD_JITTER_FIX and CLOUD_INCLOUD_STEP_SCALE default to the
+// shipped behaviour; ORBIT_CLOUD_DEFINES="NAME=VALUE;..." overrides them at startup for A/B and council experiments.
+constexpr const char* kThinLayerCap = R"(
+#ifndef CLOUD_INCLOUD_STEP_SCALE
+#define CLOUD_INCLOUD_STEP_SCALE 1.0
+#endif
+
+// How fast the step cap inside the thin high layer grows with distance (metres per metre): the cap is 300 m + this * t. Raising it to 0.03 or
+// 0.05 helped the edge-on anvil only a little (the budget, CLOUD_MAX_STEPS, is what matters), so the shipped value is the original.
+#ifndef CLOUD_THIN_CAP_GROWTH
+#define CLOUD_THIN_CAP_GROWTH 0.012
+#endif
+// Thin high layer (cirrus / anvil, 0.70-0.90 of the shell): a coarse step can hop straight across it, which bands it.
+// Land the step on the layer edge and take at least 8 steps across its thickness while inside.
+float ThinLayerStepCap(float3 position, float radius, float3 direction, float stepLength, float t, float4 column)
+{
+    float stepCap = stepLength;
+    if (column.y > 0.01)
+    {
+        const float layerThickness = max(g.shell.z - g.shell.y, 1.0);
+        const float heightFraction = (radius - g.shell.x - g.shell.y) / layerThickness;
+        const float slope = dot(direction, position / max(radius, 1.0)) / layerThickness;
+        const float absSlope = max(abs(slope), 1.0e-7);
+        if (heightFraction >= 0.70 && heightFraction <= 0.90)
+        {
+            // Vertical advance of at most 1/8 of the layer, and never more than a few hundred metres: a near-horizontal
+            // ray inside a thin dense slab (an anvil seen edge-on) otherwise takes km-long steps and bands the slab.
+            // The anvil thins towards its rim (down to ~45 % of the layer), so take the 8 steps across the thinnest
+            // part, or the thin sheet is hit by 1-2 samples.
+            const float thin = lerp(0.45, 1.0, saturate(column.y * 1.5)) * 0.5;
+            stepCap = min(stepLength, min(0.2 * thin / absSlope / 8.0, 300.0 + CLOUD_THIN_CAP_GROWTH * t));
+        }
+        else if (heightFraction < 0.70 && slope > 0.0)
+        {
+            stepCap = min(stepLength, (0.70 - heightFraction) / slope + 20.0);
+        }
+        else if (heightFraction > 0.90 && slope < 0.0)
+        {
+            stepCap = min(stepLength, (0.90 - heightFraction) / slope + 20.0);
+        }
+    }
+    return stepCap;
+}
+)";
+
+constexpr const char* kMarchMain = R"(
+[[vk::binding(4, 0)]] ByteAddressBuffer g_terrainSunShadow;
+float PlanetDirectSunVisibility(float3 position, float3 sun)
+{
+    const float bodyVisibility = SphereStellarVisibility(position, sun, g.shell.x, g.optics.y);
+    if (bodyVisibility <= 0.0) return 0.0;
+    float tau, visibility;
+    // Never interpolate the planetary eclipse through coarse altitude cells:
+    // that creates concentric cloud rings at the terminator. The volume stores
+    // ONLY extra relief attenuation; the finite-disc body horizon is analytic.
+    if (VolumeLighting(position, tau, visibility)) return bodyVisibility * visibility;
+    return min(bodyVisibility,
+        TerrainSunVisibility(g_terrainSunShadow, position, sun, g.shell.x, g.optics.y));
+}
+
+float4 CloudMarch(VSOutput input)
 {
     // Output: premultiplied in-scattered radiance (rgb) and transmittance (a),
     // at reduced resolution; the composite pass applies it over the scene.
@@ -1106,7 +1490,6 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
 
     const float3 sun = normalize(g.sunFar.xyz);
     const float cosine = dot(direction, sun);
-    const float anisotropy = g.optics.y;
     const float albedo = g.optics.x;
     const float irradiance = max(g.optics.z, 0.0);
 
@@ -1117,14 +1500,14 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
     const float3 midPoint = origin + direction * min(0.5 * (tStart + tEnd), tStart + 3000.0);
     const float midRadius = length(midPoint);
     const float3 atmosphereSun =
-        g_transmittance.SampleLevel(
-            g_transmittanceSampler, LutUv(midRadius, dot(midPoint / max(midRadius, 1.0), sun)), 0).rgb;
+        AtmosphereStellarTransmittance(g_transmittance, g_transmittanceSampler,
+            midRadius, g.atmosphere.x, g.atmosphere.y,
+            dot(midPoint / max(midRadius, 1.0), sun), g.optics.y);
 
     // Phase functions after the reference clouds: single scattering is two strong
     // forward lobes (g 0.95 and 0.8, the silver lining), multiple scattering two broad
     // lobes (g 0.2 and -0.4) that brighten the cloud interior.
     const float singlePhase = 0.1 * Hg(cosine, 0.95) + 0.2 * Hg(cosine, 0.8);
-    const float multiPhase = 3.0 * Hg(cosine, 0.2) + 0.3 * Hg(cosine, -0.4);
 
     // Steps grow geometrically from the base step; the growth rate is solved per
     // pixel so the whole segment is covered in kMaxSteps steps. A long grazing ray
@@ -1140,7 +1523,10 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         const float covered = kBaseStep / mid * (pow(1.0 + mid, float(kScheduleSteps)) - 1.0);
         if (covered > segment) { growthHigh = mid; } else { growthLow = mid; }
     }
-    const float growth = growthHigh;
+    // The represented in-cloud interval advances by this fraction of the
+    // schedule. Solve for that actual advance, otherwise dense/filtered
+    // cloud exhausts the budget before reaching the far side of the shell.
+    const float growth = growthHigh / kInCloudScheduleFraction;
 
     // Stratified jitter: each sample sits at a random offset inside its own step.
     // Stratified over 4x4 pixels (ordered dither, plus white noise inside each of the 16
@@ -1166,79 +1552,64 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
     // and marches that stretch finely, so a leap can never skip a cloud edge.
     float leapOrigin = -1.0;
     uint fineSteps = 0u;
-    float cachedSunDepth = 0.0;
-    bool cachedValid = false;
     float weightSum = 0.0;
     float distanceSum = 0.0;
+    float sunKnotStart = -1.0;
+    float sunKnotEnd = -1.0;
+    float sunKnotNear = 0.0;
+    float sunKnotFar = 0.0;
 
+    uint stepsTaken = 0u;
     [loop]
     for (uint i = 0u; i < kMaxSteps && cursor < tEnd && transmittance > kOpaqueCutoff; ++i)
     {
-        const float stepLength = min(max(max(kBaseStep, cursor * g.lod.x * kFootprintStep), (cursor - tStart) * growth), kMaxStep);
+        ++stepsTaken;
+        const float partitionJitter = frac(jitter * 13.37 + float(i) * 0.569840291);
+        const float stepLength = min(max(max(kBaseStep, cursor * g.lod.x * kFootprintStep), (cursor - tStart) * growth), kMaxStep)
+            * lerp(0.65, 1.35, partitionJitter);
         const float cursorBefore = cursor;
-        // The jitter must stay inside the interval this sample actually represents. Inside
-        // cloud that interval is the (capped) in-cloud step, not the coarse empty-space
-        // step; jittering over the coarse step put samples kilometres ahead of the
-        // cursor, re-counting the same cloud again and again as horizontal ribs.
-        // The span must be the step the sample really represents: inside cloud that is the
-        // in-cloud step below, which a coarse schedule step stretches (kInCloudScheduleFraction).
-        // A narrower span puts the samples of neighbouring rays at nearly the same depths, which
-        // shows as horizontal terraces on cloud flanks once the temporal resolve has converged.
-        const float inCloudSpan = max(clamp(75.0 + 0.006 * cursor, 75.0, kMaxStep), kInCloudScheduleFraction * stepLength);
-        const float jitterSpan = min(stepLength, inCloudSpan);
-        const float t = cursor + jitter * jitterSpan;
-        cursor += stepLength;
-        if (fineSteps > 0u)
-        {
-            --fineSteps;
-        }
-        if (t >= tEnd)
-        {
-            break;
-        }
-        const float3 position = origin + direction * t;
-        const float radius = length(position);
+        const float inCloudSpan = max(CLOUD_INCLOUD_STEP_SCALE * clamp(75.0 + 0.006 * cursor, 75.0, kMaxStep), kInCloudScheduleFraction * stepLength);
+        const float3 position0 = origin + direction * cursor;
+        const float radius0 = length(position0);
+        const float4 column0 = ColumnData(position0 / max(radius0, 1.0));
+        const float stepCap = min(tEnd - cursor,
+            ThinLayerStepCap(position0, radius0, direction, min(stepLength, inCloudSpan), cursor, column0));
+        float actualStep = max(stepCap, 0.001);
+        const float sampleJitter = frac(jitter + float(i) * 0.754877666);
+        float t = cursor + sampleJitter * actualStep;
+        cursor += actualStep;
+        if (fineSteps > 0u) --fineSteps;
+        float3 position = origin + direction * t;
+        float radius = length(position);
 
-        const float4 column = ColumnData(position / max(radius, 1.0));
-        // Thin high layer (cirrus / anvil, 0.70-0.90 of the shell): a coarse step can hop
-        // straight across it, which bands it. Land the step on the layer edge and
-        // take at least 8 steps across its thickness while inside.
-        float stepCap = stepLength;
-        if (column.y > 0.01)
-        {
-            const float layerThickness = max(g.shell.z - g.shell.y, 1.0);
-            const float heightFraction = (radius - g.shell.x - g.shell.y) / layerThickness;
-            const float slope = dot(direction, position / max(radius, 1.0)) / layerThickness;
-            const float absSlope = max(abs(slope), 1.0e-7);
-)" R"(            if (heightFraction >= 0.70 && heightFraction <= 0.90)
-            {
-                // Vertical advance of at most 1/8 of the layer, and never more than a few
-                // hundred metres: a near-horizontal ray inside a thin dense slab (an anvil
-                // seen edge-on) otherwise takes km-long steps and bands the slab.
-                // The anvil thins towards its rim (down to ~45 % of the layer), so take the
-                // 8 steps across the thinnest part, or the thin sheet is hit by 1-2 samples.
-                const float thin = lerp(0.45, 1.0, saturate(column.y * 1.5)) * 0.5;
-                stepCap = min(stepLength, min(0.2 * thin / absSlope / 8.0, 300.0 + 0.012 * t));
-            }
-            else if (heightFraction < 0.70 && slope > 0.0)
-            {
-                stepCap = min(stepLength, (0.70 - heightFraction) / slope + 20.0);
-            }
-            else if (heightFraction > 0.90 && slope < 0.0)
-            {
-                stepCap = min(stepLength, (0.90 - heightFraction) / slope + 20.0);
-            }
-        }
-        cursor = cursorBefore + stepCap;
+        float4 column = ColumnData(position / max(radius, 1.0));
         gRelief = 1.0;
-        const float sigma = Extinction(column, position, radius, t * g.lod.x);
+        gStep = actualStep;
+        float sigma = Extinction(column, position, radius, t * g.lod.x);
+        // Search cheaply through clear air, then resolve the illuminated skin
+        // of a cloud. The schedule fraction is a search budget, never a lower
+        // bound on density integration accuracy. Re-sample the shorter interval
+        // rather than reusing a density/light value from outside it.
+        const float densityStep = clamp(15.0 + 0.001 * t, 15.0, 175.0);
+        if (sigma > 1.0e-6 && actualStep > densityStep)
+        {
+            actualStep = min(actualStep, densityStep);
+            t = cursorBefore + sampleJitter * actualStep;
+            cursor = cursorBefore + actualStep;
+            position = origin + direction * t;
+            radius = length(position);
+            column = ColumnData(position / max(radius, 1.0));
+            gStep = actualStep;
+            gRelief = 1.0;
+            sigma = Extinction(column, position, radius, t * g.lod.x);
+        }
         // Relief (crevices between billows) is fine, high-contrast noise. When the camera is
         // inside or against the cloud a pixel sees one random point of it, so the relief shows
         // as static grain: fade it in with distance, where a pixel averages over many billows.
         const float relief = lerp(1.0, gRelief, SmoothRange(150.0, 900.0, t));
         if (sigma <= 0.0)
         {
-            if (column.x <= 1.0e-4 && column.y <= 1.0e-4 && fineSteps == 0u)
+            if (column.x <= CLOUD_EMPTY_COVERAGE && column.y <= CLOUD_EMPTY_COVERAGE && fineSteps == 0u)
             {
                 // Nothing here: leap ahead instead of marching empty space finely.
                 // Only the most recent leap can hide a cloud edge: the sample it
@@ -1257,43 +1628,41 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
             continue;
         }
 
-        // Inside cloud the step is capped (the reference clouds use 75 m + 0.006 x
-        // distance, up to 1.5 km), so billow edges are sampled finely enough; the
-        // coarse schedule above is only for crossing empty space.
-        const float inCloudStep = clamp(75.0 + 0.006 * t, 75.0, kMaxStep);
-        const float actualStep = min(stepCap, max(inCloudStep, kInCloudScheduleFraction * stepLength));
-        cursor = cursorBefore + actualStep;
-
+)" R"(
         const float h = saturate((radius - g.shell.x - g.shell.y) / max(g.shell.z - g.shell.y, 1.0));
-        // Far away the exact sun march is wasted (the billows are filtered anyway):
-        // blend to a column estimate of the optical depth above this point.
-        const float farBlend = SmoothRange(45.0, 140.0, t * g.lod.x);
-        float sunDepth = cachedSunDepth;
-        // Thin samples (cirrus, cloud edges) contribute little: reuse the last full sun
-        // march of this ray instead of marching again for each of them.
-        const bool thinSample = sigma * actualStep < 0.02;
-        if (farBlend < 1.0 && !(thinSample && cachedValid))
+        float sunDepth = 0.0;
+        if (CLOUD_PROF_NOSUNDEPTH == 0)
         {
-            // Jittered over most of a step: without jitter the six sun-march steps show as terraces
-            // on cloud flanks. The grain it adds is averaged out by the temporal resolve.
-            // Beyond the explicit steps (6.7 km) the light volume knows the rest of the way to the sun.
-            float volumeTail = -1.0;
-            float volumeTau;
-            if (VolumeTau(position + sun * 6700.0, volumeTau))
+#if CLOUD_SUN_VOLUME
+            // One shared, world-space optical depth instead of a camera-range
+            // blend between two unrelated lighting models. The old six-step
+            // last-sample tail produced bright concentric terraces.
+            if (!VolumeTau(position, sunDepth))
+                sunDepth = AltitudeSunTau(position, sun, 16u);
+#else
+#if CLOUD_SUN_KNOTS
+            // Interpolate the actual local lighting, with a sub-noise-cell
+            // knot spacing. Full light-volume depth is too coarse at cloud
+            // skins and changes the lighting model at cascade boundaries.
+            // A temporal phase decorrelates the quadrature partitions.
+            const float knotSpan = 350.0;
+            if (sunKnotStart < 0.0 || t >= sunKnotEnd || t < sunKnotStart)
             {
-                volumeTail = volumeTau;
+                const float phase = frac(jitter + 0.423) * knotSpan;
+                const float nextStart = floor((t - phase) / knotSpan) * knotSpan + phase;
+                const bool adjacent = abs(nextStart - sunKnotEnd) < 0.1;
+                sunKnotStart = nextStart;
+                sunKnotNear = adjacent ? sunKnotFar :
+                    AltitudeSunTau(origin + direction * max(sunKnotStart, 0.0), sun, 16u);
+                sunKnotEnd = sunKnotStart + knotSpan;
+                sunKnotFar = AltitudeSunTau(origin + direction * sunKnotEnd, sun, 16u);
             }
-            sunDepth = SunOpticalDepth(position, sun, outer, t * g.lod.x, 0.1 + 0.8 * frac(jitter * 7.31 + 0.37), volumeTail);
-            cachedSunDepth = sunDepth;
-            cachedValid = true;
-        }
-        if (farBlend > 0.0)
-        {
-            const float4 estimateType = TypeParams(column.z);
-            const float heightFraction = saturate(h / max(estimateType.x, 0.05));
-            const float slant = 1.0 / clamp(dot(position / max(radius, 1.0), sun), 0.2, 1.0);
-            const float estimate = g.lod.z * column.x * 0.55 * (1.0 - heightFraction) * slant;
-            sunDepth = lerp(sunDepth, estimate, farBlend);
+            sunDepth = lerp(sunKnotNear, sunKnotFar,
+                saturate((t - sunKnotStart) / knotSpan));
+#else
+            sunDepth = AltitudeSunTau(position, sun, 16u);
+#endif
+#endif
         }
         const float skyFacing = saturate(dot(position / max(radius, 1.0), sun) * 0.5 + 0.5);
         // Multiple scattering as octaves (energy, extinction and anisotropy each x0.5 per
@@ -1304,6 +1673,9 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         const float multiDepth = 1.6 * sqrt(sunDepth);
         float multiScatter = 0.0;
         float octave = 1.0;
+#if CLOUD_PROF_NOOCTAVES
+        multiScatter = 0.3;
+#else
         [unroll]
         for (uint n = 0u; n < 4u; ++n)
         {
@@ -1312,6 +1684,7 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
                 exp(-multiDepth * 0.8 * octave);
             octave *= 0.5;
         }
+#endif
         const float multi = singlePhase * 12.0 * exp(-sunDepth * 1.6) + 0.35 * multiScatter;
         // Sky light from above: tops of towers and billows catch it, the inside and the base
         // do not (the cloud's own optical depth above the sample shades it).
@@ -1321,7 +1694,7 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         // Soft-limit the forward-scattering peak so a limb or terminator view does
         // not blow out to white.
         const float lit = multi + ambient;
-        const float limited = lit / (1.0 + 0.25 * lit);
+        const float shoulder = 1.0 / (1.0 + 0.25 * lit);
         // Thick cores are brighter, thin edges and low-lying cloud darker, which
         // keeps the weather readable from far away where the billows are filtered.
         const float thickness01 = saturate(max(column.x, column.y * smoothstep(0.69, 0.72, h)) / 0.8);
@@ -1329,8 +1702,15 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         // is thick, grey and shaded by the whole cloud above it.
         const float baseDark = lerp(1.0, 0.3, (1.0 - smoothstep(0.0, 0.2, h)) * saturate(0.5 + column.w));
         const float shading = (0.62 + 0.38 * thickness01) * baseDark;
-        const float3 source =
-            irradiance * sampleAlbedo * atmosphereSun * limited * 4.6 * shading * relief;
+        // Sun optical depth is not a planetary shadow; do not illuminate
+        // the nightside cloud volume with full daytime stellar irradiance.
+        const float planetSun = PlanetDirectSunVisibility(position, sun);
+        float3 source =
+            irradiance * sampleAlbedo * atmosphereSun *
+            (planetSun * multi + ambient) * shoulder * 4.6 * shading * relief;
+#if ORBIT_CLOUD_POINT_LIGHTS
+        source += PointLightSource(position, origin, direction, sigma, sampleAlbedo, shading * relief);
+#endif
 
         const float stepTransmittance = exp(-sigma * actualStep);
         const float contribution = transmittance * (1.0 - stepTransmittance);
@@ -1348,13 +1728,18 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
     // Soft shoulder: a wide sheet seen at a grazing angle accumulates many steps of
     // in-scattered light and would clip to flat white. Compress towards a ceiling
     // that tracks the sun brightness, keeping structure in the bright range.
+#if ORBIT_CLOUD_POINT_LIGHTS
+    // The ceiling tracks the sun brightness; at night it would flatten any light, so it also tracks the brightest light seen.
+    const float ceiling = max(irradiance * 0.5 + 0.5 * gLightPeak, 1.0e-4);
+#else
     const float ceiling = max(irradiance * 0.5, 1.0e-4);
+#endif
     radiance = radiance / (1.0 + radiance / ceiling);
 
     // Aerial perspective over the camera-to-cloud distance (the cloud is composited after
     // the atmosphere pass, which only knows the terrain/sky behind it): attenuate the cloud
     // by the air in front of it and add the single-scattered in-scatter of that stretch.
-    if (weightSum > 1.0e-4 && g.atmR.w > 0.0)
+    if (CLOUD_PROF_NOAERIAL == 0 && weightSum > 1.0e-4 && g.atmR.w > 0.0)
     {
         // Same single + multiple scattering integral as the atmosphere pass (sun transmittance
         // and multi-scattering LUTs sampled per step), so a cloud fades into exactly the haze
@@ -1384,10 +1769,14 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
             const float3 mie = g.atmG.rgb * exp(-alt / g.atmM.w);
             const float3 extinction = rayleigh + g.atmM.rgb * exp(-alt / g.atmM.w);
             const float2 lut = LutUv(apRadius, dot(ap / max(apRadius, 1.0), sun));
-            const float3 sunT = g_transmittance.SampleLevel(g_transmittanceSampler, lut, 0).rgb;
+            const float3 sunT = AtmosphereStellarTransmittance(
+                g_transmittance, g_transmittanceSampler, apRadius,
+                g.atmosphere.x, g.atmosphere.y,
+                dot(ap / max(apRadius, 1.0), sun), g.optics.y);
             const float3 multi = g_multi.SampleLevel(g_multiSampler, lut, 0).rgb;
             const float3 source = irradiance *
-                (sunT * (rayleigh * rayleighPhase + mie * miePhase) +
+                (sunT * PlanetDirectSunVisibility(ap, sun) *
+                    (rayleigh * rayleighPhase + mie * miePhase) +
                  multi * (rayleigh + mie) / (4.0 * kPi));
             const float3 stepT = exp(-extinction * aerialStep);
             inscatter += aerial * source * (1.0 - stepT) / max(extinction, 1.0e-12);
@@ -1396,6 +1785,19 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         }
         radiance = radiance * aerial + (1.0 - transmittance) * inscatter;
     }
+#if CLOUD_PROF_STEPVIS
+    {
+        const float x = saturate(float(stepsTaken) / float(kMaxSteps)) * 4.0;
+        float3 heat = lerp(float3(0.0, 0.0, 0.3), float3(0.0, 1.0, 1.0), saturate(x));
+        heat = lerp(heat, float3(1.0, 1.0, 0.0), saturate(x - 1.0));
+        heat = lerp(heat, float3(1.0, 0.0, 0.0), saturate(x - 2.0));
+        heat = lerp(heat, float3(1.0, 1.0, 1.0), saturate(x - 3.0));
+        return float4(heat * max(irradiance, 1.0e-3), 0.0);
+    }
+#endif
+#if CLOUD_PROF_OPACITY
+    return float4((1.0 - transmittance).xxx * max(irradiance, 1.0e-3), 0.0);
+#endif
     return float4(radiance, transmittance);
 }
 )";
@@ -1447,6 +1849,7 @@ float SunVisibility(float3 position, float3 sun)
     {
         const float3 samplePosition = position + sun * (segmentStart + (float(i) + 0.5) * stepLength);
         const float sampleRadius = length(samplePosition);
+        gStep = stepLength;
         opticalDepth +=
             Extinction(ColumnData(samplePosition / max(sampleRadius, 1.0)), samplePosition, sampleRadius, stepLength) *
             stepLength;
@@ -1534,8 +1937,16 @@ float4 CloudWithGodrays(VSOutput input)
             if (visibility < 0.999)
             {
                 const float2 lut = LutUv(apRadius, dot(ap / max(apRadius, 1.0), sun));
-                const float3 sunT = g_transmittance.SampleLevel(g_transmittanceSampler, lut, 0).rgb;
-                const float3 direct = irradiance * sunT * (rayleigh * rayleighPhase + mie * miePhase) *
+                const float3 sunT = AtmosphereStellarTransmittance(
+                g_transmittance, g_transmittanceSampler, apRadius,
+                g.atmosphere.x, g.atmosphere.y,
+                dot(ap / max(apRadius, 1.0), sun), g.optics.y);
+                // The atmosphere pass already eclipses direct solar
+                // scattering behind the planet. Avoid subtracting cloud
+                // occlusion from nonexistent nightside direct radiance.
+                const float3 direct = irradiance * sunT *
+                    PlanetDirectSunVisibility(ap, sun) *
+                    (rayleigh * rayleighPhase + mie * miePhase) *
                     (1.0 - stepT) / max(extinction, 1.0e-12);
                 const float hidden = tm > cloudDistance ? cloud.a : 1.0;
                 loss += aerial * direct * (1.0 - visibility) * hidden;
@@ -1563,6 +1974,27 @@ float3 VolumeHeat(float tau)
 
 float4 main(VSOutput input) : SV_Target0
 {
+#if CLOUD_CHECKERBOARD
+    {
+        // This pixel of the half-size target is the full-resolution cloud pixel 2*p + offset; march that one (CloudMarch and
+        // CloudWithGodrays read the pixel and uv from `input`, so remapping them here is all they need).
+#if CLOUD_CHECKERBOARD == 2
+        // Half rate: the target is half the width and the full height; a row's marched pixel alternates with the row and the frame.
+        const int2 lowPixel = int2(input.position.xy);
+        const int2 fullPixel = int2(lowPixel.x * 2 + ((lowPixel.y + int(uint(g.temporal.x) & 1u)) & 1), lowPixel.y);
+#else
+        const uint order[4] = { 0u, 3u, 1u, 2u };
+        const uint phase = order[uint(g.temporal.x) & 3u];
+        const int2 fullPixel = int2(input.position.xy) * 2 + int2(int(phase & 1u), int(phase >> 1u));
+#endif
+        uint depthW, depthH;
+        g_depth.GetDimensions(depthW, depthH);
+        const float fullWidth = float(depthW) / g.atmosphere.w;
+        const float fullHeight = fullWidth / g.cameraAspect.w;
+        input.position.xy = float2(fullPixel) + 0.5;
+        input.uv = (float2(fullPixel) + 0.5) / float2(fullWidth, fullHeight);
+    }
+#endif
     const float4 result = CloudWithGodrays(input);
     if (g.volumeDebug < 0.0)
     {
@@ -1678,19 +2110,21 @@ constexpr const char* kShadowMain = R"(float4 main(VSOutput input) : SV_Target0
 }
 )";
 
-[[nodiscard]] std::string MarchSource()
+// The far-field block (lookup table + FarFieldTransmittance) goes between the type tables and the extinction
+// function; `farField` is empty unless the filtered far field is enabled, and `prefix` defines the switch.
+[[nodiscard]] std::string MarchSource(const std::string& prefix, const std::string& farField)
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kDepthBindings + kMarchBindings + kVolumeRead + kVolumeDebugRead + kMarchMain + kMarchGodrays;
+    return prefix + std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + farField + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kDepthBindings + kMarchBindings + kVolumeRead + kVolumeDebugRead + kCloudLights + kThinLayerCap + lighting::kSunVisibilityShader + kMarchMain + kMarchGodrays;
 }
 
-[[nodiscard]] std::string ShadowSource()
+[[nodiscard]] std::string ShadowSource(const std::string& prefix, const std::string& farField)
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kDepthBindings + kShadowMain;
+    return prefix + std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + farField + kCloudCommonE + kCloudCommonF + kCloudLife + kDepthBindings + kShadowMain;
 }
 
-[[nodiscard]] std::string VolumeSource()
+[[nodiscard]] std::string VolumeSource(const std::string& prefix, const std::string& farField)
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kVolumeCompute;
+    return prefix + std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + farField + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + lighting::kSunVisibilityShader + kVolumeCompute;
 }
 
 
@@ -1704,22 +2138,50 @@ struct VSOutput
 [[vk::binding(0, 0)]] [[vk::combinedImageSampler]] Texture2D g_clouds;
 [[vk::binding(0, 0)]] [[vk::combinedImageSampler]] SamplerState g_cloudsSampler;
 
+#ifndef CLOUD_SPLIT
+#define CLOUD_SPLIT 0
+#endif
+#if CLOUD_SPLIT
+// Split view: pixels left of s.split.x show cloud target A, the rest target B; a white line marks the divider.
+[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] Texture2D g_cloudsB;
+[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] SamplerState g_cloudsBSampler;
+struct SplitConstants { float4 split; };
+[[vk::push_constant]] SplitConstants s;
+static bool gUseB = false;
+float4 SampleClouds(float2 uv)
+{
+    return gUseB ? g_cloudsB.SampleLevel(g_cloudsBSampler, uv, 0) : g_clouds.SampleLevel(g_cloudsSampler, uv, 0);
+}
+#else
+float4 SampleClouds(float2 uv)
+{
+    return g_clouds.SampleLevel(g_cloudsSampler, uv, 0);
+}
+#endif
+
 // Alpha blend turns (L / (1 - T), 1 - T) into L + T * scene.
 float4 main(VSOutput input) : SV_Target0
 {
+#if CLOUD_SPLIT
+    if (abs(input.position.x - s.split.x) < 1.5)
+    {
+        return float4(1.0, 1.0, 1.0, 1.0);
+    }
+    gUseB = input.position.x >= s.split.x;
+#endif
     // Four bilinear taps a half texel off-centre: a 3x3 tent filter that hides
     // the march's per-pixel grain at the cost of a single pass.
     uint cloudWidth, cloudHeight;
     g_clouds.GetDimensions(cloudWidth, cloudHeight);
     const float2 o = 0.5 / float2(cloudWidth, cloudHeight);
     const float4 tent = 0.25 * (
-        g_clouds.SampleLevel(g_cloudsSampler, input.uv + float2(-o.x, -o.y), 0) +
-        g_clouds.SampleLevel(g_cloudsSampler, input.uv + float2( o.x, -o.y), 0) +
-        g_clouds.SampleLevel(g_cloudsSampler, input.uv + float2(-o.x,  o.y), 0) +
-        g_clouds.SampleLevel(g_cloudsSampler, input.uv + float2( o.x,  o.y), 0));
+        SampleClouds(input.uv + float2(-o.x, -o.y)) +
+        SampleClouds(input.uv + float2( o.x, -o.y)) +
+        SampleClouds(input.uv + float2(-o.x,  o.y)) +
+        SampleClouds(input.uv + float2( o.x,  o.y)));
     // Mostly tent: with the march's stratified jitter it averages the grain away; the
     // march target is already reduced resolution, so edges stay as sharp as they were.
-    const float4 c = lerp(g_clouds.SampleLevel(g_cloudsSampler, input.uv, 0), tent, 0.8);
+    const float4 c = lerp(SampleClouds(input.uv), tent, 0.8);
     // c.rgb can be negative: the in-scatter the atmosphere pass added for air that sits in
     // cloud shadow is taken back out (god rays). Alpha blending can only reach it through a
     // non-zero alpha, so clear air gets a tiny floor (0.1% of the scene) to carry it.
@@ -1740,6 +2202,24 @@ float4 main(VSOutput input) : SV_Target0
 // is compensated as well as rotation; the history is clamped to the current 3x3
 // neighbourhood so changing weather and disocclusion never leave ghosts.
 constexpr const char* kResolvePixelShader = R"(
+#ifndef CLOUD_CHECKERBOARD
+#define CLOUD_CHECKERBOARD 0
+#endif
+#ifndef CLOUD_CHECKERBOARD_WEIGHT
+#define CLOUD_CHECKERBOARD_WEIGHT 0.4
+#endif
+// 1: fetch the nearest history texel instead of filtering it (a stale pixel is a copy; filtering a copy blurs it a little each frame)
+// How a stale (not re-marched) pixel's history is limited to the fresh neighbours' range: 0 = clamped like a fresh pixel, 1 = not clamped,
+// 2 = clamped to the range widened by half its width plus 0.01. A tight clamp over stride-2 samples removes features one pixel wide.
+#ifndef CLOUD_CB_CLAMP
+#define CLOUD_CB_CLAMP 0
+#endif
+#ifndef CLOUD_HISTORY_NEAREST
+#define CLOUD_HISTORY_NEAREST 0
+#endif
+#ifndef CLOUD_RESOLVE_WEIGHT
+#define CLOUD_RESOLVE_WEIGHT -1.0
+#endif
 struct VSOutput
 {
     float4 position : SV_Position;
@@ -1777,9 +2257,24 @@ float4 main(VSOutput input) : SV_Target0
 {
     uint width, height;
     g_current.GetDimensions(width, height);
-    const int2 pixel = int2(input.position.xy);
+    const int2 pixel = int2(input.position.xy);   // pixel of the (full-size) resolved target
     const int2 maxPixel = int2(width - 1u, height - 1u);
-    const float4 current = g_current.Load(int3(pixel, 0));
+#if CLOUD_CHECKERBOARD
+    // g_current holds one pixel of every 2x2 block: pixel p is fresh this frame when p & 1 equals the phase offset.
+#if CLOUD_CHECKERBOARD == 2
+    const int2 base = int2(min(pixel.x >> 1, maxPixel.x), min(pixel.y, maxPixel.y));
+    const bool fresh = (pixel.x & 1) == ((pixel.y + int(uint(r.params.y) & 1u)) & 1);
+#else
+    const int2 base = min(pixel >> 1, maxPixel);
+    const uint order[4] = { 0u, 3u, 1u, 2u };
+    const uint phase = order[uint(r.params.y) & 3u];
+    const bool fresh = all((pixel & 1) == int2(int(phase & 1u), int(phase >> 1u)));
+#endif
+#else
+    const int2 base = pixel;
+    const bool fresh = true;
+#endif
+    const float4 current = g_current.Load(int3(base, 0));
     if (r.prevPosValid.w < 0.5)
     {
         return current;
@@ -1793,7 +2288,7 @@ float4 main(VSOutput input) : SV_Target0
         [unroll]
         for (int dx = -1; dx <= 1; ++dx)
         {
-            const float4 s = g_current.Load(int3(clamp(pixel + int2(dx, dy), int2(0, 0), maxPixel), 0));
+            const float4 s = g_current.Load(int3(clamp(base + int2(dx, dy), int2(0, 0), maxPixel), 0));
             lo = min(lo, s);
             hi = max(hi, s);
         }
@@ -1833,13 +2328,38 @@ float4 main(VSOutput input) : SV_Target0
         return current;
     }
 
+#if CLOUD_HISTORY_NEAREST
+    uint historyWidth, historyHeight;
+    g_history.GetDimensions(historyWidth, historyHeight);
+    float4 history = g_history.Load(int3(clamp(int2(previousUv * float2(historyWidth, historyHeight)), int2(0, 0),
+                                               int2(historyWidth - 1u, historyHeight - 1u)), 0));
+#else
     float4 history = g_history.SampleLevel(g_historySampler, previousUv, 0);
+#endif
     if (any(isnan(history)) || any(isinf(history)))
     {
         return current;
     }
+#if CLOUD_CHECKERBOARD && CLOUD_CB_CLAMP == 1
+    if (fresh)
+    {
+        history = clamp(history, lo, hi);
+    }
+#elif CLOUD_CHECKERBOARD && CLOUD_CB_CLAMP == 2
+    {
+        const float4 pad = fresh ? float4(0.0, 0.0, 0.0, 0.0) : 0.5 * (hi - lo) + 0.01;
+        history = clamp(history, lo - pad, hi + pad);
+    }
+#else
     history = clamp(history, lo, hi);
-    return lerp(history, current, r.params.x);
+#endif
+    // CLOUD_RESOLVE_WEIGHT >= 0 overrides the caller's weight (developer hook: ORBIT_CLOUD_DEFINES / clouds.set_defines).
+#if CLOUD_CHECKERBOARD
+    const float currentWeight = fresh ? CLOUD_CHECKERBOARD_WEIGHT : 0.0;   // a stale pixel is history alone, kept inside the neighbours' range
+#else
+    const float currentWeight = CLOUD_RESOLVE_WEIGHT >= 0.0 ? CLOUD_RESOLVE_WEIGHT : r.params.x;
+#endif
+    return lerp(history, current, currentWeight);
 }
 )";
 
@@ -2111,35 +2631,40 @@ CloudRenderer::CloudRenderer(
     const shader::Compiler& compiler)
     : device_(&device)
 {
+    // The footprint-filtered transmittance table (see CloudFarField.hpp) is the only far field: a cloud keeps its extent at
+    // any distance instead of fading to weather coverage.
+    const auto noise = BakeCloudNoise();
+    // ORBIT_CLOUD_POINT_LIGHTS=1 (default off) lets up to 16 point lights scatter into the clouds. It adds a fourth shader
+    // buffer to the march pipeline, which shifts that pipeline's texture bindings by one; the other pipelines are unchanged.
+    {
+        char* flag = nullptr;
+        std::size_t flagLength = 0;
+        if (_dupenv_s(&flag, &flagLength, "ORBIT_CLOUD_POINT_LIGHTS") == 0 && flag != nullptr)
+        {
+            pointLights_ = flag[0] == '1';
+            std::free(flag);
+        }
+    }
+    // Developer hook: ORBIT_CLOUD_DEFINES="NAME=VALUE;NAME=VALUE" becomes #define lines in every cloud shader, so a march
+    // tunable can be A/B-tested without a rebuild (see tools/orbit_ab.py); clouds.set_defines changes it at runtime.
+    compiler_ = &compiler;
+    std::string defineText;
+    {
+        char* defines = nullptr;
+        std::size_t definesLength = 0;
+        if (_dupenv_s(&defines, &definesLength, "ORBIT_CLOUD_DEFINES") == 0 && defines != nullptr)
+        {
+            defineText = defines;
+            std::free(defines);
+        }
+    }
+    emptyTerrainShadow_ = lighting::CreateEmptyTerrainSunShadowBuffer(device);
+    farField_ = FarFieldShaderBlock(BuildFarFieldLut(noise, kNoiseGrid));
     const auto vertex = compiler.Compile({
         .source = kVertexShader,
         .entryPoint = "main",
         .stage = shader::Stage::Vertex,
         .debug = false});
-    const std::string marchSource = MarchSource();
-    const auto pixel = compiler.Compile({
-        .source = marchSource,
-        .entryPoint = "main",
-        .stage = shader::Stage::Pixel,
-        .debug = false});
-
-    pipeline_ = device.CreateGraphicsPipeline({
-        .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
-        .pixelShader = {.data = pixel.bytecode.data(), .size = pixel.bytecode.size()},
-        .vertexAttributes = {},
-        .vertexStrideBytes = 0U,
-        .pushConstantDwords = 64U,
-        .shaderResourceBuffers = 3U,
-        .sampledTextures = 3U,
-        .topology = rhi::PrimitiveTopology::TriangleList,
-        .fillMode = rhi::FillMode::Solid,
-        .cullMode = rhi::CullMode::None,
-        .blendMode = rhi::BlendMode::Opaque,
-        .depthTest = false,
-        .depthWrite = false,
-        .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
-        .colorAttachmentCount = 1U});
-
     const auto compositePixel = compiler.Compile({
         .source = kCompositePixelShader,
         .entryPoint = "main",
@@ -2162,64 +2687,45 @@ CloudRenderer::CloudRenderer(
         .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
         .colorAttachmentCount = 1U});
 
-    const auto resolvePixel = compiler.Compile({
-        .source = kResolvePixelShader,
+
+    const auto compositeSplitPixel = compiler.Compile({
+        .source = std::string("#define CLOUD_SPLIT 1\n") + kCompositePixelShader,
         .entryPoint = "main",
         .stage = shader::Stage::Pixel,
         .debug = false});
-    resolvePipeline_ = device.CreateGraphicsPipeline({
+    compositeSplitPipeline_ = device.CreateGraphicsPipeline({
         .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
-        .pixelShader = {.data = resolvePixel.bytecode.data(), .size = resolvePixel.bytecode.size()},
+        .pixelShader = {.data = compositeSplitPixel.bytecode.data(), .size = compositeSplitPixel.bytecode.size()},
         .vertexAttributes = {},
         .vertexStrideBytes = 0U,
-        .pushConstantDwords = 28U,
+        .pushConstantDwords = 4U,
         .shaderResourceBuffers = 0U,
         .sampledTextures = 2U,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
         .cullMode = rhi::CullMode::None,
-        .blendMode = rhi::BlendMode::Opaque,
+        .blendMode = rhi::BlendMode::Alpha,
         .depthTest = false,
         .depthWrite = false,
         .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
         .colorAttachmentCount = 1U});
 
-    const std::string shadowSource = ShadowSource();
-    const auto shadowPixel = compiler.Compile({
-        .source = shadowSource,
-        .entryPoint = "main",
-        .stage = shader::Stage::Pixel,
-        .debug = false});
-    shadowPipeline_ = device.CreateGraphicsPipeline({
-        .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
-        .pixelShader = {.data = shadowPixel.bytecode.data(), .size = shadowPixel.bytecode.size()},
-        .vertexAttributes = {},
-        .vertexStrideBytes = 0U,
-        .pushConstantDwords = 64U,
-        .shaderResourceBuffers = 3U,
-        .sampledTextures = 1U,
-        .topology = rhi::PrimitiveTopology::TriangleList,
-        .fillMode = rhi::FillMode::Solid,
-        .cullMode = rhi::CullMode::None,
-        .blendMode = rhi::BlendMode::Opaque,
-        .depthTest = false,
-        .depthWrite = false,
-        .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
-        .colorAttachmentCount = 1U});
-
-    const std::string volumeSource = VolumeSource();
-    const auto volumeShader = compiler.Compile({
-        .source = volumeSource,
-        .entryPoint = "main",
-        .stage = shader::Stage::Compute,
-        .debug = false});
-    volumePipeline_ = device.CreateComputePipeline({
-        .computeShader = {.data = volumeShader.bytecode.data(), .size = volumeShader.bytecode.size()},
-        .pushConstantDwords = 64U,
-        .shaderResourceBuffers = 3U,
-        .storageTextures = 0U,
-        .sampledTextures = 0U});
-    const auto noise = BakeCloudNoise();
+    if (const std::string error = RebuildShaderPipelines(defineText); !error.empty())
+    {
+        throw std::runtime_error("Cloud shader compile failed: " + error);
+    }
+    // An inactive storm domain (header word 0 = 0) until SetStormBuffer is given a simulation's output.
+    stormDummy_ = device.CreateBuffer({
+        .sizeBytes = 64ULL * sizeof(f32),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::ShaderResource});
+    if (!stormDummy_)
+    {
+        throw std::runtime_error("Cloud storm placeholder buffer creation failed.");
+    }
+    std::memset(stormDummy_->Map(), 0, 64U * sizeof(f32));
+    stormDummy_->Unmap();
     noise_ = device.CreateBuffer({
         .sizeBytes = static_cast<u64>(noise.size() * sizeof(f32)),
         .usage = rhi::BufferUsage::Structured,
@@ -2231,6 +2737,232 @@ CloudRenderer::CloudRenderer(
     }
     std::memcpy(noise_->Map(), noise.data(), noise.size() * sizeof(f32));
     noise_->Unmap();
+}
+
+namespace
+{
+// "A=1;B=2" -> "#define A 1\n#define B 2\n". A name without a value defines 1; names are restricted to [A-Za-z0-9_].
+[[nodiscard]] std::string DefinePrefix(const std::string& list)
+{
+    std::string prefix;
+    std::size_t begin = 0;
+    while (begin <= list.size())
+    {
+        std::size_t end = list.find(';', begin);
+        if (end == std::string::npos)
+        {
+            end = list.size();
+        }
+        const std::string item = list.substr(begin, end - begin);
+        const std::size_t eq = item.find('=');
+        const std::string name = item.substr(0, eq);
+        const bool valid = !name.empty() &&
+            name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") == std::string::npos;
+        if (valid)
+        {
+            prefix += "#define " + name + " " + (eq == std::string::npos ? std::string("1") : item.substr(eq + 1)) + "\n";
+        }
+        begin = end + 1;
+    }
+    return prefix;
+}
+} // namespace
+
+u32 CloudRenderer::CheckerboardModeOf(const std::string& defineText)
+{
+    // 1: a quarter of the pixels per frame, 2: half (a checkerboard)
+    const std::size_t found = defineText.find("CLOUD_CHECKERBOARD=");
+    const char mode = found != std::string::npos && found + 19U < defineText.size() ? defineText[found + 19U] : '0';
+    return mode == '1' ? 1U : (mode == '2' ? 2U : 0U);
+}
+
+std::string CloudRenderer::RebuildShaderPipelines(const std::string& defineText)
+{
+    try
+    {
+        const std::string sourcePrefix = DefinePrefix(defineText);
+        const std::string marchPrefix = sourcePrefix + (pointLights_
+            ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 6\n#define CLOUD_TRANSMITTANCE_BINDING 7\n#define CLOUD_MULTI_BINDING 8\n"
+            : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 5\n#define CLOUD_TRANSMITTANCE_BINDING 6\n#define CLOUD_MULTI_BINDING 7\n");
+        const std::string otherPrefix = sourcePrefix +
+            "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n";
+        const std::string& farField = farField_;
+        const auto vertex = compiler_->Compile({
+            .source = kVertexShader,
+            .entryPoint = "main",
+            .stage = shader::Stage::Vertex,
+            .debug = false});
+    const std::string marchSource = MarchSource(marchPrefix, farField);
+    const auto pixel = compiler_->Compile({
+        .source = marchSource,
+        .entryPoint = "main",
+        .stage = shader::Stage::Pixel,
+        .debug = false});
+
+    auto marchPipeline = device_->CreateGraphicsPipeline({
+        .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
+        .pixelShader = {.data = pixel.bytecode.data(), .size = pixel.bytecode.size()},
+        .vertexAttributes = {},
+        .vertexStrideBytes = 0U,
+        .pushConstantDwords = 64U,
+        .shaderResourceBuffers = pointLights_ ? 6U : 5U,
+        .sampledTextures = 3U,
+        .topology = rhi::PrimitiveTopology::TriangleList,
+        .fillMode = rhi::FillMode::Solid,
+        .cullMode = rhi::CullMode::None,
+        .blendMode = rhi::BlendMode::Opaque,
+        .depthTest = false,
+        .depthWrite = false,
+        .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
+        .colorAttachmentCount = 1U});
+
+    const std::string shadowSource = ShadowSource(otherPrefix, farField);
+    const auto shadowPixel = compiler_->Compile({
+        .source = shadowSource,
+        .entryPoint = "main",
+        .stage = shader::Stage::Pixel,
+        .debug = false});
+    auto shadowPipeline = device_->CreateGraphicsPipeline({
+        .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
+        .pixelShader = {.data = shadowPixel.bytecode.data(), .size = shadowPixel.bytecode.size()},
+        .vertexAttributes = {},
+        .vertexStrideBytes = 0U,
+        .pushConstantDwords = 64U,
+        .shaderResourceBuffers = 4U,
+        .sampledTextures = 1U,
+        .topology = rhi::PrimitiveTopology::TriangleList,
+        .fillMode = rhi::FillMode::Solid,
+        .cullMode = rhi::CullMode::None,
+        .blendMode = rhi::BlendMode::Opaque,
+        .depthTest = false,
+        .depthWrite = false,
+        .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
+        .colorAttachmentCount = 1U});
+
+    const std::string volumeSource = VolumeSource(otherPrefix, farField);
+    const auto volumeShader = compiler_->Compile({
+        .source = volumeSource,
+        .entryPoint = "main",
+        .stage = shader::Stage::Compute,
+        .debug = false});
+    auto volumePipeline = device_->CreateComputePipeline({
+        .computeShader = {.data = volumeShader.bytecode.data(), .size = volumeShader.bytecode.size()},
+        .pushConstantDwords = 64U,
+        .shaderResourceBuffers = 5U,
+        .storageTextures = 0U,
+        .sampledTextures = 0U});
+        const auto resolvePixel = compiler_->Compile({
+            .source = sourcePrefix + kResolvePixelShader,
+            .entryPoint = "main",
+            .stage = shader::Stage::Pixel,
+            .debug = false});
+        auto resolvePipeline = device_->CreateGraphicsPipeline({
+            .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
+            .pixelShader = {.data = resolvePixel.bytecode.data(), .size = resolvePixel.bytecode.size()},
+            .vertexAttributes = {},
+            .vertexStrideBytes = 0U,
+            .pushConstantDwords = 28U,
+            .shaderResourceBuffers = 0U,
+            .sampledTextures = 2U,
+            .topology = rhi::PrimitiveTopology::TriangleList,
+            .fillMode = rhi::FillMode::Solid,
+            .cullMode = rhi::CullMode::None,
+            .blendMode = rhi::BlendMode::Opaque,
+            .depthTest = false,
+            .depthWrite = false,
+            .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
+            .colorAttachmentCount = 1U});
+        // Everything compiled: swap. The old pipelines are retired by the RHI once the GPU is done with them.
+        pipeline_ = std::move(marchPipeline);
+        resolvePipeline_ = std::move(resolvePipeline);
+        shadowPipeline_ = std::move(shadowPipeline);
+        volumePipeline_ = std::move(volumePipeline);
+        defines_ = defineText;
+        // CLOUD_CHECKERBOARD=1 changes the size of the march target, which the pass code must follow.
+        checkerboard_ = CheckerboardModeOf(defineText);
+        return {};
+    }
+    catch (const std::exception& exception)
+    {
+        return exception.what();
+    }
+}
+
+std::string CloudRenderer::SetCompareDefines(const std::string& defineText, const f32 position)
+{
+    comparePosition_ = std::clamp(position, 0.02F, 0.98F);
+    try
+    {
+        if (!compareActive_ || defineText != definesB_)
+        {
+            const std::string sourcePrefix = DefinePrefix(defineText);
+            const std::string marchPrefix = sourcePrefix + (pointLights_
+                ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 6\n#define CLOUD_TRANSMITTANCE_BINDING 7\n#define CLOUD_MULTI_BINDING 8\n"
+                : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 5\n#define CLOUD_TRANSMITTANCE_BINDING 6\n#define CLOUD_MULTI_BINDING 7\n");
+            const auto vertex = compiler_->Compile({
+                .source = kVertexShader, .entryPoint = "main", .stage = shader::Stage::Vertex, .debug = false});
+            const auto marchPixel = compiler_->Compile({
+                .source = MarchSource(marchPrefix, farField_), .entryPoint = "main", .stage = shader::Stage::Pixel, .debug = false});
+            auto marchPipeline = device_->CreateGraphicsPipeline({
+                .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
+                .pixelShader = {.data = marchPixel.bytecode.data(), .size = marchPixel.bytecode.size()},
+                .vertexAttributes = {},
+                .vertexStrideBytes = 0U,
+                .pushConstantDwords = 64U,
+                .shaderResourceBuffers = pointLights_ ? 6U : 5U,
+                .sampledTextures = 3U,
+                .topology = rhi::PrimitiveTopology::TriangleList,
+                .fillMode = rhi::FillMode::Solid,
+                .cullMode = rhi::CullMode::None,
+                .blendMode = rhi::BlendMode::Opaque,
+                .depthTest = false,
+                .depthWrite = false,
+                .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
+                .colorAttachmentCount = 1U});
+            const auto resolvePixel = compiler_->Compile({
+                .source = sourcePrefix + kResolvePixelShader, .entryPoint = "main", .stage = shader::Stage::Pixel, .debug = false});
+            auto resolvePipeline = device_->CreateGraphicsPipeline({
+                .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
+                .pixelShader = {.data = resolvePixel.bytecode.data(), .size = resolvePixel.bytecode.size()},
+                .vertexAttributes = {},
+                .vertexStrideBytes = 0U,
+                .pushConstantDwords = 28U,
+                .shaderResourceBuffers = 0U,
+                .sampledTextures = 2U,
+                .topology = rhi::PrimitiveTopology::TriangleList,
+                .fillMode = rhi::FillMode::Solid,
+                .cullMode = rhi::CullMode::None,
+                .blendMode = rhi::BlendMode::Opaque,
+                .depthTest = false,
+                .depthWrite = false,
+                .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
+                .colorAttachmentCount = 1U});
+            pipelineB_ = std::move(marchPipeline);
+            resolvePipelineB_ = std::move(resolvePipeline);
+            definesB_ = defineText;
+            checkerboardB_ = CheckerboardModeOf(defineText);
+        }
+        compareActive_ = true;
+        return {};
+    }
+    catch (const std::exception& exception)
+    {
+        return exception.what();
+    }
+}
+
+void CloudRenderer::ClearCompare()
+{
+    compareActive_ = false;
+}
+
+std::string CloudRenderer::SetShaderDefines(const std::string& defineText)
+{
+    if (defineText == defines_)
+    {
+        return {};
+    }
+    return RebuildShaderPipelines(defineText);
 }
 
 CloudRenderer::~CloudRenderer() = default;
@@ -2304,7 +3036,7 @@ namespace
         Bits(static_cast<f32>(faceResolution)),
 
         f(std::clamp(layer.singleScatteringAlbedo, 0.0, 1.0)),
-        f(std::clamp(layer.anisotropy, -0.95, 0.95)),
+        Bits(std::max(view.sunAngularRadiusRadians, 0.0F)),
         Bits(std::max(view.irradianceScale, 0.0F)),
         f(0.6),
 
@@ -2373,11 +3105,11 @@ constexpr u32 kLightVolumeSettleFrames = 24U;
     const GpuCloudFieldProduct& field,
     const rhi::Buffer& volumeBuffer)
 {
-    static constexpr std::array<u32, 29> kReadDwords{
+    static constexpr std::array<u32, 30> kReadDwords{
         0U, 1U, 2U,                                           // cameraAspect.xyz
         12U, 13U, 14U,                                        // sunFar.xyz
         16U, 17U, 18U, 19U,                                   // shell
-        23U,                                                  // optics.w
+        21U, 23U,                                             // stellar radius, optics.w
         26U,                                                  // atmosphere.z
         29U, 30U, 31U,                                        // lod.yzw
         32U, 33U, 34U, 35U, 36U, 37U, 38U, 39U, 40U, 41U, 42U, 43U, // lab, labParams, labLife
@@ -2419,7 +3151,11 @@ void CloudRenderer::Draw(
     const CloudLab& lab,
     const u32 frameIndex,
     const f32 godrayStrength,
-    const f32 volumeDebugAltitude)
+    const f32 volumeDebugAltitude,
+    const std::span<const PointLight> pointLights,
+    const u32 variant,
+    const f32 regionLeft,
+    const f32 regionRight)
 {
     if (width == 0U || height == 0U || field.LayerCount() == 0U ||
         field.FaceResolution() < 2U)
@@ -2445,24 +3181,82 @@ void CloudRenderer::Draw(
         volumeDebugAltitude);
 
 
+    // `width`/`height` are the full cloud size (footprint, aspect); the target is half that in each dimension when checkerboarded.
     commands.SetRenderTarget(target);
     commands.SetViewport({
         .x = 0.0F, .y = 0.0F,
-        .width = static_cast<f32>(width), .height = static_cast<f32>(height),
+        .width = static_cast<f32>(target.Width()), .height = static_cast<f32>(target.Height()),
         .minDepth = 0.0F, .maxDepth = 1.0F});
     commands.SetScissor({
-        .left = 0, .top = 0,
-        .right = static_cast<i32>(width), .bottom = static_cast<i32>(height)});
+        .left = static_cast<i32>(std::lround(regionLeft * static_cast<f32>(target.Width()))), .top = 0,
+        .right = static_cast<i32>(std::lround(regionRight * static_cast<f32>(target.Width()))),
+        .bottom = static_cast<i32>(target.Height())});
 
-    commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsPipeline(variant == 1U && pipelineB_ ? *pipelineB_ : *pipeline_);
     commands.SetGraphicsConstants(constants);
     commands.SetGraphicsBuffer(0, field.Buffer());
     commands.SetGraphicsBuffer(1, *noise_);
     commands.SetGraphicsBuffer(2, *volume.buffer);
+    commands.SetGraphicsBuffer(3, StormBuffer());
+    if (pointLights_)
+    {
+        commands.SetGraphicsBuffer(5, UploadPointLights(pointLights, view.cameraPositionMeters));
+    }
+    commands.SetGraphicsBuffer(4, view.terrainOcclusionEnabled && view.terrainSunShadow
+        ? *view.terrainSunShadow : *emptyTerrainShadow_);
     commands.SetGraphicsTexture(0, depth);
     commands.SetGraphicsTexture(1, luts.Transmittance());
     commands.SetGraphicsTexture(2, luts.MultiScattering());
     commands.Draw(6);
+}
+
+void CloudRenderer::BeginFrame(const u32 completedSlot, const u32 framesInFlight)
+{
+    if (framesInFlight == 0U || framesInFlight > 64U || completedSlot >= framesInFlight)
+    {
+        throw std::invalid_argument("Invalid cloud frame slot");
+    }
+    pendingFramesMask_ = framesInFlight == 64U ? ~0ULL : ((1ULL << framesInFlight) - 1ULL);
+    const u64 completed = 1ULL << completedSlot;
+    for (auto& retired : lightBuffers_)
+    {
+        retired.pendingFrames &= ~completed;
+    }
+    std::erase_if(lightBuffers_, [](const RetiredBuffer& r) { return r.pendingFrames == 0U; });
+}
+
+rhi::Buffer& CloudRenderer::UploadPointLights(
+    const std::span<const PointLight> lights, const math::Double3& cameraPositionMeters)
+{
+    // Layout read by PointLightSource: [0].x = count; light i: [1 + 2i] = camera-relative position, [2 + 2i] = intensity.
+    std::array<f32, 4U * (1U + 2U * kMaxPointLights)> data{};
+    const u32 count = static_cast<u32>(std::min<std::size_t>(lights.size(), kMaxPointLights));
+    data[0] = static_cast<f32>(count);
+    for (u32 i = 0U; i < count; ++i)
+    {
+        const PointLight& light = lights[i];
+        f32* position = data.data() + 4U * (1U + 2U * i);
+        position[0] = static_cast<f32>(light.positionMeters.x - cameraPositionMeters.x);
+        position[1] = static_cast<f32>(light.positionMeters.y - cameraPositionMeters.y);
+        position[2] = static_cast<f32>(light.positionMeters.z - cameraPositionMeters.z);
+        f32* intensity = position + 4U;
+        intensity[0] = std::max(light.intensity.x, 0.0F);
+        intensity[1] = std::max(light.intensity.y, 0.0F);
+        intensity[2] = std::max(light.intensity.z, 0.0F);
+    }
+    auto buffer = device_->CreateBuffer({
+        .sizeBytes = static_cast<u64>(data.size() * sizeof(f32)),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::ShaderResource});
+    if (!buffer)
+    {
+        throw std::runtime_error("Failed to allocate the cloud point-light buffer.");
+    }
+    std::memcpy(buffer->Map(), data.data(), data.size() * sizeof(f32));
+    buffer->Unmap();
+    lightBuffers_.push_back({std::move(buffer), pendingFramesMask_});
+    return *lightBuffers_.back().buffer;
 }
 
 void CloudRenderer::UpdateLightVolume(
@@ -2517,6 +3311,12 @@ void CloudRenderer::UpdateLightVolume(
         volume.anchorSet = true;
         volume.generation = (volume.generation + 1U) % 1000000U;
     }
+    const auto terrainIdentity = view.terrainOcclusionEnabled ? view.terrainSunShadow : nullptr;
+    if (volume.terrainShadow != terrainIdentity)
+    {
+        volume.terrainShadow = terrainIdentity;
+        volume.generation = (volume.generation + 1U) % 1000000U;
+    }
     volume.active = true;
 
     const auto constants = BuildMarchConstants(
@@ -2542,7 +3342,10 @@ void CloudRenderer::UpdateLightVolume(
     // for them and another refresh would recompute bit-identical values: skip it. Any change
     // (sun, camera, weather, parameters, a re-anchor) restarts the count, and the original
     // refresh schedule runs unchanged until it settles again.
-    const u64 fingerprint = LightVolumeInputFingerprint(constants, field, *volume.buffer);
+    const auto terrainShadow = view.terrainOcclusionEnabled ? view.terrainSunShadow : nullptr;
+    auto* terrainBuffer = terrainShadow ? terrainShadow.get() : emptyTerrainShadow_.get();
+    const u64 fingerprint = LightVolumeInputFingerprint(constants, field, *volume.buffer) ^
+        static_cast<u64>(reinterpret_cast<std::uintptr_t>(terrainBuffer));
     if (fingerprint != volume.inputFingerprint)
     {
         volume.inputFingerprint = fingerprint;
@@ -2565,6 +3368,8 @@ void CloudRenderer::UpdateLightVolume(
     commands.SetComputeBuffer(0U, field.Buffer());
     commands.SetComputeBuffer(1U, *noise_);
     commands.SetComputeBuffer(2U, *volume.buffer);
+    commands.SetComputeBuffer(3U, StormBuffer());
+    commands.SetComputeBuffer(4U, *terrainBuffer);
     commands.Dispatch(96U / 8U, 96U / 8U, 3U * 32U);
     commands.UavBarrier(*volume.buffer);
     commands.Transition(*volume.buffer, rhi::ResourceState::UnorderedAccess, rhi::ResourceState::ShaderResource);
@@ -2640,6 +3445,7 @@ void CloudRenderer::DrawShadow(
     commands.SetGraphicsBuffer(0, field.Buffer());
     commands.SetGraphicsBuffer(1, *noise_);
     commands.SetGraphicsBuffer(2, *noise_);   // slot 2 is unused by the shadow shader
+    commands.SetGraphicsBuffer(3, StormBuffer());
     commands.SetGraphicsTexture(0, depth);
     commands.Draw(6);
 }
@@ -2655,7 +3461,11 @@ void CloudRenderer::Resolve(
     const CloudResolveView& now,
     const CloudResolveView& previous,
     const bool historyValid,
-    const f32 currentWeight)
+    const f32 currentWeight,
+    const u32 frameIndex,
+    const u32 variant,
+    const f32 regionLeft,
+    const f32 regionRight)
 {
     if (width == 0U || height == 0U)
     {
@@ -2687,7 +3497,7 @@ void CloudRenderer::Resolve(
     put(3U, prevPos);
     put(4U, prevForward);
     put(5U, prevUp);
-    put(6U, {Bits(std::clamp(currentWeight, 0.0F, 1.0F)), 0U, 0U, 0U});
+    put(6U, {Bits(std::clamp(currentWeight, 0.0F, 1.0F)), Bits(static_cast<f32>(frameIndex % 4096U)), 0U, 0U});
 
     commands.SetRenderTarget(target);
     commands.SetViewport({
@@ -2695,9 +3505,9 @@ void CloudRenderer::Resolve(
         .width = static_cast<f32>(width), .height = static_cast<f32>(height),
         .minDepth = 0.0F, .maxDepth = 1.0F});
     commands.SetScissor({
-        .left = 0, .top = 0,
-        .right = static_cast<i32>(width), .bottom = static_cast<i32>(height)});
-    commands.SetGraphicsPipeline(*resolvePipeline_);
+        .left = static_cast<i32>(std::lround(regionLeft * static_cast<f32>(width))), .top = 0,
+        .right = static_cast<i32>(std::lround(regionRight * static_cast<f32>(width))), .bottom = static_cast<i32>(height)});
+    commands.SetGraphicsPipeline(variant == 1U && resolvePipelineB_ ? *resolvePipelineB_ : *resolvePipeline_);
     commands.SetGraphicsConstants(constants);
     commands.SetGraphicsTexture(0, current);
     commands.SetGraphicsTexture(1, history);
@@ -2726,6 +3536,36 @@ void CloudRenderer::Composite(
         .right = static_cast<i32>(width), .bottom = static_cast<i32>(height)});
     commands.SetGraphicsPipeline(*compositePipeline_);
     commands.SetGraphicsTexture(0, clouds);
+    commands.Draw(6);
+}
+
+void CloudRenderer::CompositeSplit(
+    rhi::CommandList& commands,
+    rhi::Texture& cloudsLeft,
+    rhi::Texture& cloudsRight,
+    rhi::Texture& target,
+    const u32 width,
+    const u32 height,
+    const f32 position)
+{
+    if (width == 0U || height == 0U)
+    {
+        return;
+    }
+
+    commands.SetRenderTarget(target);
+    commands.SetViewport({
+        .x = 0.0F, .y = 0.0F,
+        .width = static_cast<f32>(width), .height = static_cast<f32>(height),
+        .minDepth = 0.0F, .maxDepth = 1.0F});
+    commands.SetScissor({
+        .left = 0, .top = 0,
+        .right = static_cast<i32>(width), .bottom = static_cast<i32>(height)});
+    commands.SetGraphicsPipeline(*compositeSplitPipeline_);
+    const std::array<u32, 4> constants{Bits(position * static_cast<f32>(width)), 0U, 0U, 0U};
+    commands.SetGraphicsConstants(constants);
+    commands.SetGraphicsTexture(0, cloudsLeft);
+    commands.SetGraphicsTexture(1, cloudsRight);
     commands.Draw(6);
 }
 } // namespace orbit::celestial_clouds

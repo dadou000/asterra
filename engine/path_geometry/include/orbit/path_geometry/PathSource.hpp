@@ -7,6 +7,7 @@
 #include <orbit/time/SimulationTime.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 
+#include <cstddef>
 #include <functional>
 #include <optional>
 #include <string>
@@ -36,6 +37,9 @@ struct PathSourceRequest
     PathUpResolver upResolver;
 
     f64 curveSampleSpacingMeters{4.0};
+    // Explicit per-edge cap: planetary routes must be chunked, not allocate
+    // an unbounded polyline on the editor thread.
+    std::size_t maximumSamples{16384U};
     u64 sourceRevision{0};
 };
 

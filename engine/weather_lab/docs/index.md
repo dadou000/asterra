@@ -55,6 +55,22 @@ verified = "f4a2dc6"
 
 [routes]
 "how the experiment was run, results, what is next" = "sc01"
+"storm domain plan: 500 km nested domain, cell budget, cloud layers, role of CM1" = "global-system-plan"
+"storm domain phases, gates, timewarp, open decisions" = "global-system-phases"
+"measured results of the storm domain phases (ice, nesting)" = "global-system-status"
+"measured results of phases 3 and 4 (sponge, adaptive nest, GPU port)" = "global-system-status-late"
+"phase 6: scheduled storms, checkpoints, timewarp results" = "global-system-status-p6"
+"phase 7: the nest on the GPU and in the clouds, measured" = "global-system-status-p7"
+"phase 8: child-edge artifact, hot-reloadable kernels, continuous sky" = "global-system-status-p8"
+"phase 9: close-range storm detail (warp, smooth interpolation, carve)" = "global-system-status-p9"
+"phase 10: rain shafts and the storm's own lightning" = "global-system-status-p10"
+"phase 10: seeing the lightning, one time control, strike pause" = "global-system-status-p10-visibility"
+"phase 10: lightning window, flash size, the channel as a tree" = "global-system-status-p10-solver"
+"phase 10: the lightning channel shape, lattice and timing" = "global-system-status-p10-shape"
+"phase 10: the physical emission of a lightning flash (timing, colour, brightness)" = "global-system-status-p10-emission"
+"phase 10: cloud-to-ground strikes (descending leaders)" = "global-system-status-p10-ground"
+"phase 10: the placed storm and the lightning settings survive a restart" = "global-system-status-p10-persistence"
+"GPU port: Vulkan compute kernels, CPU comparison, benchmark" = "gpu-port"
 +++
 
 The weather lab exists to answer one question before any weather is integrated into Orbit: how much of a CM1 supercell survives

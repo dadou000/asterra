@@ -144,6 +144,12 @@ struct PathNodeRecord
     PathAnchor anchor;
 };
 
+inline constexpr schema::PropertyId kInfrastructureCatalogId{0x494e465241434154ULL, 0x414c4f4749440001ULL};
+inline constexpr schema::PropertyId kInfrastructureCatalogVersion{0x494e465241434154ULL, 0x414c4f4756455201ULL};
+inline constexpr schema::PropertyId kInfrastructureConstruction{0x494e465241434154ULL, 0x434f4e5354520001ULL};
+inline constexpr schema::PropertyId kInfrastructureDesignSpeed{0x494e465241434154ULL, 0x53504545444b4d01ULL};
+inline constexpr schema::PropertyId kInfrastructureEaseTurns{0x494e465241434154ULL, 0x4541534554555201ULL};
+
 struct PathEdgeRecord
 {
     scene::ObjectId id{};
@@ -154,9 +160,23 @@ struct PathEdgeRecord
     math::Double3 startHandleMeters{};
     math::Double3 endHandleMeters{};
     std::string profileOverride;
+    std::string infrastructureCatalogId;
+    i64 infrastructureCatalogVersion{1};
+    std::string constructionMode{"terrain"};
+    f64 designSpeedKmh{0.0}; // zero = catalog default
+    bool easeTurns{true};
 };
 
 void RegisterSchemas(schema::SchemaRegistry& schemas);
+
+// A transactional, shape-preserving split. The original edge keeps its ID
+// and becomes the first segment; the second edge/new node receive new IDs.
+struct PathSplitResult
+{
+    PathNodeRecord junctionNode;
+    PathEdgeRecord firstEdge;
+    PathEdgeRecord secondEdge;
+};
 
 class PathNetworkService
 {
@@ -196,10 +216,22 @@ public:
         scene::ObjectId node,
         PathAnchor anchor);
 
+    // Shape-preserving De Casteljau split in one explicit FramePoint frame.
+    // Routed/surface/socket/mixed-frame segments are rejected until their
+    // anchor and dependency remapping semantics are implemented.
+    [[nodiscard]] PathSplitResult SplitEdge(
+        scene::ObjectId edge, f64 fraction,
+        std::string nodeName = "Split Junction");
+
     void SetBezierHandles(
         scene::ObjectId edge,
         math::Double3 startHandleMeters,
         math::Double3 endHandleMeters);
+
+    // Persist infrastructure intent on the existing path edge via CommandService.
+    void SetInfrastructureIntent(scene::ObjectId edge, std::string catalogId,
+        i64 catalogVersion, std::string constructionMode,
+        f64 designSpeedKmh, bool easeTurns);
 
     void SetProfile(
         scene::ObjectId pathObject,

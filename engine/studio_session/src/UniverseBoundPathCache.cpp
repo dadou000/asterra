@@ -1,6 +1,7 @@
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
 
 #include <algorithm>
+#include <orbit/paths/PathNetwork.hpp>
 #include <stdexcept>
 #include <utility>
 
@@ -38,6 +39,45 @@ bool UniverseBoundPathCache::RefreshBinding()
     return true;
 }
 
+bool UniverseBoundPathCache::StoreCorridorIfChanged(
+    const u64 authoredSignature,
+    const path_geometry::PathCenterline& centerline,
+    const paths::PathProfile& profile,
+    const path_geometry::CorridorSweep& corridor,
+    const path_geometry::PathBuildOptions options,
+    const path_geometry::CorridorRefinementOptions refinement,
+    const std::optional<u64> routeGeneration)
+{
+    static_cast<void>(RefreshBinding());
+    if (authoredSignature == 0U)
+        throw std::invalid_argument("Corridor authored signature must be nonzero.");
+    const auto found = corridorAuthoredSignatures_.find(centerline.edge);
+    if (found != corridorAuthoredSignatures_.end() &&
+        found->second == authoredSignature && !IsDirty(centerline.edge) && Find(centerline.edge) != nullptr &&
+        RouteGeneration(centerline.edge) == routeGeneration)
+        return false;
+    StoreCorridor(centerline, profile, corridor, options, refinement, routeGeneration);
+    corridorAuthoredSignatures_[centerline.edge] = authoredSignature;
+    dirtyCorridors_.erase(centerline.edge);
+    return true;
+}
+
+void UniverseBoundPathCache::StoreCorridor(
+    const path_geometry::PathCenterline& centerline,
+    const paths::PathProfile& profile,
+    const path_geometry::CorridorSweep& corridor,
+    const path_geometry::PathBuildOptions options,
+    const path_geometry::CorridorRefinementOptions refinement,
+    const std::optional<u64> routeGeneration)
+{
+    // Build before replacing an existing cache product. A failed candidate
+    // leaves the previous valid revision available for visualization.
+    auto product = path_geometry::BuildCorridorDerived(
+        centerline, profile, corridor, options, refinement);
+    Store(std::move(product), routeGeneration);
+    corridorAuthoredSignatures_.erase(centerline.edge);
+}
+
 void UniverseBoundPathCache::Store(
     path_geometry::PathDerivedProduct product,
     const std::optional<u64> routeGeneration)
@@ -66,7 +106,11 @@ void UniverseBoundPathCache::Store(
     }
 
     const scene::ObjectId edge = product.edge;
+    corridorAuthoredSignatures_.erase(edge);
+    dirtyCorridors_.erase(edge);
+    rebuildErrors_.erase(edge);
     products_[edge] = std::move(product);
+    dependencySnapshots_[edge] = CaptureDependencies(edge);
 
     if (routeGeneration.has_value())
     {
@@ -114,10 +158,147 @@ UniverseBoundPathCache::RouteGeneration(
         : std::optional<u64>(found->second);
 }
 
+UniverseBoundPathCache::DependencySnapshot
+UniverseBoundPathCache::CaptureDependencies(const scene::ObjectId edge) const
+{
+    DependencySnapshot snapshot;
+    if (world_ == nullptr || !world_->HasWorld()) return snapshot;
+    const auto& objects = world_->Objects();
+    const auto record = objects.Find(edge);
+    if (!record.has_value() || record->type != paths::kPathEdgeType)
+        return snapshot;
+    const auto capture = [&](scene::ObjectId id, schema::PropertyId key) {
+        snapshot.properties.push_back(objects.GetProperty(id, key));
+    };
+    // Stable graph topology, handles, profile, catalog and construction.
+    for (const auto key : {paths::kEdgeStartNode, paths::kEdgeEndNode,
+        paths::kEdgeMode, paths::kBezierStartHandle, paths::kBezierEndHandle,
+        paths::kEdgeProfileOverride, paths::kInfrastructureCatalogId,
+        paths::kInfrastructureCatalogVersion, paths::kInfrastructureConstruction,
+        paths::kInfrastructureDesignSpeed, paths::kInfrastructureEaseTurns})
+        capture(edge, key);
+    const auto endpoint = [&](schema::PropertyId key) {
+        const auto value = objects.GetProperty(edge, key);
+        if (!value || !std::holds_alternative<schema::ObjectReferenceValue>(*value)) return;
+        const auto id = std::get<schema::ObjectReferenceValue>(*value);
+        const scene::ObjectId node{.high=id.high, .low=id.low};
+        // Explicitly encode missing/deleted nodes in the snapshot.
+        snapshot.properties.emplace_back(objects.Find(node).has_value());
+        for (const auto property : {paths::kAnchorKind, paths::kAnchorFrame,
+            paths::kAnchorPosition, paths::kAnchorBody, paths::kAnchorSurface,
+            paths::kAnchorEntity, paths::kAnchorSocket})
+            capture(node, property);
+    };
+    endpoint(paths::kEdgeStartNode);
+    endpoint(paths::kEdgeEndNode);
+    // Network profile changes also affect derived geometry.
+    if (record->parent)
+        capture(*record->parent, paths::kNetworkProfile);
+    return snapshot;
+}
+
+std::size_t UniverseBoundPathCache::RefreshSemanticInvalidation()
+{
+    static_cast<void>(RefreshBinding());
+    if (world_ == nullptr || !world_->HasWorld()) return 0;
+    const u64 revision = world_->Objects().Revision();
+    if (revision == observedSceneRevision_) return 0;
+    observedSceneRevision_ = revision;
+    std::size_t invalidated = 0;
+    for (auto it = products_.begin(); it != products_.end();)
+    {
+        const auto edge = it->first;
+        if (!world_->Objects().Find(edge).has_value())
+        {
+            routeGenerations_.erase(edge);
+            corridorAuthoredSignatures_.erase(edge);
+            dependencySnapshots_.erase(edge);
+            dirtyCorridors_.erase(edge);
+            it = products_.erase(it);
+            ++invalidated;
+            continue;
+        }
+        const auto current = CaptureDependencies(edge);
+        const auto old = dependencySnapshots_.find(edge);
+        if ((old == dependencySnapshots_.end() || old->second != current) &&
+            !IsDirty(edge))
+        {
+            MarkDirty(edge);
+            ++invalidated;
+        }
+        ++it;
+    }
+    return invalidated;
+}
+
+std::size_t UniverseBoundPathCache::RebuildDirty(
+    const RebuildResolver& resolver, const std::size_t budget)
+{
+    static_cast<void>(RefreshBinding());
+    if (!resolver || budget == 0 || world_ == nullptr || !world_->HasWorld()) return 0;
+    std::vector<scene::ObjectId> candidates;
+    for (const auto edge : dirtyCorridors_)
+        if (!rebuildErrors_.contains(edge)) candidates.push_back(edge);
+    std::sort(candidates.begin(), candidates.end(), [](const auto a, const auto b) {
+        return a.high != b.high ? a.high < b.high : a.low < b.low;
+    });
+    std::size_t processed = 0;
+    for (const auto edge : candidates)
+    {
+        if (processed >= budget) break;
+        ++processed;
+        try
+        {
+            const auto request = resolver(edge);
+            if (!request)
+            {
+                rebuildErrors_[edge] = "No current corridor build request for edge.";
+                continue;
+            }
+            if (request->centerline.edge != edge)
+                throw std::invalid_argument("Rebuild request edge does not match dirty edge.");
+            static_cast<void>(StoreCorridorIfChanged(request->authoredSignature,
+                request->centerline, request->profile, request->corridor,
+                request->options, request->refinement, request->routeGeneration));
+            rebuildErrors_.erase(edge);
+        }
+        catch (const std::exception& error)
+        {
+            rebuildErrors_[edge] = error.what();
+        }
+    }
+    return processed;
+}
+
+std::string UniverseBoundPathCache::RebuildError(const scene::ObjectId edge) const
+{
+    const auto it = rebuildErrors_.find(edge);
+    return it == rebuildErrors_.end() ? std::string{} : it->second;
+}
+
+std::size_t UniverseBoundPathCache::DirtyCount() const noexcept
+{
+    return dirtyCorridors_.size();
+}
+
+void UniverseBoundPathCache::MarkDirty(const scene::ObjectId edge) noexcept
+{
+    if (edge) { dirtyCorridors_.insert(edge); rebuildErrors_.erase(edge); }
+}
+
+bool UniverseBoundPathCache::IsDirty(const scene::ObjectId edge) const noexcept
+{
+    return dirtyCorridors_.contains(edge);
+}
+
 bool UniverseBoundPathCache::Erase(
     const scene::ObjectId edge) noexcept
 {
     routeGenerations_.erase(edge);
+    dirtyCorridors_.erase(edge);
+    rebuildErrors_.erase(edge);
+    corridorAuthoredSignatures_.erase(edge);
+    dependencySnapshots_.erase(edge);
     return products_.erase(edge) != 0U;
 }
 
@@ -125,6 +306,11 @@ void UniverseBoundPathCache::Clear() noexcept
 {
     products_.clear();
     routeGenerations_.clear();
+    corridorAuthoredSignatures_.clear();
+    dependencySnapshots_.clear();
+    observedSceneRevision_ = ~u64{0};
+    dirtyCorridors_.clear();
+    rebuildErrors_.clear();
 }
 
 std::size_t UniverseBoundPathCache::Size() const noexcept

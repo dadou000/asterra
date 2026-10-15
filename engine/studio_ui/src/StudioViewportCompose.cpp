@@ -59,6 +59,7 @@ StudioViewportRenderer::Compose(
     hybridReflectionRenderer_.BeginFrame(frameIndex, framesInFlight_);
     meshSdfScene_.BeginReflectionFrame(frameIndex, framesInFlight_);
     glassSurfaceRenderer_.BeginFrame(frameIndex, framesInFlight_);
+    cloudRenderer_.BeginFrame(frameIndex, framesInFlight_);
 
     const auto overlays =
         StudioLightingOverlays();
@@ -94,6 +95,7 @@ StudioViewportRenderer::Compose(
         }
     }
 
+    TickFlashClock(atTime);
     auto rendered =
         ComposeBase(
             graph,

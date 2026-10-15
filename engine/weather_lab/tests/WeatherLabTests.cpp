@@ -1,4 +1,5 @@
 #include <orbit/weather_lab/FastStormSolver.hpp>
+#include <orbit/weather_lab/NestedStormSolver.hpp>
 #include <orbit/weather_lab/StormMetrics.hpp>
 #include <orbit/weather_lab/SliceColor.hpp>
 #include <orbit/weather_lab/Thermo.hpp>
@@ -110,6 +111,227 @@ void TestStormInitiates()
     std::vector<float> qr;
     solver.CopyField("qr", qr);
     Check(*std::max_element(qr.begin(), qr.end()) > 1.0e-3F);
+}
+
+void TestIceScheme()
+{
+    FastStormConfig c = SmallConfig();
+    c.ice = true;
+    FastStormSolver solver(c);
+    solver.Advance(2400.0);
+    const FastStormDiagnostics& d = solver.Diagnostics();
+    // The storm still initiates, and total water (now including cloud ice, snow and graupel) stays conserved.
+    Check(d.maxUpdraft > 15.0F);
+    Check(std::fabs(d.totalWater - d.initialTotalWater) < 1.0e-4 * d.initialTotalWater);
+    // Ice forms in the cold anvil and graupel/snow reach substantial mixing ratios; nothing is negative or non-finite.
+    float maxIce = 0.0F, maxSnow = 0.0F, maxGraupel = 0.0F;
+    for (const char* name : {"qi", "qs", "qg"})
+    {
+        std::vector<float> q;
+        solver.CopyField(name, q);
+        for (const float value : q)
+        {
+            Check(std::isfinite(value) && value >= 0.0F);
+        }
+        const float top = *std::max_element(q.begin(), q.end());
+        (name[1] == 'i' ? maxIce : name[1] == 's' ? maxSnow : maxGraupel) = top;
+    }
+    Check(maxIce > 1.0e-5F);
+    Check(maxSnow > 1.0e-5F || maxGraupel > 1.0e-5F);
+    // The export list gains the ice fields only when the scheme is on.
+    const auto fields = solver.ActiveExportFields();
+    Check(std::find(fields.begin(), fields.end(), "qg") != fields.end());
+    Check(FastStormSolver(SmallConfig()).ActiveExportFields().size() == FastStormSolver::ExportFields().size());
+
+    // Deterministic across thread counts with ice on.
+    FastStormConfig a = c;
+    a.threads = 1;
+    FastStormConfig b = c;
+    b.threads = 4;
+    FastStormSolver sa(a);
+    FastStormSolver sb(b);
+    sa.Advance(600.0);
+    sb.Advance(600.0);
+    std::vector<float> ga, gb;
+    sa.CopyField("qs", ga);
+    sb.CopyField("qs", gb);
+    Check(ga == gb);
+}
+
+NestConfig SmallNest()
+{
+    NestConfig n;
+    n.parent = SmallConfig();
+    n.parent.bubble.amplitude = 2.0F;
+    n.ratio = 2;
+    n.cells = 16;       // child 32 x 32 at half the spacing
+    n.relaxCells = 6;
+    return n;
+}
+
+void TestNesting()
+{
+    // Validation.
+    NestConfig bad = SmallNest();
+    Check(NestedStormSolver::Validate(bad).empty());
+    bad.ratio = 3;
+    Check(!NestedStormSolver::Validate(bad).empty());
+    bad = SmallNest();
+    bad.cells = 12;   // 24 child cells: not a power of two
+    Check(!NestedStormSolver::Validate(bad).empty());
+    bad = SmallNest();
+    bad.cells = 32;   // no margin left inside a 32-cell parent
+    Check(!NestedStormSolver::Validate(bad).empty());
+
+    // One-way: the child starts as the parent's interpolation, stays finite and divergence-free, develops its own storm.
+    NestedStormSolver oneWay(SmallNest());
+    std::vector<float> childTheta0;
+    oneWay.Child().CopyField("th", childTheta0);
+    const NestConfig layout = SmallNest();
+    Check(childTheta0.size() == 32U * 32U * 40U);
+    oneWay.Advance(1500.0);
+    const FastStormDiagnostics& dc = oneWay.Child().Diagnostics();
+    Check(std::isfinite(dc.maxUpdraft) && dc.maxUpdraft > 3.0F);
+    Check(dc.maxDivergence < 1.0e-5F);
+    Check(std::fabs(oneWay.Child().Diagnostics().time - oneWay.Parent().Diagnostics().time) < 1.0e-3);
+    Check(oneWay.SubStepRatio() >= 1.0);
+
+    // At the child's outer edge the child follows the parent: compare the relaxed edge column with the parent's value there.
+    std::vector<float> childTheta, parentTheta;
+    oneWay.Child().CopyField("th", childTheta);
+    oneWay.Parent().CopyField("th", parentTheta);
+    const std::uint32_t oi = (layout.parent.nx - layout.cells) / 2U;
+    const std::uint32_t oj = (layout.parent.ny - layout.cells) / 2U;
+    double worst = 0.0;
+    for (std::uint32_t k = 0; k < 40U; ++k)
+    {
+        for (std::uint32_t j = 0; j < 32U; ++j)
+        {
+            const float child = childTheta[(static_cast<std::size_t>(k) * 32U + j) * 32U + 0U];
+            const float parent = parentTheta[(static_cast<std::size_t>(k) * layout.parent.ny + oj + j / 2U) * layout.parent.nx + oi];
+            worst = std::max(worst, static_cast<double>(std::fabs(child - parent)));
+        }
+    }
+    Check(worst < 0.6);
+
+    // Two-way: finite, and the parent really changes relative to the one-way run.
+    NestConfig two = SmallNest();
+    two.feedback = true;
+    NestedStormSolver twoWay(two);
+    twoWay.Advance(1500.0);
+    Check(std::isfinite(twoWay.Parent().Diagnostics().maxUpdraft));
+    Check(twoWay.Child().Diagnostics().maxDivergence < 1.0e-5F);
+    std::vector<float> a, b;
+    oneWay.Parent().CopyField("th", a);
+    twoWay.Parent().CopyField("th", b);
+    double difference = 0.0;
+    for (std::size_t i = 0; i < a.size(); ++i)
+    {
+        Check(std::isfinite(b[i]));
+        difference = std::max(difference, static_cast<double>(std::fabs(a[i] - b[i])));
+    }
+    Check(difference > 1.0e-3);
+}
+
+void TestSpongeTrackingAndAdaptiveNest()
+{
+    // Lateral sponge: rain placed in the edge band decays faster than in the fully periodic run.
+    FastStormConfig open = SmallConfig();
+    open.lateralSpongeCells = 6;
+    FastStormConfig closed = SmallConfig();
+    FastStormSolver sOpen(open);
+    FastStormSolver sClosed(closed);
+    const std::size_t bandCell = (static_cast<std::size_t>(5) * 32U + 16U) * 32U + 1U;   // level 5, column x = 1
+    const std::size_t centreCell = (static_cast<std::size_t>(5) * 32U + 16U) * 32U + 16U;
+    sOpen.MutableState().qr[bandCell] = 1.0e-3F;
+    sClosed.MutableState().qr[bandCell] = 1.0e-3F;
+    sOpen.MutableState().qr[centreCell] = 1.0e-3F;
+    sClosed.MutableState().qr[centreCell] = 1.0e-3F;
+    for (int i = 0; i < 4; ++i)
+    {
+        (void)sOpen.Step(12.0F);
+        (void)sClosed.Step(12.0F);
+    }
+    std::vector<float> ro, rc;
+    sOpen.CopyField("qr", ro);
+    sClosed.CopyField("qr", rc);
+    Check(ro[bandCell] < 0.92F * rc[bandCell]);           // absorbed in the band (about 13 percent in 48 s)
+    Check(std::fabs(ro[centreCell] - rc[centreCell]) < 0.2F * rc[centreCell] + 1.0e-9F);   // the interior is not
+
+    // Storm-following frame: starting from a frame that does not move with the storm, the tracker moves it toward the storm.
+    FastStormConfig tracked = SmallConfig();
+    tracked.frameU = 0.0F;
+    tracked.frameV = 0.0F;
+    tracked.trackStorm = true;
+    tracked.trackSeconds = 240.0F;
+    FastStormSolver follower(tracked);
+    follower.Advance(3000.0);
+    Check(follower.Config().frameU > 3.0F);
+    Check(std::isfinite(follower.Diagnostics().maxUpdraft) && follower.Diagnostics().maxUpdraft > 10.0F);
+
+    // Adaptive child: absent before the storm, created once the updraft passes the threshold, and shrunk by the budget.
+    NestConfig adaptive = SmallNest();
+    adaptive.adaptive = true;
+    adaptive.maxChildCells = 20000;   // a 32 x 32 x 40 child (40960 cells) does not fit: it is halved to 16 x 16 x 40
+    Check(NestedStormSolver::Validate(adaptive).empty());
+    NestedStormSolver nest(adaptive);
+    Check(!nest.HasChild());
+    nest.Advance(300.0);
+    Check(!nest.HasChild());
+    nest.Advance(1500.0);
+    Check(nest.HasChild());
+    Check(nest.ChildCreations() == 1U);
+    Check(nest.BudgetCoarsenings() == 1U);
+    Check(nest.ChildCells() == 8U);
+    Check(nest.TotalCells() == 32ULL * 32U * 40U + 16ULL * 16U * 40U);
+    Check(std::fabs(nest.Child().Diagnostics().time - nest.Parent().Diagnostics().time) < 1.0e-3);
+    Check(nest.Child().Diagnostics().maxDivergence < 1.0e-5F);
+    NestConfig bad = adaptive;
+    bad.releaseUpdraft = bad.createUpdraft;
+    Check(!NestedStormSolver::Validate(bad).empty());
+}
+
+void TestOutflowDoesNotWrap()
+{
+    // A 2 K pulse of potential temperature at 14 km leaves through the east edge (the wind there is faster than the frame). In a fully
+    // periodic domain it comes back in at the west edge; with the lateral sponge it is absorbed and does not.
+    const auto run = [](const bool sponge)
+    {
+        FastStormConfig c;
+        c.nx = 256;
+        c.ny = 4;
+        c.nz = 40;
+        c.threads = 2;
+        c.bubble.amplitude = 0.0F;
+        c.lateralSpongeCells = sponge ? 16U : 0U;
+        FastStormSolver solver(c);
+        const FastStormState s = solver.MutableState();
+        const std::uint32_t k = 28;
+        for (std::uint32_t j = 0; j < c.ny; ++j)
+        {
+            for (std::uint32_t i = 236; i < 244; ++i)
+            {
+                s.theta[(static_cast<std::size_t>(k) * c.ny + j) * c.nx + i] += 2.0F;
+            }
+        }
+        solver.Advance(4000.0);
+        std::vector<float> theta;
+        solver.CopyField("th", theta);
+        const BaseState& base = solver.Base();
+        float west = 0.0F;   // x from 40 km to 200 km: outside the west sponge band, well away from the pulse's exit
+        for (std::uint32_t j = 0; j < c.ny; ++j)
+        {
+            for (std::uint32_t i = 20; i < 100; ++i)
+            {
+                west = std::max(west, std::fabs(theta[(static_cast<std::size_t>(k) * c.ny + j) * c.nx + i] - base.theta[k]));
+            }
+        }
+        return west;
+    };
+    const float periodic = run(false);
+    const float open = run(true);
+    Check(periodic > 0.03F);             // it wrapped (the pulse disperses into gravity waves: about 0.07 K measured)
+    Check(open < 0.02F * periodic);      // the sponge absorbed it (about 0.0004 K measured)
 }
 
 void TestDeterministicAcrossThreadCounts()
@@ -318,6 +540,10 @@ int main()
     TestRestAtmosphereStaysAtRest();
     TestProjectionAndWaterBudget();
     TestStormInitiates();
+    TestIceScheme();
+    TestNesting();
+    TestSpongeTrackingAndAdaptiveNest();
+    TestOutflowDoesNotWrap();
     TestDeterministicAcrossThreadCounts();
     TestFormatRoundTripAndMetrics();
     TestSliceColors();

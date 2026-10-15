@@ -380,6 +380,12 @@ The root executable is a developer convenience contract and does not change the 
 
 ---
 
+## Canonical debugging location
+
+Orbit Studio's **Debug** workspace is the default user-facing entry point for tests, diagnostics, reproducible experiments, and validation results. Specialized panels (Terrain, Shading, Display Diagnostics, Profiler, Body Map, reports) remain the implementation owners and may still expose contextual controls, but user documentation and new test entry points should lead through the Debug center. Do not duplicate the underlying validators, capture pipeline, or test registries; expose the same operations through RPC/MCP where supported.
+
+The current construction-terrain check validates page readiness, revision identity and a finite sampled height only; it is **not** a complete road/rail GPU or collision test. The contract and verification steps live in `engine/studio_ui/docs/debug-center.md`.
+
 # UI review checklist
 
 A new or changed editor surface should be reviewed against these questions:
@@ -405,3 +411,15 @@ A new or changed editor surface should be reviewed against these questions:
 A feature that fails the common-case test should be simplified.
 
 A feature that fails the expert-control or non-restriction test should be redesigned rather than stripped down.
+
+## Procedural Paths & Roads editor behavior
+
+Build → Procedurals → Procedural Paths & Roads must open the canonical docked Procedurals panel in a beginner-friendly city-builder palette. The palette may contain only actually backed catalog entries; additional road widths/station assets remain clearly marked planned until supported by the native geometry, materials, contact and network services. Straight, Bezier and routed drawing share one existing viewport tool and the PathNetworkService transactional authority. Direct clicks create connected segment chains while enabled; normal Path Tool is unchanged. Endpoint snapping must use authored network+frame identities, not only screen-space overlap, and cannot silently connect mid-edge or at a bridge grade separation. The panel retains a one-click link to expert settings, engineering, junction and debug tools. Manual UI acceptance is specified in docs/tree/world/roads-railways/editor-builder.md.
+
+## Procedural road construction UI
+
+Build → Procedurals → Procedural Paths & Roads remains in the single dockable editor UI. The palette must show only backed section recipes. Its live viewport ghost shares the existing reference-ray and authored snap interpretation and cannot write to the network. Straight and Bezier previews show real configured width boundaries, while routed mode must be marked as an uncomputed chord. A successful click uses one undoable CommandService transaction; re-clicking a snapped endpoint is a no-op, and an invalid short segment is rejected with local feedback. Right-click ends the chain, Escape leaves the tool, and Page Up/Down adjusts the explicit reference-ellipsoid elevation. Precise numeric entry and expert construction access remain available. A separate road graph or overlay renderer is forbidden.
+
+## Procedural infrastructure manager
+
+The same Build → Procedurals → Procedural Paths & Roads dock now includes a searchable bulk road manager. UI row selections are ephemeral only; segment ID and profile changes are sent to PathNetworkService/CommandService as a single undoable transaction, so there is no duplicate editable road model. Readiness labels come from the native cache's Find, IsDirty and RebuildError. Filtering and selecting never mutate authored world state. Native acceptance must include bulk Undo/Redo, invalidated construction products and scoped network selection.

@@ -46,3 +46,12 @@ verify = [
 ]
 verified = "707c225d50c50f01b9ef797e67903447c1a66d5f"
 +++
+
+## Infrastructure section catalog (Harmony)
+
+StudioSession's path-products rebuild resolver now uses PlanInfrastructureSection from engine/path_geometry, replacing duplicated hard-coded road and railway strip vertices. The rural-road preset generates crowned pavement and shoulders; the ballasted-rail preset generates track formation, twin contact-width railhead strips and optional bounded cant based on design speed and curve geometry. Advisory nominal grade/radius defaults are used for diagnostics. Only terrain construction produces continuous landscape grading. Elevated, supported and tunnel intent remains non-destructive until a dedicated structure/void solver exists. Studio RPC geometry inspection reads the same committed products rather than a duplicate generic ribbon when available.
+
+
+## Road contact-scene publishing and diagnostics
+
+\`StudioRoadJunctionPipeline\` now owns one \`RoadContactSceneOwner\` per coherent reference-frame packet. It prepares collision shapes from the already-trimmed road and patch products before publishing the matching render generation. A single \`PacketCurrent\` guard protects both \`RenderProducts\` and contact queries from dirty/changed inputs. StudioSession contact RPC reports generation ownership and explicitly distinguishes a staged CPU scene from any future rigid-body physics-world registration. Tests cover dirty-source fail-closed behavior and clearing on world close.

@@ -49,9 +49,15 @@ struct RatePreset
 };
 
 // The last entry stands for any other rate, edited next to the selector.
-constexpr std::array<RatePreset, 8> kRatePresets{{
+constexpr std::array<RatePreset, 14> kRatePresets{{
+    {"0.01x", 0.01},
+    {"0.05x", 0.05},
     {"0.1x", 0.1},
+    {"0.25x", 0.25},
+    {"0.5x", 0.5},
     {"1x", 1.0},
+    {"2x", 2.0},
+    {"5x", 5.0},
     {"10x", 10.0},
     {"60x", 60.0},
     {"600x", 600.0},
@@ -737,6 +743,11 @@ void SimulationControlsUi::SetReportIssueHandler(std::function<void()> handler)
     reportIssue_ = std::move(handler);
 }
 
+void SimulationControlsUi::SetBandToggles(std::vector<BandToggle> toggles)
+{
+    toggles_ = std::move(toggles);
+}
+
 void SimulationControlsUi::Register(editor_ui::EditorUi&)
 {
     registered_ = true;
@@ -844,6 +855,111 @@ void SimulationControlsUi::Draw(editor_ui::PanelContext& context)
             {
                 // A non-finite value is ignored; the clock keeps its rate.
             }
+        }
+    }
+
+    // The same rate as a slider: logarithmic from 0.01x (slow motion, left) to 100000x (fast forward, right) with 1x marked, so slowing
+    // the world down and speeding it up are one gesture. It snaps to 1x and a double click returns there.
+    {
+        constexpr f64 kMinDecade = -2.0;
+        constexpr f64 kMaxDecade = 5.0;
+        constexpr f64 kSpan = kMaxDecade - kMinDecade;
+        const f32 trackWidth = 220.0F * uiScale;
+        context.SameLine();
+        const auto slider = context.Canvas("##sim-rate-slider", {trackWidth, 26.0F * uiScale});
+        const f64 currentRate = controls_->Rate();
+        const f64 decade = currentRate > 0.0 ? std::clamp(std::log10(currentRate), kMinDecade, kMaxDecade) : kMinDecade;
+        const auto xOf = [&](const f64 d) { return 0.04F + 0.92F * static_cast<f32>((d - kMinDecade) / kSpan); };
+        const f32 oneX = xOf(0.0);
+        const f32 knobX = xOf(decade);
+        // The track: blue for slow motion, a neutral band around 1x, amber for fast forward.
+        constexpr i32 kSegments = 48;
+        for (i32 index = 0; index < kSegments; ++index)
+        {
+            const f32 l = static_cast<f32>(index) / kSegments;
+            const f32 r = static_cast<f32>(index + 1) / kSegments;
+            const auto colour = [&](const f32 t) {
+                const f32 x = 0.04F + 0.92F * t;
+                if (x < oneX)
+                {
+                    const f32 k = std::clamp((oneX - x) / (oneX - 0.04F), 0.0F, 1.0F);
+                    return math::Float4{0.20F + 0.04F * (1.0F - k), 0.30F + 0.10F * (1.0F - k), 0.55F - 0.05F * (1.0F - k) + 0.10F * k, 1.0F};
+                }
+                const f32 k = std::clamp((x - oneX) / (0.96F - oneX), 0.0F, 1.0F);
+                return math::Float4{0.24F + 0.60F * k, 0.34F + 0.12F * k, 0.52F - 0.32F * k, 1.0F};
+            };
+            context.CanvasGradientRect({0.04F + 0.92F * l, 0.34F}, {0.04F + 0.92F * r, 0.66F}, colour(l), colour(r));
+        }
+        // The filled part from 1x to the knob, so the direction of the change reads at a glance.
+        context.CanvasRect({std::min(oneX, knobX), 0.34F}, {std::max(oneX, knobX), 0.66F}, {1.0F, 1.0F, 1.0F, 0.22F}, true);
+        for (i32 d = static_cast<i32>(kMinDecade); d <= static_cast<i32>(kMaxDecade); ++d)
+        {
+            const f32 x = xOf(static_cast<f64>(d));
+            const bool unity = d == 0;
+            context.CanvasLine({x, unity ? 0.12F : 0.24F}, {x, unity ? 0.88F : 0.76F},
+                unity ? math::Float4{0.94F, 0.97F, 1.0F, 0.95F} : math::Float4{0.78F, 0.84F, 0.96F, 0.45F}, (unity ? 1.5F : 1.0F) * uiScale);
+        }
+        const bool paused = !controls_->Playing();
+        context.CanvasCircle({knobX, 0.50F}, 9.0F * uiScale, {0.07F, 0.09F, 0.14F, 1.0F});
+        context.CanvasCircle({knobX, 0.50F}, 7.0F * uiScale,
+            paused ? math::Float4{0.62F, 0.66F, 0.74F, 1.0F} : math::Float4{0.94F, 0.97F, 1.0F, 1.0F});
+        const auto rateText = [](const f64 rate) {
+            if (rate >= 100.0) { return std::format("{:.0f}x", rate); }
+            if (rate >= 10.0) { return std::format("{:.1f}x", rate); }
+            return std::format("{:.2g}x", rate);
+        };
+        context.CanvasText({std::clamp(knobX - 0.05F, 0.02F, 0.80F), 0.04F}, {0.95F, 0.97F, 1.0F, 1.0F}, rateText(currentRate));
+        if (slider.hovered)
+        {
+            context.CanvasTooltip(std::format(
+                "Simulation rate {} ({}). Drag to slow the world down (left of 1x) or fast forward (right); double click for 1x. "
+                "Lightning plays in slow motion below 1x and stops when paused.",
+                rateText(currentRate), paused ? "paused" : "playing"));
+        }
+        f64 newDecade = decade;
+        bool changed = false;
+        if (slider.doubleClicked)
+        {
+            newDecade = 0.0;
+            changed = true;
+        }
+        else if (slider.clicked)
+        {
+            newDecade = kMinDecade + static_cast<f64>((slider.u - 0.04F) / 0.92F) * kSpan;
+            changed = true;
+        }
+        else if (slider.dragging && std::fabs(slider.dragDeltaX) > 0.0F)
+        {
+            newDecade = decade + static_cast<f64>(slider.dragDeltaX) / (static_cast<f64>(trackWidth) * 0.92) * kSpan;
+            changed = true;
+        }
+        if (changed)
+        {
+            newDecade = std::clamp(newDecade, kMinDecade, kMaxDecade);
+            if (std::fabs(newDecade) < 0.05) { newDecade = 0.0; }   // a little magnet at 1x
+            const f64 newRate = std::pow(10.0, newDecade);
+            if (std::fabs(newRate - currentRate) > 1.0e-9 * newRate)
+            {
+                try { controls_->SetRate(newRate); } catch (const std::exception&) {}
+            }
+        }
+    }
+
+    for (std::size_t index = 0; index < toggles_.size(); ++index)
+    {
+        const BandToggle& toggle = toggles_[index];
+        if (!toggle.get || !toggle.set)
+        {
+            continue;
+        }
+        const bool on = toggle.get();
+        context.SameLine();
+        if (context.StateButton(
+                std::format("{}##sim-toggle-{}", toggle.label, index),
+                on ? math::Float4{0.62F, 0.40F, 0.12F, 1.0F} : math::Float4{0.30F, 0.33F, 0.39F, 1.0F},
+                (14.0F + 7.0F * static_cast<f32>(toggle.label.size())) * uiScale))
+        {
+            toggle.set(!on);
         }
     }
 

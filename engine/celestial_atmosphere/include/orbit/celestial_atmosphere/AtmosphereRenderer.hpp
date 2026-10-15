@@ -29,6 +29,15 @@ struct AtmosphereRenderView
     // irradiance, so the output is in the same scene-linear radiance units
     // as the shared direct-lighting pass.
     f32 irradianceScale{1.0F};
+    bool terrainOcclusionEnabled{false};
+    f32 sunAngularRadiusRadians{0.0F};
+    // Actual body-centred ellipsoid axes. Atmospheric density/LUTs still
+    // use their reference spherical shell, but solar blockage must follow
+    // the body's real silhouette. Zero axes fall back to bottomRadius.
+    math::Float3 bodyRadiiMeters{};
+    u8 auditMode{0U};
+    bool auditRadianceOnly{false};
+    std::shared_ptr<rhi::Buffer> terrainSunShadow;
 };
 
 // Per-pixel single + multiple scattering composite through the physical
@@ -63,5 +72,6 @@ public:
 
 private:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+    std::unique_ptr<rhi::Buffer> emptyTerrainShadow_;
 };
 } // namespace orbit::celestial_atmosphere

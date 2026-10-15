@@ -117,6 +117,20 @@ def orbit_project_info() -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_studio_github_update(start: bool = False) -> dict[str, Any]:
+    """Check GitHub update status or request safe Harmony update/rebuild.
+
+    start=True saves the project, refuses dirty or divergent Git history,
+    fetches origin/0.1.1-Harmony, rebuilds Studio incrementally, and hands
+    off to the new process only after a successful build. A successful
+    update may temporarily disconnect RPC during the generation handoff.
+    Call with start=False to inspect stage/detail/log_path.
+    """
+    return _rpc("studio.github_update_start" if start
+                else "studio.github_update_status")
+
+
+@mcp.tool()
 def orbit_studio_eco_mode(enabled: bool | None = None) -> dict[str, Any]:
     """Read or set Studio Eco mode (15 FPS while active, 1 FPS while idle)."""
     if enabled is None:
@@ -300,6 +314,13 @@ def orbit_view_terrain_layers_set(
     cloud_resolution_scale: float | None = None,
     cloud_godray_strength: float | None = None,
     cloud_light_volume: bool | None = None,
+    terrain_occluded_atmosphere: bool | None = None,
+    atmosphere_audit_mode: int | None = None,
+    atmosphere_audit_radiance_only: bool | None = None,
+    sun_audit_method: int | None = None,
+    sun_audit_disc_debug: bool | None = None,
+    sun_audit_relief_debug: bool | None = None,
+    sun_audit_sources_debug: bool | None = None,
     bypass_cloud_shadow: bool | None = None,
     bypass_proxy_sun_shadow: bool | None = None,
     bypass_proxy_surfaces: bool | None = None,
@@ -333,6 +354,13 @@ def orbit_view_terrain_layers_set(
     fields keep their value. reflection_exact_triangles switches the shared mesh
     BVH for smooth opaque reflections and analytic glass; reflection_temporal
     controls reflection-only history (independent of scene TAA).
+    sun_audit_method: 0=baseline, 1=finite solar disc sphere, 2=terrain ray
+    visibility, 3=isolate direct stellar term from sky/GI. Three independent
+    sun_audit_*_debug switches enable their method's linear-HDR debug view
+    while that method is active; debug bypasses later GI, atmosphere/cloud
+    layers for readable masks. Relief mode can initially fall back to
+    spherical visibility while the height field builds asynchronously.
+    These settings are transient per viewport, not project authority.
     reflection_maximum_roughness [0,1] defaults to 0.25,
     reflection_distance_meters [0.1,1000] defaults to 40.
     reflection_debug_view: 0 scene, 1 reflected radiance, 2 hit distance (magenta
@@ -431,6 +459,13 @@ def orbit_view_terrain_layers_set(
         "cloud_resolution_scale": cloud_resolution_scale,
         "cloud_godray_strength": cloud_godray_strength,
         "cloud_light_volume": cloud_light_volume,
+        "terrain_occluded_atmosphere": terrain_occluded_atmosphere,
+        "atmosphere_audit_mode": atmosphere_audit_mode,
+        "atmosphere_audit_radiance_only": atmosphere_audit_radiance_only,
+        "sun_audit_method": sun_audit_method,
+        "sun_audit_disc_debug": sun_audit_disc_debug,
+        "sun_audit_relief_debug": sun_audit_relief_debug,
+        "sun_audit_sources_debug": sun_audit_sources_debug,
         "bypass_cloud_shadow": bypass_cloud_shadow,
         "bypass_proxy_sun_shadow": bypass_proxy_sun_shadow,
         "bypass_proxy_surfaces": bypass_proxy_surfaces,
@@ -495,11 +530,30 @@ def orbit_view_text_diagnostics_set(
 
 
 @mcp.tool()
-def orbit_project_discover(roots: list[str] | None = None) -> list[dict[str, Any]]:
+def orbit_viewport_fullscreen_get() -> dict[str, Any]:
+    """Whether the primary viewport is in (or animating into) full-screen mode."""
+    return _rpc("viewport.fullscreen_get")
+
+
+@mcp.tool()
+def orbit_viewport_fullscreen_set(enabled: bool) -> dict[str, Any]:
+    """Animate the primary viewport into or out of full screen (F11 / the
+    viewport's Full Screen button; Esc also leaves it). The image grows from the
+    docked panel to the whole window over about 0.3 s."""
+    return _rpc("viewport.fullscreen_set", {"enabled": enabled})
+
+
+@mcp.tool()
+def orbit_project_discover(roots: list[str] | None = None, include_test_content: bool = True) -> list[dict[str, Any]]:
     """Scan the usual folders (Documents, Desktop, Downloads, Orbit's Projects
-    folder) for Orbit projects, newest first. Pass roots to scan other folders.
-    Open one with orbit_project_open."""
-    return _rpc("project.discover", {"roots": roots} if roots else {})
+    folder) and the engine's bundled examples/ folder for Orbit projects, newest
+    first. Projects under examples/ carry test_content=true; pass
+    include_test_content=False to hide them (the Project Browser's "Show test
+    content" toggle). Pass roots to scan other folders. Open one with orbit_project_open."""
+    params: dict[str, Any] = {"include_test_content": include_test_content}
+    if roots:
+        params["roots"] = roots
+    return _rpc("project.discover", params)
 
 
 @mcp.tool()
@@ -1071,6 +1125,275 @@ def orbit_weather_lab_slice(
     if max_cells is not None:
         params["max_cells"] = max_cells
     return _rpc("weather_lab.slice", params)
+
+
+@mcp.tool()
+def orbit_lightning_fire(
+    distance_m: float | None = None,
+    lateral_m: float | None = None,
+    height_m: float | None = None,
+    energy_j: float | None = None,
+    strokes: int | None = None,
+    stroke_spacing_s: float | None = None,
+    seed: int | None = None,
+    base_m: list[float] | None = None,
+) -> dict[str, Any]:
+    """Fire one lightning flash that lights the scene (and the clouds when the
+    viewport runs with ORBIT_CLOUD_POINT_LIGHTS=1). By default the channel stands
+    distance_m (3000) ahead of the camera and lateral_m to its right, rising
+    height_m (6000); pass base_m=[x, y, z] in the lighting frame to place it
+    absolutely. energy_j is the optical energy (3e5), strokes 1-8 (3). The flash
+    lasts about 0.25 s after its last stroke, so capture a screenshot right
+    after firing. Returns the flash id."""
+    params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "distance_m": distance_m, "lateral_m": lateral_m,
+            "height_m": height_m, "energy_j": energy_j, "strokes": strokes,
+            "stroke_spacing_s": stroke_spacing_s, "seed": seed,
+            "base_m": base_m,
+        }.items()
+        if value is not None
+    }
+    return _rpc("lightning.fire", params)
+
+
+@mcp.tool()
+def orbit_lightning_status() -> dict[str, Any]:
+    """Live lightning flashes: id, whether a frame has resolved the position,
+    age, time left and base position."""
+    return _rpc("lightning.status")
+
+
+@mcp.tool()
+def orbit_lightning_storm_start(
+    distance_m: float | None = None,
+    lateral_m: float | None = None,
+    time_scale: float | None = None,
+) -> dict[str, Any]:
+    """Turn the Weather Lab's live storm into lightning. Needs a live Weather Lab
+    sample with square cells (orbit_weather_lab_configure nx=64, ny=64, nz=40,
+    dx=500, dz=500, then orbit_weather_lab_control start or step) and a storm
+    that has matured (about 20+ simulated minutes; use step). The ice phase is
+    derived from temperature, an assumption. Electrification runs at time_scale
+    simulated seconds per wall second (default 20) on a frozen snapshot; flashes
+    appear at a fixed spot distance_m (12000) ahead of the camera. Poll
+    orbit_lightning_storm_status."""
+    params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "distance_m": distance_m, "lateral_m": lateral_m,
+            "time_scale": time_scale,
+        }.items()
+        if value is not None
+    }
+    return _rpc("lightning.storm_start", params)
+
+
+@mcp.tool()
+def orbit_lightning_storm_stop() -> dict[str, Any]:
+    """Stop the Weather Lab driven lightning."""
+    return _rpc("lightning.storm_stop")
+
+
+@mcp.tool()
+def orbit_lightning_storm_status() -> dict[str, Any]:
+    """Weather Lab driven lightning: running, simulated seconds, flashes so far,
+    breakdown_ratio (strongest field over the breakdown field; 1 or more means it
+    is flashing) and the storm domain size."""
+    return _rpc("lightning.storm_status")
+
+
+@mcp.tool()
+def orbit_storm_status() -> dict[str, Any]:
+    """The simulated storm domain in the viewport clouds: state (none, pending,
+    active, failed), message, its current centre latitude_deg / longitude_deg (it
+    drifts with the storm), storm_seconds simulated, steps, step_ms (GPU time per
+    step), cells, spacing_m and resident_mib."""
+    return _rpc("storm.status")
+
+
+@mcp.tool()
+def orbit_storm_place(
+    latitude_deg: float,
+    longitude_deg: float,
+    cells: int | None = None,
+    spacing_m: float | None = None,
+    bubble_k: float | None = None,
+    spin_minutes: float | None = None,
+    ice: bool | None = None,
+    sponge_cells: int | None = None,
+    nested: bool | None = None,
+) -> dict[str, Any]:
+    """Place a simulated storm domain on the body under the primary view. The
+    GPU storm core (engine/weather_gpu) is built on the next frame that draws
+    clouds, spun up for spin_minutes (default 40), then advanced with the
+    simulation clock; inside the domain the cloud renderer draws the simulated
+    condensate instead of the procedural clouds (march, cloud shadow and sun light
+    volume). cells (nx = ny, power of two 16 to 256, default 128), spacing_m (500
+    to 5000, default 2000), bubble_k (default 2), ice (default true), sponge_cells
+    (default 12), nested (default true: a 4:1 child grid, 500 m inside a 2 km
+    domain, over the middle quarter of the domain). One domain at a time. Returns
+    error (empty when queued) and the status; poll orbit_storm_status for active. Compare with the procedural sky:
+    orbit_clouds_split_set(enabled=true, defines="CLOUD_STORM=0")."""
+    params: dict[str, Any] = {"latitude_deg": latitude_deg, "longitude_deg": longitude_deg}
+    for key, value in (("cells", cells), ("spacing_m", spacing_m), ("bubble_k", bubble_k), ("spin_minutes", spin_minutes),
+                       ("ice", ice), ("sponge_cells", sponge_cells), ("nested", nested)):
+        if value is not None:
+            params[key] = value
+    return _rpc("storm.place", params)
+
+
+@mcp.tool()
+def orbit_storm_auto(
+    enabled: bool,
+    seed: int | None = None,
+    cells: int | None = None,
+    spacing_m: float | None = None,
+    search_km: float | None = None,
+    ice: bool | None = None,
+    nested: bool | None = None,
+) -> dict[str, Any]:
+    """Scheduled storms near the camera. enabled=true makes Studio simulate the
+    nearest live storm of the deterministic storm schedule
+    (engine/celestial_clouds StormSchedule) within search_km (default 500) of the
+    camera: a pure function of the absolute simulation time and seed (default 1),
+    so the same time shows the same storm in every launch, and a time jump
+    recomputes the storm from the nearest cached checkpoint instead of stepping
+    through the skipped time. A storm grows from nothing at its start, lives 2.5
+    to 4.5 hours and dissolves into the procedural clouds. cells (power of two 16
+    to 256, default 128), spacing_m (default 2000), ice (default true). A manual
+    orbit_storm_place overrides it while it exists. Returns error and the status
+    (mode, storm_id, age_seconds, lifetime_seconds, intensity, catching_up,
+    checkpoints, checkpoint_mib, scheduled_nearby)."""
+    params: dict[str, Any] = {"enabled": enabled}
+    for key, value in (("seed", seed), ("cells", cells), ("spacing_m", spacing_m), ("search_km", search_km), ("ice", ice), ("nested", nested)):
+        if value is not None:
+            params[key] = value
+    return _rpc("storm.auto", params)
+
+
+@mcp.tool()
+def orbit_storm_reload_shaders(path: str = "") -> dict[str, Any]:
+    """Recompile the storm solver's compute kernels (engine/weather_gpu/shaders/
+    storm.hlsl) without restarting, from path, or the file named by
+    ORBIT_WEATHER_GPU_SHADER, or the embedded copy. This also happens
+    automatically when storm.hlsl is saved while Studio runs. A kernel that does
+    not compile leaves the running ones in use and the error appears in
+    shader_reload of orbit_storm_status; the storm is untouched. Happens on the
+    next frame that draws clouds."""
+    return _rpc("storm.reload_shaders", {"path": path} if path else {})
+
+
+@mcp.tool()
+def orbit_storm_lightning(
+    enabled: bool | None = None,
+    slow_motion: float | None = None,
+    charge_boost: float | None = None,
+    breakdown_scale: float | None = None,
+    brightness: float | None = None,
+    arcs: bool | None = None,
+    pause_on_strike: bool | None = None,
+    frame_strike: bool | None = None,
+    show_grid: bool | None = None,
+    flash_size: float | None = None,
+    ground_strike_chance: float | None = None,
+    small_flash_fraction: float | None = None,
+) -> dict[str, Any]:
+    """Lightning from the simulated storm's own charge (graupel, ice, supercooled
+    water, updraft). Omitted parameters keep their value. For testing:
+    slow_motion (1 to 2000) stretches every flash by that factor at the same
+    power so one frame can catch it; charge_boost (1 to 10000) multiplies the
+    charging rate; breakdown_scale (0.02 to 1) lowers the field at which air
+    breaks down (electrically unstable). Changing the boost or breakdown
+    restarts the charge. brightness (1 to 1e6) multiplies the energy of every
+    flash (the light on the clouds and the arc). arcs (default true) draws the
+    channel of a live flash as a jagged glowing line over the clouds.
+    pause_on_strike (default false) pauses the simulation just before a flash
+    that is in view starts, so it can be played in slow motion with time.set
+    rate (also a toggle in the bottom bar). frame_strike (default false) turns
+    the camera to a flash about to start and moves it closer or farther until its
+    whole channel fills about 60% of the narrower field of view. show_grid (default false) draws the electrified window as a box with
+    a grid and the charge in it (red positive, blue negative). Both are toggles in
+    the bottom bar too. flash_size (1 to 50, default 4) multiplies the charge one
+    flash may neutralise, so flashes grow larger (restarts the charge).
+    small_flash_fraction (0 to 1, default 0.75) is the share of flashes that are
+    small intracloud ones (a few tens of cells, cheap, never to the ground;
+    restarts the charge). ground_strike_chance (0 to 1, default 0.25) is the share of flashes that are
+    descending leaders seeking the ground (cloud to ground: return stroke, later
+    strokes, continuing current; restarts the charge). Clouds are
+    lit by the flashes when Studio runs with ORBIT_CLOUD_POINT_LIGHTS=1. Returns
+    the settings and lightning_flashes (storm.status also has
+    lightning_arc_segments)."""
+    params: dict[str, Any] = {}
+    for key, value in (("enabled", enabled), ("slow_motion", slow_motion),
+                       ("charge_boost", charge_boost), ("breakdown_scale", breakdown_scale),
+                       ("brightness", brightness), ("arcs", arcs),
+                       ("pause_on_strike", pause_on_strike), ("frame_strike", frame_strike),
+                       ("show_grid", show_grid), ("flash_size", flash_size),
+                       ("ground_strike_chance", ground_strike_chance), ("small_flash_fraction", small_flash_fraction)):
+        if value is not None:
+            params[key] = value
+    return _rpc("storm.lightning", params)
+
+
+@mcp.tool()
+def orbit_storm_clear() -> dict[str, Any]:
+    """Remove the simulated storm domain; the procedural clouds return."""
+    return _rpc("storm.clear")
+
+
+@mcp.tool()
+def orbit_clouds_get_defines() -> dict[str, Any]:
+    """The cloud shader defines in use ("NAME=VALUE;NAME=VALUE", empty = the
+    shipped shaders)."""
+    return _rpc("clouds.get_defines")
+
+
+@mcp.tool()
+def orbit_clouds_set_defines(defines: str) -> dict[str, Any]:
+    """Recompile the cloud march, shadow and volume shaders with `defines`
+    ("NAME=VALUE;NAME=VALUE"; an empty string restores the shipped shaders), so
+    a march tunable can be A/B-compared without relaunching Studio. Tunables:
+    CLOUD_FAR_EARLYOUT, CLOUD_JITTER_FIX, CLOUD_INCLOUD_STEP_SCALE,
+    CLOUD_MAX_STEPS, CLOUD_SCHEDULE_STEPS, CLOUD_FOOTPRINT_STEP,
+    CLOUD_BASE_STEP, CLOUD_EMPTY_SKIP, CLOUD_EMPTY_COVERAGE, CLOUD_SUN_FAR_START,
+    CLOUD_SUN_FAR_END, CLOUD_SUN_VOLUME, CLOUD_RESOLVE_WEIGHT (temporal resolve
+    current-frame weight 0..1, unset = 0.2) and the CLOUD_PROF_* profiling
+    stubs. Returns the defines in use, compile_ms and error (empty
+    on success; on a compile error the previous shaders stay in use). Allow a
+    second or two for the image to converge afterwards."""
+    return _rpc("clouds.set_defines", {"defines": defines})
+
+
+@mcp.tool()
+def orbit_clouds_split_get() -> dict[str, Any]:
+    """The cloud split view: enabled, defines (the right half's) and position
+    (0..1)."""
+    return _rpc("clouds.split_get")
+
+
+@mcp.tool()
+def orbit_clouds_split_set(enabled: bool, defines: str = "", position: float | None = None) -> dict[str, Any]:
+    """Split-screen view of the cloud march: the left of the viewport renders
+    with the defines in use (orbit_clouds_set_defines), the right with
+    `defines`, divided at `position` (0..1 of the width, default 0.5; a white
+    line marks it). Only the march and temporal resolve take `defines`
+    (CLOUD_CHECKERBOARD=1|2, CLOUD_CHECKERBOARD_WEIGHT, CLOUD_CB_CLAMP,
+    CLOUD_RESOLVE_WEIGHT, CLOUD_MAX_STEPS, ...). Each half is marched on its own,
+    so the Clouds GPU time is the sum of the two halves. enabled=false returns
+    to the single view. Returns enabled, defines, position and error (empty on
+    success)."""
+    params: dict[str, Any] = {"enabled": enabled, "defines": defines}
+    if position is not None:
+        params["position"] = position
+    return _rpc("clouds.split_set", params)
+
+
+@mcp.tool()
+def orbit_lightning_clear() -> dict[str, Any]:
+    """Remove every live lightning flash."""
+    return _rpc("lightning.clear")
 
 
 @mcp.tool()
@@ -1782,6 +2105,29 @@ def orbit_path_set_bezier_handles(
             "end_handle": end_handle,
         },
     )
+
+
+@mcp.tool()
+def orbit_infrastructure_build_status(edge_id: str) -> dict[str, Any]:
+    """Inspect an infrastructure edge's corridor generation state, last valid mesh and failure."""
+    return _rpc("infrastructure.build_status", {"edge": edge_id})
+
+
+@mcp.tool()
+def orbit_infrastructure_set_intent(
+    edge_id: str,
+    catalog_id: str,
+    catalog_version: int = 1,
+    construction_mode: str = "terrain",
+    design_speed_kmh: float = 0.0,
+    ease_turns: bool = True,
+) -> dict[str, Any]:
+    """Set versioned road/rail catalog intent on an existing path edge; design speed 0 uses catalog default."""
+    return _rpc("infrastructure.set_intent", {
+        "edge": edge_id, "catalog_id": catalog_id,
+        "catalog_version": catalog_version, "construction_mode": construction_mode,
+        "design_speed_kmh": design_speed_kmh, "ease_turns": ease_turns,
+    })
 
 
 @mcp.tool()

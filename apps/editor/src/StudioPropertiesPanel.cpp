@@ -287,6 +287,49 @@ void StudioPropertiesPanel::Register()
                     {
                         context.Separator();
                         context.Text("Direct Lighting & Shadows");
+                        context.Separator();
+                        context.Text("Atmosphere Integrator Council (temporary)");
+                        context.MutedText("Compare at identical camera, time and fixed exposure.");
+                        auto atmosphereAuditSwitch = [&](const char* label, u8 mode)
+                        {
+                            bool selected = layers.atmosphereAuditMode == mode;
+                            if (context.Checkbox(label, selected))
+                            {
+                                layers.atmosphereAuditMode = selected ? mode : 0U;
+                                changed = true;
+                            }
+                        };
+                        atmosphereAuditSwitch("1. Direct scattering only##atm-audit-direct", 1U);
+                        atmosphereAuditSwitch("2. Multiple scattering only##atm-audit-multi", 2U);
+                        atmosphereAuditSwitch("3. Solar shadow interval##atm-audit-shadow", 3U);
+                        atmosphereAuditSwitch("4. View-ray sample spacing##atm-audit-spacing", 4U);
+                        changed |= context.Checkbox("Atmosphere radiance only##atm-audit-radiance",
+                            layers.atmosphereAuditRadianceOnly);
+                        context.MutedText("All modes off = baseline; 3/4 replace the atmosphere output.");
+                        context.Separator();
+                        context.Text("Experimental Sun Authority Council (temporary)");
+                        context.MutedText("Exclusive A/B tests. All off restores original lighting.");
+                        context.MutedText("Colored stripe at top left confirms the method reached this viewport.");
+                        auto auditSwitch = [&](const char* label, u8 method)
+                        {
+                            bool enabled = layers.sunAuditMethod == method;
+                            if (context.Checkbox(label, enabled))
+                            {
+                                layers.sunAuditMethod = enabled ? method : 0U;
+                                changed = true;
+                            }
+                        };
+                        auditSwitch("1. Finite-disc planet occlusion##sun-audit-disc", 1U);
+                        changed |= context.Checkbox("Debug 1: boundary + G-buffer validity##sun-audit-d1",
+                            layers.sunAuditDiscDebug);
+                        auditSwitch("2. Body-fixed terrain sun rays##sun-audit-relief", 2U);
+                        changed |= context.Checkbox("Debug 2: terrain/planet/field validity##sun-audit-d2",
+                            layers.sunAuditReliefDebug);
+                        auditSwitch("3. Separate direct vs sky/GI sources##sun-audit-sources", 3U);
+                        changed |= context.Checkbox("Debug 3: full scene R=luminance G=metadata B=depth##sun-audit-d3",
+                            layers.sunAuditSourcesDebug);
+                        context.MutedText("Debug 1/2 isolate shadow geometry; Debug 3 inspects full scene inputs.");
+                        context.Separator();
                         f64 softness = layers.meshShadowSoftness;
                         changed |= context.InputDouble("Sun Shadow Softness", softness);
                         if (std::isfinite(softness))
@@ -321,6 +364,12 @@ void StudioPropertiesPanel::Register()
                             layers.bypassAtmosphere = !atmosphere;
                             changed = true;
                         }
+                        changed |= context.Checkbox(
+                            "Terrain-Occluded Sunlight (Experimental)##atmosphere-terrain-occlusion",
+                            layers.terrainOccludedAtmosphere);
+                        context.MutedText(
+                            "Body-fixed mountain shadows in atmospheric direct scattering. "
+                            "Indirect sky scattering remains; no timewarp catch-up.");
                     }
                     if (showClouds)
                     {
@@ -336,6 +385,43 @@ void StudioPropertiesPanel::Register()
                         if (std::isfinite(resolution)) layers.cloudResolutionScale = static_cast<orbit::f32>(std::clamp(resolution, 0.25, 1.0));
                         if (std::isfinite(godrays)) layers.cloudGodrayStrength = static_cast<orbit::f32>(std::clamp(godrays, 0.0, 2.0));
                         drawBypass("Cloud Shadows", layers.bypassCloudShadow);
+
+                        // Split view: the left of the viewport uses the cloud defines in use, the right these. The same operation
+                        // as clouds.split_set; the divider is dragged in the viewport.
+                        context.Separator();
+                        context.Text("Cloud Split View (A | B)");
+                        static std::string splitDefines;
+                        static bool splitDefinesSeeded = false;
+                        static std::string splitError;
+                        if (!splitDefinesSeeded)
+                        {
+                            splitDefines = studioViewportRenderer.CloudSplitDefines();
+                            splitDefinesSeeded = true;
+                        }
+                        bool splitOn = studioViewportRenderer.CloudSplitEnabled();
+                        if (context.Checkbox("Split View", splitOn))
+                        {
+                            splitError = studioViewportRenderer.SetCloudSplit(
+                                splitOn, splitDefines, studioViewportRenderer.CloudSplitPosition());
+                        }
+                        (void)context.InputText("B Defines", splitDefines);
+                        if (context.Button("Apply B Defines"))
+                        {
+                            splitError = studioViewportRenderer.SetCloudSplit(
+                                splitOn, splitDefines, studioViewportRenderer.CloudSplitPosition());
+                        }
+                        f64 splitPosition = studioViewportRenderer.CloudSplitPosition();
+                        if (context.SliderDouble("Divider", splitPosition, 0.02, 0.98))
+                        {
+                            splitError = studioViewportRenderer.SetCloudSplit(
+                                splitOn, splitDefines, static_cast<orbit::f32>(splitPosition));
+                        }
+                        context.MutedText(
+                            "A = Cloud Lighting defines in use (clouds.set_defines), B = the defines above, e.g. CLOUD_CHECKERBOARD=2;CLOUD_CB_CLAMP=1. Drag the white divider in the viewport.");
+                        if (!splitError.empty())
+                        {
+                            context.ErrorText("Split error: " + splitError);
+                        }
                     }
                     if (showSurface)
                     {

@@ -1,0 +1,13 @@
+add_library(OrbitInfrastructureCatalog INTERFACE)
+add_library(Orbit::InfrastructureCatalog ALIAS OrbitInfrastructureCatalog)
+target_include_directories(OrbitInfrastructureCatalog INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(OrbitInfrastructureCatalog INTERFACE Orbit::Paths)
+target_compile_features(OrbitInfrastructureCatalog INTERFACE cxx_std_23)
+
+if(BUILD_TESTING)
+    add_executable(OrbitInfrastructureCatalogTests tests/InfrastructureCatalogTests.cpp)
+    target_link_libraries(OrbitInfrastructureCatalogTests PRIVATE Orbit::InfrastructureCatalog)
+    target_compile_features(OrbitInfrastructureCatalogTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitInfrastructureCatalogTests)
+    add_test(NAME Orbit.InfrastructureCatalog COMMAND OrbitInfrastructureCatalogTests)
+endif()

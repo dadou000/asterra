@@ -19,7 +19,7 @@ invariants = [
 ]
 related = ["/world/weather-lab"]
 verify = ["Re-run the commands below on the same machine and compare the table; metrics fluctuate +-20% between storm cycles, so judge trends, not single rows."]
-verified = "f4a2dc6"
+verified = "dcbe292"
 +++
 
 ## Setup
@@ -52,6 +52,20 @@ The fast core is about 3.8x faster than CM1 on the same grid, holds a persistent
 and keeps divergence at round-off. It is weaker in sustained peak updraft and lower in cloud top (no ice, no latent heat
 of freezing).
 
+## Re-run on this machine with CM1 in Docker, and the ice scheme (2026-10-11)
+
+CM1 `main` built in the `orbit-cm1` image (`tools/weather_lab/docker/Dockerfile`, Ubuntu 24.04, gfortran, NetCDF); same 2 km case, 4 threads. The oracle is a test tool only; the ice scheme below is in the engine (`FastStormConfig::ice`, `FastStormSolver::Impl::IceProcesses`).
+
+| Measure (2 km, 120 min) | CM1 (Docker) | Fast core, warm rain | Fast core, ice |
+| --- | --- | --- | --- |
+| Wall time, 4 threads | 72.5 s (99x real time) | 11.1 s (649x) | 17.2 s (419x) |
+| Peak updraft, 60-120 min | 47-54 m/s | 32-46 m/s | 45-62 m/s |
+| Updraft helicity 2-5 km, 60-120 min | 368-564 | 244-579 | 289-664 |
+| Cold pool deficit at 120 min | 7.3 K | 6.7 K | 8.5 K |
+| Cloud top, 70-120 min | 15-16 km | 13-14 km | 15-17 km |
+
+Ice (cloud ice, snow, graupel: freezing, nucleation and deposition, riming, melting, sublimation, latent heat of fusion) fixes the cloud top and the weak updraft; it costs 1.55x the time. The cold pool is now about 1.2 K stronger than CM1's (gate: 6 to 8 K, so slightly over) and the peak updraft runs up to 15% high in some frames; both are untuned single-moment choices (graupel melting and sublimation rates). Slowing sublimation from 300 s to 900 s did not change the cold pool.
+
 ## Findings that changed the design
 
 - Linear (trilinear) semi-Lagrangian advection killed the storm; monotone cubic is required (cost: advection is ~70% of a step).
@@ -69,7 +83,7 @@ of freezing).
 3. GPU port of the stages (Vulkan compute) and a memory budget against the 2 GB weather allocation: ~80 B/cell on CPU means
    ~17 M cells would fit (70% of 2 GiB), before AMR.
 4. Studio integration: the Weather Lab panel runs the fast core, loads CM1 references and compares them, with `weather_lab.*`
-   RPC/MCP (done, CPU canvases; built and tested only on Linux for the library, RPC layer and MCP adapter, and compiled
-   syntax-only against the real Studio headers - first Windows build and a visual check are still owed). Open: volume-render the
+   RPC/MCP (done, CPU canvases; the library and RPC tests also pass on Windows as of 2026-10-11 (`Orbit.WeatherLab`, `Orbit.WeatherLabRpc`);
+   a visual check of the panel is still owed). The plan for the global system is `global-system-plan`. Open: volume-render the
    fields through the existing volume renderer instead of 2-D slices.
 5. Open lateral boundaries (the domain is periodic, so outflow re-enters after ~2 h).

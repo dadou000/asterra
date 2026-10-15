@@ -2,6 +2,7 @@
 
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/path_geometry/CorridorTerrainSource.hpp>
 #include <orbit/studio_session/StudioTerrainRebuildScheduler.hpp>
 #include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/terrain/TerrainContracts.hpp>
@@ -13,6 +14,8 @@
 #include <orbit/time/SimulationTime.hpp>
 
 #include <memory>
+#include <map>
+#include <tuple>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -32,6 +35,15 @@ struct StudioTerrainPhysicalPageSnapshot
     std::shared_ptr<
         const terrain_material_column::MaterialColumnPage>
         material;
+
+    // Canonical resolved physical-surface elevation for renderer, physics,
+    // and tooling consumers. Derived from the final material column AFTER
+    // construction, erosion and deposits; never from the analytic base
+    // source or the corridor mesh. Coordinates are page-local [0,1].
+    [[nodiscard]] std::optional<f64> SampleSurfaceHeight(
+        f64 u, f64 v) const noexcept;
+
+
 
     std::shared_ptr<const terrain_erosion::RiverNetwork> rivers;
     std::shared_ptr<const terrain_hydrology::DrainagePage> drainage;
@@ -74,7 +86,17 @@ public:
     // The center physical page plus its four seam neighbors are kept live.
     void Sync(
         std::span<const StudioTerrainViewportRuntimeSnapshot> runtimes,
-        time::SimulationTime atTime = {});
+        time::SimulationTime atTime = {},
+        std::span<const terrain::PhysicalTerrainPageAddress>
+            constructionInterests = {});
+
+    // Stage an immutable construction snapshot, then invalidate exactly the
+    // supplied old+new footprint pages. All addresses must belong to the
+    // owning planetary body. An empty set is intentionally rejected.
+    void StageCorridorConstruction(
+        universe::BodyId body,
+        std::shared_ptr<const path_geometry::CorridorTerrainSource> overlay,
+        std::span<const terrain::PhysicalTerrainPageAddress> affectedPages);
 
     void QueueChange(
         const terrain_dependency::TerrainInvalidationRequest& request);
@@ -88,6 +110,47 @@ public:
 
     void SetPaused(bool paused) noexcept;
     [[nodiscard]] bool Paused() const noexcept;
+
+    // Query the final material-column height of a published, ready page.
+    // Returns no value for unloaded/unfinished pages; rendering can fall
+    // back to its analytic source without blocking physical workers.
+    struct HeightPageBatch
+    {
+        world::PlanetId planet{};
+        u8 level{0};
+        u64 revisionFingerprint{0};
+        struct TileLess
+        {
+            [[nodiscard]] bool operator()(
+                const world::PlanetTileId& a,
+                const world::PlanetTileId& b) const noexcept
+            {
+                return std::tuple{static_cast<u8>(a.face),a.level,a.x,a.y} <
+                       std::tuple{static_cast<u8>(b.face),b.level,b.x,b.y};
+            }
+        };
+        std::map<world::PlanetTileId,
+            std::shared_ptr<const StudioTerrainPhysicalPageSnapshot>,
+            TileLess> pages;
+        [[nodiscard]] std::optional<f64> Sample(
+            const math::Double3& direction) const noexcept;
+    };
+
+    // Capture a coherent set of immutable published snapshots once per patch,
+    // not once per vertex. Include missing pages in the fingerprint so their
+    // later arrival triggers a patch rebuild.
+    [[nodiscard]] HeightPageBatch CaptureHeightTiles(
+        world::PlanetId planet, u8 level,
+        std::span<const world::PlanetTileId> tiles) const;
+
+    [[nodiscard]] HeightPageBatch CaptureHeightPages(
+        world::PlanetId planet, u8 level,
+        std::span<const math::Double3> directions) const;
+
+    [[nodiscard]] std::optional<f64> SamplePublishedSurfaceHeight(
+        world::PlanetId planet,
+        const math::Double3& unitDirection,
+        u8 pageLevel) const noexcept;
 
     [[nodiscard]] std::shared_ptr<
         const StudioTerrainPhysicalPageSnapshot>

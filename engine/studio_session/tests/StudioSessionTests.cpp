@@ -12,9 +12,13 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <cmath>
+#include <array>
+#include <stdexcept>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <source_location>
 #include <string>
 
@@ -413,6 +417,22 @@ int main()
                 "Studio Session Test");
         orbit::studio_session::StudioSession studio(project);
 
+        // M2.49: Physical residency never expands beyond the bounded
+        // local budget, even if a clipmap advertises planetary coverage.
+        orbit::studio_session::StudioTerrainViewportRuntimeSnapshot coverage{};
+        coverage.planet.id = orbit::world::PlanetId::Random();
+        coverage.planet.radiusMeters = 1000.0;
+        coverage.observerPhysicalPage.tile =
+            orbit::world::TileForDirection({1.0, 0.0, 0.0}, 4U);
+        coverage.layout.levels.resize(1U);
+        coverage.layout.levels.front().active = true;
+        coverage.layout.levels.front().outerHalfExtentMeters = 1.e8;
+        Check(orbit::studio_session::PhysicalPageCoverageRadius(coverage) == 2U);
+        coverage.layout.levels.front().outerHalfExtentMeters = 0.0;
+        Check(orbit::studio_session::PhysicalPageCoverageRadius(coverage) == 1U);
+        orbit::studio_session::CorridorConstructionRegistry emptyConstruction;
+        Check(emptyConstruction.PagesForBody({}, 8U).empty());
+
         const auto initialWorldGeneration =
             studio.World().Generation();
         const auto initialUniverseGeneration =
@@ -599,6 +619,69 @@ int main()
             roots.AsArray().front().
                 Find("name")->AsString() ==
             "World");
+
+        // Infrastructure construction must queue precise, deduplicated
+        // terrain-authoring invalidations, never a global page change.
+        const orbit::world::PlanetId testPlanet =
+            orbit::world::PlanetId::Random();
+        const std::array<orbit::terrain::PhysicalTerrainPageAddress, 3> corridorPages{{
+            {.planet = testPlanet,
+             .tile = {.face = orbit::world::CubeFace::PositiveX,
+                      .level = 8, .x = 10, .y = 11}},
+            {.planet = testPlanet,
+             .tile = {.face = orbit::world::CubeFace::PositiveX,
+                      .level = 8, .x = 10, .y = 11}},
+            {.planet = testPlanet,
+             .tile = {.face = orbit::world::CubeFace::PositiveX,
+                      .level = 8, .x = 10, .y = 12}}
+        }};
+        const auto previousRequests = studio.PendingTerrainInvalidations().size();
+        Check(studio.QueueInfrastructureTerrainPages(corridorPages) == 2U);
+        Check(studio.PendingTerrainInvalidations().size() == previousRequests + 2U);
+        Check(studio.QueueInfrastructureTerrainPages(corridorPages) == 0U);
+        for (std::size_t k = previousRequests;
+             k < studio.PendingTerrainInvalidations().size(); ++k)
+        {
+            const auto& request = studio.PendingTerrainInvalidations()[k];
+            Check(!request.scope.global);
+            Check(request.scope.radiusTiles == 0U);
+            Check(request.kind ==
+                orbit::terrain_dependency::TerrainChangeKind::TerrainAuthoring);
+        }
+        bool rejectedInfrastructurePages = false;
+        try { static_cast<void>(studio.QueueInfrastructureTerrainPages(
+            corridorPages, 1U)); }
+        catch (const std::invalid_argument&) { rejectedInfrastructurePages = true; }
+        Check(rejectedInfrastructurePages);
+
+        // A published physical page is the shared height authority for
+        // potential collision and render consumers. Interpolate final material
+        // columns (not the analytic pre-construction terrain source).
+        orbit::studio_session::StudioTerrainPhysicalPageSnapshot surface{};
+        auto columns = std::make_shared<
+            orbit::terrain_material_column::MaterialColumnPage>(2U, 1.0);
+        columns->SetCell(0, 0, {.bedrockHeightMeters = 10.0F});
+        columns->SetCell(1, 0, {.bedrockHeightMeters = 20.0F});
+        columns->SetCell(0, 1, {.bedrockHeightMeters = 30.0F});
+        columns->SetCell(1, 1, {.bedrockHeightMeters = 40.0F});
+        surface.material = std::move(columns);
+        Check(std::abs(*surface.SampleSurfaceHeight(0.5, 0.5) - 25.0) < 1.e-6);
+        orbit::studio_session::StudioTerrainPhysicalPageService::HeightPageBatch
+            batch{};
+        batch.planet = orbit::world::PlanetId::Random();
+        batch.level = 0U;
+        auto ready = std::make_shared<
+            orbit::studio_session::StudioTerrainPhysicalPageSnapshot>(surface);
+        ready->address = {
+            .planet = batch.planet,
+            .tile = orbit::world::TileForDirection({1.0, 0.0, 0.0}, 0U)
+        };
+        batch.pages.emplace(ready->address.tile, ready);
+        Check(std::abs(*batch.Sample({1.0, 0.0, 0.0}) - 25.0) < 1.e-6);
+        Check(!batch.Sample({-1.0, 0.0, 0.0}).has_value());
+        Check(!surface.SampleSurfaceHeight(-0.1, 0.5).has_value());
+        Check(!surface.SampleSurfaceHeight(0.0,
+            std::numeric_limits<double>::quiet_NaN()).has_value());
 
         const auto beforeCloseUniverseGeneration =
             studio.World().UniverseGeneration();

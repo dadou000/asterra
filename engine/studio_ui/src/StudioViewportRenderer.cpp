@@ -1,8 +1,13 @@
 #include "StudioViewportInternals.hpp"
 #include "StudioViewportPrimitives.hpp"
 
+#include <orbit/celestial_atmosphere/AtmosphereRefraction.hpp>
+#include <orbit/core/Log.hpp>
+#include <orbit/optical_transport/Blackbody.hpp>
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
 
+#include <chrono>
+#include <fstream>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -10,6 +15,503 @@
 namespace orbit::studio_ui
 {
 using namespace viewport_detail;
+
+namespace
+{
+// How far a node of a lightning channel (a centre of the 500 m electrification cells) is moved to hide the lattice: a quarter of a cell.
+constexpr f64 kNodeJitterMeters = 125.0;
+
+// ORBIT_REFRACT_SUN=1 turns on atmospheric refraction of the sun direction (applied where studioDirectLight is resolved). Read once.
+[[nodiscard]] math::Float3 SunAuditBodyRadii(const universe::BodyShape& shape)
+{
+    return std::visit([](const auto& body) -> math::Float3
+    {
+        if constexpr (std::is_same_v<
+            std::decay_t<decltype(body)>, universe::SphereShape>)
+        {
+            const f32 r = static_cast<f32>(body.radiusMeters);
+            return {r, r, r};
+        }
+        else
+        {
+            return {
+                static_cast<f32>(body.radiiMeters.x),
+                static_cast<f32>(body.radiiMeters.y),
+                static_cast<f32>(body.radiiMeters.z)};
+        }
+    }, shape);
+}
+
+[[nodiscard]] bool RefractSunEnabled()
+{
+    static const bool enabled = [] {
+        char* value = nullptr;
+        std::size_t length = 0;
+        bool on = false;
+        if (_dupenv_s(&value, &length, "ORBIT_REFRACT_SUN") == 0 && value != nullptr)
+        {
+            on = value[0] == '1';
+            std::free(value);
+        }
+        return on;
+    }();
+    return enabled;
+}
+} // namespace
+
+bool StudioViewportRenderer::EnsureUnifiedCloudRenderer()
+{
+    if (unifiedCloudRenderer_) return true;
+    if (!unifiedCloudInitError_.empty()) return false;
+    try
+    {
+        unifiedCloudRenderer_ =
+            std::make_unique<celestial_clouds::unified::UnifiedCloudRenderer>(
+                *device_, *compiler_);
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        unifiedCloudInitError_ = exception.what();
+        log::Warning("Unified Cloud B preview failed (A remains available): " +
+            unifiedCloudInitError_);
+        return false;
+    }
+}
+
+void StudioViewportRenderer::TickFlashClock(const time::SimulationTime atTime)
+{
+    const f64 wall = std::chrono::duration<f64>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const f64 sim = static_cast<f64>(atTime.microsecondsFromEpoch) * 1.0e-6;
+    if (flashLastWall_ < 0.0)
+    {
+        flashLastWall_ = wall;
+        flashLastSim_ = sim;
+        flashLastSimChangeWall_ = wall;
+        return;
+    }
+    const f64 elapsed = std::min(wall - flashLastWall_, 0.25);   // a hitch does not jump the clock
+    flashLastWall_ = wall;
+    if (sim != flashLastSim_)
+    {
+        const f64 instant = (sim - flashLastSim_) / std::max(wall - flashLastSimChangeWall_, 1.0e-4);
+        simulationRate_ = 0.5 * simulationRate_.load() + 0.5 * instant;
+        flashLastSim_ = sim;
+        flashLastSimChangeWall_ = wall;
+    }
+    else if (wall - flashLastSimChangeWall_ > 0.25)
+    {
+        simulationRate_ = 0.0;   // paused
+    }
+    const f64 before = flashClock_.load();
+    flashClock_ = before + elapsed * std::clamp(simulationRate_.load(), 0.0, 1.0);
+    flashWindowEnd_ = flashClock_.load();
+    flashWindowStart_ = std::min(before, flashWindowEnd_ - 1.0e-3);
+}
+
+u64 StudioViewportRenderer::FireLightning(const lighting::FlashRequest& request)
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    return transientFlashes_.Fire(request, FlashClockSeconds());
+}
+
+std::vector<lighting::FlashStatus> StudioViewportRenderer::LightningStatus() const
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    return transientFlashes_.Status(FlashClockSeconds());
+}
+
+std::string StudioViewportRenderer::SetCloudShaderDefines(const std::string& defines)
+{
+    return cloudRenderer_.SetShaderDefines(defines);
+}
+
+const std::string& StudioViewportRenderer::CloudShaderDefines() const noexcept
+{
+    return cloudRenderer_.ShaderDefines();
+}
+
+std::string StudioViewportRenderer::SetCloudSplit(const bool enabled, const std::string& defines, const f32 position)
+{
+    if (!enabled)
+    {
+        cloudRenderer_.ClearCompare();
+        return {};
+    }
+    return cloudRenderer_.SetCompareDefines(defines, position);
+}
+
+bool StudioViewportRenderer::CloudSplitEnabled() const noexcept
+{
+    return cloudRenderer_.CompareActive();
+}
+
+const std::string& StudioViewportRenderer::CloudSplitDefines() const noexcept
+{
+    return cloudRenderer_.CompareDefines();
+}
+
+f32 StudioViewportRenderer::CloudSplitPosition() const noexcept
+{
+    return cloudRenderer_.ComparePosition();
+}
+
+void StudioViewportRenderer::ClearLightning()
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    transientFlashes_.Clear();
+}
+
+void StudioViewportRenderer::SetLightningStormAnchor(const lighting::StormAnchor& anchor)
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    transientFlashes_.SetStormAnchor(anchor);
+}
+
+u64 StudioViewportRenderer::AddLightningStormFlash(optical_transport::DischargeGraph graph)
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    return transientFlashes_.AddStormFlash(std::move(graph), FlashClockSeconds());
+}
+
+void StudioViewportRenderer::WatchStrikes(const render_view::CameraState& camera, const u32 width, const u32 height)
+{
+    const StormLightningSettings watchSettings = stormMailbox_.Lightning();
+    const bool pausing = watchSettings.pauseOnStrike && static_cast<bool>(strikePauseHandler_);
+    const bool framing = watchSettings.frameStrike && static_cast<bool>(strikeFrameHandler_);
+    if ((!pausing && !framing) || width == 0U || height == 0U)
+    {
+        strikeSeen_.clear();
+        return;
+    }
+    std::vector<lighting::UpcomingFlash> upcoming;
+    {
+        const std::scoped_lock lock(transientFlashMutex_);
+        upcoming = transientFlashes_.UpcomingFlashes(FlashClockSeconds(), 0.3, 0.1);
+    }
+    const math::Double3 forward{camera.forward.x, camera.forward.y, camera.forward.z};
+    const math::Double3 up{camera.up.x, camera.up.y, camera.up.z};
+    const math::Double3 right = math::Cross(up, forward);
+    const f64 rightLength = std::sqrt(math::Dot(right, right));
+    if (rightLength <= 0.0)
+    {
+        return;
+    }
+    const math::Double3 side = right * (1.0 / rightLength);
+    const f64 tanHalf = std::tan(0.5 * static_cast<f64>(camera.verticalFovRadians));
+    const f64 aspect = static_cast<f64>(width) / static_cast<f64>(height);
+    for (const lighting::UpcomingFlash& flash : upcoming)
+    {
+        if (!strikeSeen_.insert(flash.id).second)
+        {
+            continue;   // already looked at (and paused for, or out of frame)
+        }
+        bool inFrame = false;
+        if (framing)
+        {
+            // The camera is sent to the flash: it will be in view when the request is applied (before the next frame).
+            strikeFrameHandler_(flash.centre, flash.radiusMeters, static_cast<f64>(camera.verticalFovRadians), aspect);
+            inFrame = true;
+        }
+        else
+        {
+            const math::Double3 rel = flash.centre - camera.localPositionMeters;
+            const f64 depth = math::Dot(rel, forward);
+            if (depth <= 1.0)
+            {
+                continue;
+            }
+            // Inside the view, allowing for the size of the channel.
+            const f64 margin = flash.radiusMeters / depth;
+            inFrame = std::fabs(math::Dot(rel, side)) / depth < tanHalf * aspect + margin &&
+                      std::fabs(math::Dot(rel, up)) / depth < tanHalf + margin;
+        }
+        if (inFrame)
+        {
+            if (pausing)
+            {
+                strikePauseHandler_();
+            }
+            return;
+        }
+    }
+    // Forget flashes that are gone, so the set does not grow.
+    if (strikeSeen_.size() > 256U)
+    {
+        strikeSeen_.clear();
+    }
+}
+
+std::vector<editor_ui::PreviewLine> StudioViewportRenderer::ElectrificationGridLines(const render_view::CameraState& camera)
+{
+    std::vector<editor_ui::PreviewLine> out;
+    if (!stormMailbox_.Lightning().showGrid || !lightningFrame_.valid || lightningFrame_.cells == 0U)
+    {
+        return out;
+    }
+    const LightningGridFrame& f = lightningFrame_;
+    const f64 width = f.cells * f.spacing;
+    const f64 height = f.levels * f.spacing;
+    const auto toFloat = [&](const f64 x, const f64 y, const f64 z) {
+        const math::Double3 p = f.centre + f.east * (f.offsetEast + x) + f.north * (f.offsetNorth + y) + f.up * z - camera.localPositionMeters;
+        return math::Float3{static_cast<f32>(p.x), static_cast<f32>(p.y), static_cast<f32>(p.z)};
+    };
+    const auto line = [&](const f64 x0, const f64 y0, const f64 z0, const f64 x1, const f64 y1, const f64 z1, const math::Float4& colour) {
+        out.push_back({toFloat(x0, y0, z0), toFloat(x1, y1, z1), colour});
+    };
+    const math::Float4 edge{0.30F, 0.85F, 1.0F, 0.9F};
+    const math::Float4 inner{0.30F, 0.85F, 1.0F, 0.28F};
+    const f64 step = 8.0 * f.spacing;   // a grid line every 8 cells (4 km)
+    // The box.
+    for (const f64 z : {0.0, height})
+    {
+        line(0, 0, z, width, 0, z, edge);
+        line(width, 0, z, width, width, z, edge);
+        line(width, width, z, 0, width, z, edge);
+        line(0, width, z, 0, 0, z, edge);
+    }
+    for (const f64 x : {0.0, width})
+    {
+        for (const f64 y : {0.0, width})
+        {
+            line(x, y, 0, x, y, height, edge);
+        }
+    }
+    // The ground grid, level rings every 4 km, and the vertical lines of the grid on the four faces.
+    for (f64 a = step; a < width - 1.0; a += step)
+    {
+        line(a, 0, 0, a, width, 0, inner);
+        line(0, a, 0, width, a, 0, inner);
+        line(a, 0, 0, a, 0, height, inner);
+        line(a, width, 0, a, width, height, inner);
+        line(0, a, 0, 0, a, height, inner);
+        line(width, a, 0, width, a, height, inner);
+    }
+    for (f64 z = step; z < height - 1.0; z += step)
+    {
+        line(0, 0, z, width, 0, z, inner);
+        line(width, 0, z, width, width, z, inner);
+        line(width, width, z, 0, width, z, inner);
+        line(0, width, z, 0, 0, z, inner);
+    }
+    // The charge: a cross on every block that holds a noticeable share of the largest one, red where positive and blue where negative,
+    // its size growing with the square root of the charge.
+    if (lightningBlocks_ && !lightningBlocks_->coulombs.empty())
+    {
+        const StormChargeBlocks& b = *lightningBlocks_;
+        f32 largest = 0.0F;
+        for (const f32 q : b.coulombs) { largest = std::max(largest, std::fabs(q)); }
+        if (largest > 0.0F)
+        {
+            for (u32 k = 0; k < b.nz; ++k)
+            {
+                for (u32 j = 0; j < b.ny; ++j)
+                {
+                    for (u32 i = 0; i < b.nx; ++i)
+                    {
+                        const f32 q = b.coulombs[(static_cast<std::size_t>(k) * b.ny + j) * b.nx + i];
+                        const f32 share = std::fabs(q) / largest;
+                        if (share < 0.05F)
+                        {
+                            continue;
+                        }
+                        const f64 half = 0.5 * b.blockMeters * std::sqrt(static_cast<f64>(share));
+                        const f64 cx = (i + 0.5) * b.blockMeters, cy = (j + 0.5) * b.blockMeters, cz = (k + 0.5) * b.blockMeters;
+                        const math::Float4 colour = q > 0.0F ? math::Float4{1.0F, 0.35F, 0.25F, 0.95F} : math::Float4{0.30F, 0.55F, 1.0F, 0.95F};
+                        line(cx - half, cy, cz, cx + half, cy, cz, colour);
+                        line(cx, cy - half, cz, cx, cy + half, cz, colour);
+                        line(cx, cy, cz - half, cx, cy, cz + half, colour);
+                    }
+                }
+            }
+        }
+    }
+    return out;
+}
+
+std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const render_view::CameraState& camera, const u32 height)
+{
+    std::vector<editor_ui::PreviewLine> out;
+    lastArcSegments_ = 0U;
+    const StormLightningSettings settings = stormMailbox_.Lightning();
+    if (!settings.arcs || height == 0U)
+    {
+        return out;
+    }
+    std::vector<lighting::ChannelLine> channel;
+    {
+        const std::scoped_lock lock(transientFlashMutex_);
+        if (transientFlashes_.Empty())
+        {
+            return out;
+        }
+        // A channel stays visible a few milliseconds after its pulse (the plasma cools), as the lights on the clouds do: they read the same
+        // pulses, and a longer fade made the arc outlast the light several times over.
+        channel = transientFlashes_.ChannelLinesInWindow(flashWindowStart_, flashWindowEnd_, 1.0e3, 8000U);
+    }
+    if (channel.empty())
+    {
+        return out;
+    }
+    const math::Double3 forward{camera.forward.x, camera.forward.y, camera.forward.z};
+    const math::Double3 up{camera.up.x, camera.up.y, camera.up.z};
+    const math::Double3 right = math::Cross(up, forward);
+    const f64 rightLength = std::sqrt(math::Dot(right, right));
+    const math::Double3 side = rightLength > 0.0 ? right * (1.0 / rightLength) : math::Double3{1.0, 0.0, 0.0};
+    // The width of an arc is a share of the screen height, not a number of pixels: its glow is measured on a 1080 pixel high reference screen
+    // and the core is thickened by whole device pixels when the screen is higher (4K: a core of three pixels), so it looks the same at any
+    // resolution.
+    const f64 devicePixelAngle = 2.0 * std::tan(0.5 * static_cast<f64>(camera.verticalFovRadians)) / static_cast<f64>(height);
+    const f64 pixelAngle = 2.0 * std::tan(0.5 * static_cast<f64>(camera.verticalFovRadians)) / 1080.0;
+    const int extraCore = std::clamp(static_cast<int>(std::ceil(0.5 * (static_cast<f64>(height) / 1080.0 - 1.0) - 1.0e-6)), 0, 4);
+    // Cloud in front of a channel: the extinction of the storm's window is integrated along the line of sight to the middle of the segment.
+    const std::shared_ptr<const StormChargeBlocks> blocks = lightningBlocks_;
+    const LightningGridFrame frame = lightningFrame_;
+    const bool occlude = blocks && frame.valid && !blocks->extinction.empty() && blocks->extinctionCells > 0U;
+    // Light is scattered forward in a cloud, so a channel stays visible through a much larger optical depth than the extinction suggests.
+    constexpr f64 kForwardScatterShare = 0.12;
+    const auto transmittance = [&](const math::Double3& target) {
+        if (!occlude) { return 1.0; }
+        const math::Double3 start = camera.localPositionMeters;
+        const math::Double3 ray = target - start;
+        const f64 distance = std::sqrt(math::Dot(ray, ray));
+        const f64 step = 0.5 * static_cast<f64>(blocks->extinctionSpacing);
+        const u32 samples = std::min(static_cast<u32>(distance / std::max(step, 1.0)) + 1U, 400U);
+        f64 optical = 0.0;
+        const f64 stride = distance / samples;
+        for (u32 s = 0; s < samples; ++s)
+        {
+            const math::Double3 rel = start + ray * ((s + 0.5) / samples) - frame.centre;
+            const f64 x = math::Dot(rel, frame.east) - frame.offsetEast, y = math::Dot(rel, frame.north) - frame.offsetNorth, z = math::Dot(rel, frame.up);
+            const f64 inv = 1.0 / static_cast<f64>(blocks->extinctionSpacing);
+            if (x < 0.0 || y < 0.0 || z < 0.0) { continue; }
+            const u32 i = static_cast<u32>(x * inv), j = static_cast<u32>(y * inv), k = static_cast<u32>(z * inv);
+            if (i >= blocks->extinctionCells || j >= blocks->extinctionCells || k >= blocks->extinctionLevels) { continue; }
+            optical += static_cast<f64>(blocks->extinction[(static_cast<std::size_t>(k) * blocks->extinctionCells + j) * blocks->extinctionCells + i]) * stride;
+        }
+        return std::exp(-kForwardScatterShare * optical);
+    };
+    const auto toFloat = [](const math::Double3& v) { return math::Float3{static_cast<f32>(v.x), static_cast<f32>(v.y), static_cast<f32>(v.z)}; };
+    lastArcSegments_ = static_cast<u32>(channel.size());
+    out.reserve(channel.size() * 12U);
+    // The electrification's channel follows the 500 m grid, so its segments are straight and axis aligned. Each one is broken into four
+    // with a lateral displacement taken from a hash of its own end points: jagged like a real channel, the same every frame, and the
+    // neighbouring segments still meet at the shared end points.
+    const auto unit = [](u64 h) {
+        h ^= h >> 33U; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33U; h *= 0xc4ceb9fe1a85ec53ULL; h ^= h >> 33U;
+        return static_cast<f64>(h >> 11U) / 9007199254740992.0;
+    };
+    const auto quantised = [](const f64 v) { return static_cast<u64>(static_cast<i64>(std::llround(v))); };
+    for (const lighting::ChannelLine& line : channel)
+    {
+        const math::Double3 from = line.from - camera.localPositionMeters;
+        const math::Double3 to = line.to - camera.localPositionMeters;
+        const math::Double3 mid = (from + to) * 0.5;
+        const f64 distance = std::sqrt(math::Dot(mid, mid));
+        if (math::Dot(mid, forward) <= 0.0)
+        {
+            continue;   // behind the camera
+        }
+        const f64 pixel = distance * pixelAngle;
+        // Brightness from the optical power per metre of the segment (without the brightness gain, which is for the lights): on a power law
+        // with 1e3 W/m (the cooled channel) at 0.25, 2e4 (a leader) 0.8, 2.5e5 (a later stroke) 2.3 and 1e6 (a first stroke) 4, clamped at 12;
+        // the colour is the blackbody colour of the segment's temperature, blue-white when hot and orange when it has cooled.
+        const f64 perMeter = line.powerWatts / std::max(settings.brightness, 1.0) / std::max(line.lengthMeters, 1.0);
+        const f64 seen = transmittance((line.from + line.to) * 0.5);
+        if (seen < 0.01) { continue; }   // buried in the cloud
+        const f64 level = std::clamp(0.25 * std::pow(std::max(perMeter, 1.0) / 1.0e3, 0.4), 0.03, 12.0) * seen;
+        const std::array<f64, 3> colour = line.temperatureKelvin > 0.0 ? optical_transport::BlackbodyLinearRgb(line.temperatureKelvin)
+                                                                       : std::array<f64, 3>{0.80, 0.87, 1.0};
+        const f64 trunk = std::clamp(std::pow(perMeter / 1.0e6, 0.25), 0.0, 1.0);   // 1 at a first stroke's power, 0.37 at a leader's
+        const f32 coreAlpha = static_cast<f32>(0.3 + 0.7 * trunk);
+        // The electrification's cells make a lattice; every node (a cell centre) is moved by a hash of its own position, so the segments that
+        // meet in it still meet, and the lattice is not recognisable.
+        const auto nodeShift = [&](const math::Double3& world) {
+            u64 h = 0x9E3779B97F4A7C15ULL;
+            for (const f64 v : {world.x, world.y, world.z}) { h = (h ^ quantised(v)) * 0x100000001B3ULL + 0x7F4A7C15ULL; }
+            return math::Double3{(unit(h) - 0.5) * 2.0 * kNodeJitterMeters, (unit(h + 1U) - 0.5) * 2.0 * kNodeJitterMeters,
+                                 (unit(h + 2U) - 0.5) * 2.0 * kNodeJitterMeters};
+        };
+        const math::Double3 fromJittered = from + nodeShift(line.from);
+        const math::Double3 toJittered = to + nodeShift(line.to);
+        const math::Double3 direction = toJittered - fromJittered;
+        const f64 length = std::sqrt(math::Dot(direction, direction));
+        math::Double3 points[5] = {fromJittered, {}, {}, {}, toJittered};
+        if (length > 1.0)
+        {
+            const math::Double3 axis = direction * (1.0 / length);
+            const math::Double3 helper = std::fabs(axis.y) < 0.9 ? math::Double3{0.0, 1.0, 0.0} : math::Double3{1.0, 0.0, 0.0};
+            math::Double3 p1 = math::Cross(axis, helper);
+            p1 = p1 * (1.0 / std::sqrt(math::Dot(p1, p1)));
+            const math::Double3 p2 = math::Cross(axis, p1);
+            u64 seed = 0x9E3779B97F4A7C15ULL;
+            for (const f64 v : {line.from.x, line.from.y, line.from.z, line.to.x, line.to.y, line.to.z})
+            {
+                seed = (seed ^ quantised(v)) * 0x100000001B3ULL + 0x7F4A7C15ULL;
+            }
+            const auto jitter = [&](const u64 k, const f64 amount) {
+                return p1 * ((unit(seed + 2U * k) - 0.5) * 2.0 * amount * length) + p2 * ((unit(seed + 2U * k + 1U) - 0.5) * 2.0 * amount * length);
+            };
+            const math::Double3 middle = (fromJittered + toJittered) * 0.5;
+            points[2] = middle + jitter(1U, 0.30);
+            points[1] = (fromJittered + points[2]) * 0.5 + jitter(2U, 0.15);
+            points[3] = (points[2] + toJittered) * 0.5 + jitter(3U, 0.15);
+        }
+        else
+        {
+            points[1] = fromJittered * 0.75 + toJittered * 0.25;
+            points[2] = (fromJittered + toJittered) * 0.5;
+            points[3] = fromJittered * 0.25 + toJittered * 0.75;
+        }
+        for (int k = 0; k < 4; ++k)
+        {
+            const auto add = [&](const math::Double3& offset, const f32 alpha) {
+                out.push_back({toFloat(points[k] + offset), toFloat(points[k + 1] + offset),
+                               {static_cast<f32>(colour[0] * level), static_cast<f32>(colour[1] * level), static_cast<f32>(colour[2] * level), alpha}});
+            };
+            add({}, coreAlpha);
+            if (trunk > 0.3)
+            {
+                const f64 devicePixel = distance * devicePixelAngle;
+                for (int e = 1; e <= extraCore; ++e)
+                {
+                    add(side * (devicePixel * e), coreAlpha);
+                    add(side * (-devicePixel * e), coreAlpha);
+                }
+            }
+            // A soft edge: two lines half a pixel to each side (not on the faint twigs, of which there are thousands); the strong segments
+            // (the trunk) get a wider glow.
+            if (trunk > 0.5)
+            {
+                add(side * (pixel * 0.6), 0.4F);
+                add(side * (-pixel * 0.6), 0.4F);
+            }
+            if (trunk > 0.75)
+            {
+                add(side * (pixel * 1.4), 0.3F);
+                add(side * (-pixel * 1.4), 0.3F);
+            }
+            if (trunk > 0.97)
+            {
+                add(side * (pixel * 2.4), 0.25F);
+                add(side * (-pixel * 2.4), 0.25F);
+            }
+        }
+    }
+    return out;
+}
+
+std::vector<lighting::LocalLight> StudioViewportRenderer::TransientFlashLights(const lighting::CameraPlacement& camera)
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    if (transientFlashes_.Empty())
+    {
+        return {};
+    }
+    lighting::TransientLightParams params;
+    params.exposureSeconds = std::max(flashWindowEnd_ - flashWindowStart_, 1.0e-3);
+    return transientFlashes_.LightsForWindow(flashWindowStart_, camera, params);
+}
 
 StudioViewportRenderer::StudioViewportRenderer(
     rhi::Device& device,
@@ -31,6 +533,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       universalVolumeRenderer_(device, compiler),
       volumeParticleRenderer_(device, compiler, framesInFlight),
       debugComposite_(device, compiler),
+      sunAuditIndicator_(device, compiler),
       directLightingRenderer_(device, compiler),
       materialEmissionSurfaceOverride_(device, compiler),
       finalGatherRenderer_(device, compiler),
@@ -142,7 +645,11 @@ StudioViewportRenderer::ComposeBase(
     {
         bodies = &runtime.Bodies(snapshot);
         frames = &runtime.Frames(snapshot);
-        products = runtime.PathProducts(snapshot).Products();
+        // One Vulkan Paths pass consumes the coherent CPU publication view:
+        // affected raw road meshes are replaced by trimmed products and
+        // a single patch mesh. No second graphics pipeline or draw overlay.
+        products = session.RoadJunctions().RenderProducts(
+            runtime.PathProducts(snapshot));
     }
 
     const auto celestialFrameGrants =
@@ -1002,7 +1509,71 @@ StudioViewportRenderer::ComposeBase(
                     const auto& patchSource =
                         session.TerrainRuntime().TerrainSource(
                             *terrainRuntime);
-                    const u64 sourceRevision = patchSource.Revision();
+                    // Capture every tile touched by the generated 193x193
+                    // vertex lattice. Tile discovery is conservative for the
+                    // lattice (not the continuous triangles between vertices).
+                    constexpr u32 kCount = 193U;
+                    constexpr f64 kCell = 1.0;
+                    const auto bodyFromFrame =
+                        math::Inverse(meshPresentation.targetFromBody);
+                    const math::Double3 anchorBody =
+                        math::TransformPoint(bodyFromFrame, anchor);
+                    const auto upCoverage = math::Normalize(anchorBody);
+                    const auto helperCoverage =
+                        std::abs(upCoverage.y) < 0.99
+                            ? math::Double3{0.0, 1.0, 0.0}
+                            : math::Double3{1.0, 0.0, 0.0};
+                    const auto eastCoverage = math::Normalize(
+                        math::Cross(helperCoverage, upCoverage));
+                    const auto northCoverage = math::Cross(
+                        upCoverage, eastCoverage);
+                    const bool coverageInvalid =
+                        meshPresentation.terrainCoverageTiles.empty() ||
+                        meshPresentation.terrainCoveragePlanet !=
+                            terrainRuntime->planet.id ||
+                        meshPresentation.terrainCoverageLevel !=
+                            terrainRuntime->physicalPageLevel ||
+                        math::Length(anchorBody -
+                            meshPresentation.terrainCoverageAnchorBody) > 2.0 ||
+                        math::Dot(eastCoverage,
+                            meshPresentation.terrainCoverageEastBody) < 0.999999 ||
+                        math::Dot(northCoverage,
+                            meshPresentation.terrainCoverageNorthBody) < 0.999999;
+                    if (coverageInvalid && math::LengthSquared(anchorBody) > 1.0)
+                    {
+                        std::vector<world::PlanetTileId> coverage;
+                        coverage.reserve(static_cast<std::size_t>(kCount) * kCount);
+                        const f64 half = 0.5 * static_cast<f64>(kCount - 1U);
+                        for (u32 y = 0U; y < kCount; ++y)
+                            for (u32 x = 0U; x < kCount; ++x)
+                            {
+                                const auto point = anchorBody +
+                                    eastCoverage * ((static_cast<f64>(x) - half) * kCell) +
+                                    northCoverage * ((static_cast<f64>(y) - half) * kCell);
+                                coverage.push_back(world::TileForDirection(
+                                    math::Normalize(point),
+                                    terrainRuntime->physicalPageLevel));
+                            }
+                        std::sort(coverage.begin(), coverage.end(),
+                            studio_session::StudioTerrainPhysicalPageService::
+                                HeightPageBatch::TileLess{});
+                        coverage.erase(std::unique(coverage.begin(), coverage.end()),
+                            coverage.end());
+                        meshPresentation.terrainCoverageTiles = std::move(coverage);
+                        meshPresentation.terrainCoverageAnchorBody = anchorBody;
+                        meshPresentation.terrainCoverageEastBody = eastCoverage;
+                        meshPresentation.terrainCoverageNorthBody = northCoverage;
+                        meshPresentation.terrainCoveragePlanet = terrainRuntime->planet.id;
+                        meshPresentation.terrainCoverageLevel =
+                            terrainRuntime->physicalPageLevel;
+                    }
+                    const auto physicalBatch =
+                        session.TerrainPhysicalPages().CaptureHeightTiles(
+                            terrainRuntime->planet.id,
+                            terrainRuntime->physicalPageLevel,
+                            meshPresentation.terrainCoverageTiles);
+                    const u64 sourceRevision = terrain::StableCombine64(
+                        patchSource.Revision(), physicalBatch.revisionFingerprint);
                     const f64 moved = math::Length(
                         anchor - meshPresentation.terrainPatchAnchor);
                     if (meshPresentation.terrainPatch == nullptr ||
@@ -1010,12 +1581,6 @@ StudioViewportRenderer::ComposeBase(
                             sourceRevision ||
                         moved > 2.0)
                     {
-                        constexpr u32 kCount = 193U;
-                        constexpr f64 kCell = 1.0;
-                        const auto bodyFromFrame =
-                            math::Inverse(meshPresentation.targetFromBody);
-                        const math::Double3 anchorBody =
-                            math::TransformPoint(bodyFromFrame, anchor);
                         const f64 anchorRadius = math::Length(anchorBody);
                         if (anchorRadius > 1.0)
                         {
@@ -1089,10 +1654,13 @@ StudioViewportRenderer::ComposeBase(
                                         .planet =
                                             terrainRuntime->planet.id,
                                         .radialOffsetMeters = 0.0});
+                                    const auto publishedHeight =
+                                        physicalBatch.Sample(direction);
                                     const f64 elevation =
-                                        std::isfinite(sample.elevationMeters)
-                                        ? sample.elevationMeters
-                                        : 0.0;
+                                        publishedHeight.has_value()
+                                        ? *publishedHeight
+                                        : (std::isfinite(sample.elevationMeters)
+                                            ? sample.elevationMeters : 0.0);
                                     const math::Double3 ground =
                                         direction *
                                         (terrainRuntime->planet
@@ -1169,6 +1737,45 @@ StudioViewportRenderer::ComposeBase(
                     (north * std::cos(azimuth) + east * std::sin(azimuth)) * std::cos(elevation);
                 studioDirectLight.directionBody = {
                     static_cast<f32>(sun.x), static_cast<f32>(sun.y), static_cast<f32>(sun.z)};
+            }
+        }
+
+        // ORBIT_REFRACT_SUN=1 (read once, default off): the sun is seen, lit and shadowed along its APPARENT direction,
+        // lifted toward the observer's zenith by atmospheric refraction (about 29 arcminutes at the horizon, so a sunset
+        // lasts a few minutes longer and the disc sits higher). directionBody is the single sun direction every consumer
+        // below reads (atmosphere pass and sky, direct light, proxy shadow, glass, clouds), so refracting it once here
+        // keeps them consistent. Uses the previous frame's atmosphere presentation for the parameters, so the first frame
+        // is unrefracted; skipped under the cloud-lab sun override and for observers outside the atmosphere.
+        if (RefractSunEnabled() && studioDirectLight.direct.has_value() &&
+            !(info.layers.cloudLab.enabled && info.layers.cloudLab.overrideSun))
+        {
+            if (const auto presentation = atmospherePresentations_.find(info.id);
+                presentation != atmospherePresentations_.end())
+            {
+                const auto& parameters = presentation->second.parameters;
+                const math::Double3 position = view->Camera().localPositionMeters;
+                const f64 radius = math::Length(position);
+                const f64 altitude = radius - parameters.bottomRadiusMeters;
+                if (radius > 1.0 && altitude >= 0.0 &&
+                    altitude < parameters.topRadiusMeters - parameters.bottomRadiusMeters)
+                {
+                    const math::Double3 trueDirection = math::Normalize(math::Double3{
+                        static_cast<f64>(studioDirectLight.directionBody.x),
+                        static_cast<f64>(studioDirectLight.directionBody.y),
+                        static_cast<f64>(studioDirectLight.directionBody.z)});
+                    const auto apparent = celestial_atmosphere::RefractDirection(
+                        celestial_atmosphere::RefractionTableFor(parameters),
+                        position / radius,
+                        trueDirection,
+                        altitude);
+                    if (apparent.visible)
+                    {
+                        studioDirectLight.directionBody = {
+                            static_cast<f32>(apparent.direction.x),
+                            static_cast<f32>(apparent.direction.y),
+                            static_cast<f32>(apparent.direction.z)};
+                    }
+                }
             }
         }
 
@@ -1300,6 +1907,30 @@ StudioViewportRenderer::ComposeBase(
                 auto& cloudPresentation =
                     cloudPresentations_[info.id];
 
+                // A field built in the background has landed: install it (the GPU upload stays on this thread).
+                if (cloudPresentation.hasPending &&
+                    cloudPresentation.pending.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+                {
+                    cloudPresentation.hasPending = false;
+                    try
+                    {
+                        cloudPresentation.field = std::make_unique<celestial_clouds::CloudFieldProduct>(cloudPresentation.pending.get());
+                        cloudPresentation.gpu = std::make_unique<celestial_clouds::GpuCloudFieldProduct>(*device_, *cloudPresentation.field);
+                        cloudPresentation.body = cloudPresentation.pendingBody;
+                        cloudPresentation.fingerprint = cloudPresentation.pendingFingerprint;
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        log::Warning(std::string("Cloud field build failed: ") + exception.what());
+                    }
+                    static_cast<void>(
+                        completeCelestialGrant(
+                            info.id,
+                            cloudPresentation.pendingBody,
+                            celestial_scheduler::WorkKind::CloudField,
+                            cloudPresentation.pendingFingerprint));
+                }
+
                 const bool cloudNeedsBuild =
                     cloudPresentation.field ==
                         nullptr ||
@@ -1310,6 +1941,7 @@ StudioViewportRenderer::ComposeBase(
                         cloudFingerprint;
 
                 if (cloudNeedsBuild &&
+                    !cloudPresentation.hasPending &&
                     acquireCelestialGrant(
                         info.id,
                         logicalTarget->
@@ -1323,6 +1955,24 @@ StudioViewportRenderer::ComposeBase(
                         70,
                         true))
                 {
+                  if (cloudPresentation.field != nullptr &&
+                      cloudPresentation.body == logicalTarget->target->body)
+                  {
+                    // The same body with a newer time: build it on another thread. The task keeps the terrain source alive (concurrent
+                    // Sample calls are part of TerrainSource's contract: the streaming workers do the same).
+                    std::shared_ptr<const terrain::TerrainSource> climateHold =
+                        macroGlobeSurface != nullptr ? macroGlobeSurface->terrain : nullptr;
+                    cloudPresentation.pending = std::async(
+                        std::launch::async,
+                        [climateHold, referenceRadius, parameters = cloudParameters, atTime, cloudConfig]() {
+                            return celestial_clouds::BuildCloudField(climateHold.get(), nullptr, referenceRadius, parameters, atTime, cloudConfig);
+                        });
+                    cloudPresentation.hasPending = true;
+                    cloudPresentation.pendingFingerprint = cloudFingerprint;
+                    cloudPresentation.pendingBody = logicalTarget->target->body;
+                  }
+                  else
+                  {
                     cloudPresentation.field =
                         std::make_unique<
                             celestial_clouds::
@@ -1358,6 +2008,7 @@ StudioViewportRenderer::ComposeBase(
                             celestial_scheduler::
                                 WorkKind::CloudField,
                             cloudFingerprint));
+                  }
                 }
 
                 const bool cloudCurrent =
@@ -2843,8 +3494,16 @@ StudioViewportRenderer::ComposeBase(
         u32 sharedRadianceLevelCount =
             0U;
 
+        std::shared_ptr<rhi::Buffer> activeAuditTerrainShadow;
         if (usesPhysicalSurfaceLighting)
         {
+            activeAuditTerrainShadow =
+                hasMacroGlobe && macroGlobeSurface != nullptr &&
+                    macroGlobeSurface->terrain != nullptr &&
+                    shape.has_value() && logicalTarget->target.has_value()
+                    ? EnsureTerrainSunShadow(info.id, logicalTarget->target->body,
+                        macroGlobeSurface->terrain, ReferenceRadiusForShape(*shape))
+                    : nullptr;
             StudioLightingPassContext lightingContext{
                 graph, session, view, info,
                 targets, prefix, presentation, snapshot,
@@ -2852,7 +3511,8 @@ StudioViewportRenderer::ComposeBase(
                 lightingPlan, lightingTimestamps, cpuTimingRecorder, recordComposeStage,
                 sharedRadianceCellsHandle, sharedRadianceLevelsHandle, sharedRadianceLevelCount, shape,
                 bodies, frames, resolvedMagnetosphereForView, composeStageStarted,
-                nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters
+                nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters,
+                activeAuditTerrainShadow
             };
             ComposeLightingPasses(lightingContext);
         }
@@ -2997,9 +3657,8 @@ StudioViewportRenderer::ComposeBase(
                 });
         }
 
-        if (drawPathDebug &&
-            presentation ==
-                StudioViewportPresentation::BodyPreview &&
+        if ((presentation == StudioViewportPresentation::BodyPreview ||
+             presentation == StudioViewportPresentation::ProductionTerrain) &&
             frames != nullptr &&
             !products.empty())
         {
@@ -3019,6 +3678,26 @@ StudioViewportRenderer::ComposeBase(
                         .access =
                             render_graph::Access::
                                 Write
+                    },
+                    {
+                        .texture = targets.surfaceBaseRoughness,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    },
+                    {
+                        .texture = targets.surfaceNormalMetallic,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    },
+                    {
+                        .texture = targets.surfaceEmissionClass,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    },
+                    {
+                        .texture = targets.depth,
+                        .state = rhi::ResourceState::DepthWrite,
+                        .access = render_graph::Access::Write
                     }
                 },
                 [this,
@@ -3028,10 +3707,19 @@ StudioViewportRenderer::ComposeBase(
                  camera,
                  frameGraph,
                  pathProducts,
-                 atTime](
+                 atTime,
+                 drawPathDebug,
+                 depth = &view->Depth(),
+                 base = &view->SurfaceBaseRoughness(),
+                 normal = &view->SurfaceNormalMetallic(),
+                 emission = &view->SurfaceEmissionClass(),
+                 production = presentation == StudioViewportPresentation::ProductionTerrain,
+                 pathViewportId = info.id](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
+                    const std::array<rhi::Texture*, 3> surfaces{
+                        base, normal, emission};
                     pathRenderer_.Draw(
                         commands,
                         *color,
@@ -3040,7 +3728,12 @@ StudioViewportRenderer::ComposeBase(
                         camera,
                         *frameGraph,
                         atTime,
-                        pathProducts);
+                        pathProducts,
+                        drawPathDebug,
+                        depth,
+                        production ? std::span<rhi::Texture* const>(surfaces) :
+                            std::span<rhi::Texture* const>{},
+                        pathViewportId);
                 });
         }
 
@@ -3386,6 +4079,72 @@ StudioViewportRenderer::ComposeBase(
         auto* displayColor = &view->DisplayColor();
         ComposePostProcess(graph, view, info, targets, prefix,
             frameIndex, antiAliasingMode);
+
+        // Post-output-transform witness: unlike direct-shader heatmaps, this
+        // stays visible when the frame uses a forward globe/sky representation
+        // or when later atmosphere and clouds overwrite the HDR surface.
+        // Marking the active method is diagnostic only; it never relights.
+        if (info.layers.sunAuditMethod != 0U)
+        {
+            const u8 auditMode = std::min<u8>(info.layers.sunAuditMethod, 3U);
+            const bool auditDebug =
+                (auditMode == 1U && info.layers.sunAuditDiscDebug) ||
+                (auditMode == 2U && info.layers.sunAuditReliefDebug) ||
+                (auditMode == 3U && info.layers.sunAuditSourcesDebug);
+            std::vector<render_graph::BufferUse> auditBufferUses;
+            if (auditDebug && activeAuditTerrainShadow != nullptr)
+            {
+                const auto terrainHandle = graph.ImportBuffer(
+                    prefix + ".SunAuditField", *activeAuditTerrainShadow,
+                    rhi::ResourceState::ShaderResource);
+                auditBufferUses.push_back({
+                    .buffer = terrainHandle,
+                    .state = rhi::ResourceState::ShaderResource,
+                    .access = render_graph::Access::Read});
+            }
+            graph.AddPass(
+                prefix + ".SunAuditWitness",
+                {
+                    {.texture = targets.color,
+                     .state = rhi::ResourceState::ShaderResource,
+                     .access = render_graph::Access::Read},
+                    {.texture = targets.surfaceEmissionClass,
+                     .state = rhi::ResourceState::ShaderResource,
+                     .access = render_graph::Access::Read},
+                    {.texture = targets.depth,
+                     .state = rhi::ResourceState::DepthRead,
+                     .access = render_graph::Access::Read},
+                    {.texture = targets.display,
+                     .state = rhi::ResourceState::RenderTarget,
+                     .access = render_graph::Access::Write}
+                },
+                auditBufferUses,
+                [this, displayColor, width, height, auditMode, auditDebug,
+                 auditInputs = SunAuditViewportInputs{
+                     .scene = color,
+                     .emissionMetadata = &view->SurfaceEmissionClass(),
+                     .depth = &view->Depth(),
+                     .terrainShadow = activeAuditTerrainShadow.get(),
+                     .camera = view->Camera(),
+                     .sunDirection = studioDirectLight.directionBody,
+                     .planetRadiusMeters = shape.has_value()
+                         ? static_cast<f32>(ReferenceRadiusForShape(*shape))
+                         : 0.0F,
+                     .bodyRadiiMeters = shape.has_value()
+                         ? SunAuditBodyRadii(*shape) : math::Float3{},
+                     .sunAngularRadiusRadians =
+                         studioDirectLight.sunAngularRadiusRadians
+                 },
+                 auditKeepAlive = activeAuditTerrainShadow](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    // Buffer lifetime is owned by the captured shared_ptr.
+                    static_cast<void>(auditKeepAlive);
+                    sunAuditIndicator_.Draw(commands, *displayColor,
+                        auditInputs, width, height, auditMode, auditDebug);
+                });
+        }
 
         if (presentation == StudioViewportPresentation::FlatMap)
         {

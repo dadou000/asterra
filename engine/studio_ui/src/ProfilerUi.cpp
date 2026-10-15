@@ -160,8 +160,7 @@ void ProfilerUi::DrawToolbar(PanelContext& context, const f64 now)
     if (model_.Paused())
     {
         if (context.PrimaryButton(
-                model_.Loaded() ? "Back to live##profiler-resume"
-                                : "Resume live##profiler-resume"))
+                "Resume##profiler-resume"))
         {
             model_.SetPaused(false, now);
         }
@@ -170,12 +169,43 @@ void ProfilerUi::DrawToolbar(PanelContext& context, const f64 now)
     {
         model_.SetPaused(true, now);
     }
-    context.SameLine();
-    if (context.Button("Reset view##profiler-reset-view"))
+    // Keep controls on independent rows: switching Pause to Resume must not
+    // push the trace and viewport capture controls outside a narrow dock.
+    if (context.Button("Fit all##profiler-fit-all"))
     {
         model_.ResetView();
     }
     context.SameLine();
+    if (context.Button("Zoom in##profiler-zoom-in"))
+    {
+        model_.ZoomAt(model_.ViewBeginMs() + model_.ViewSpanMs() * 0.5,
+            0.5, now);
+    }
+    context.SameLine();
+    if (context.Button("Zoom out##profiler-zoom-out"))
+    {
+        model_.ZoomAt(model_.ViewBeginMs() + model_.ViewSpanMs() * 0.5,
+            2.0, now);
+    }
+    context.SameLine();
+    if (context.Button("Previous##profiler-pan-left"))
+        model_.Pan(-model_.ViewSpanMs() * 0.5, now);
+    context.SameLine();
+    if (context.Button("Next##profiler-pan-right"))
+        model_.Pan(model_.ViewSpanMs() * 0.5, now);
+
+    if (const auto selected = model_.Selected(); selected.has_value())
+    {
+        if (context.Button("Focus selection##profiler-focus-selected"))
+            model_.ZoomToSlice(*selected, now);
+        context.SameLine();
+    }
+    if (context.Button("Focus slowest##profiler-focus-slowest"))
+    {
+        const auto slowest = model_.SlowestRefs(1U);
+        if (!slowest.empty()) model_.ZoomToSlice(slowest.front(), now);
+    }
+    context.MutedText("Timeline navigation: zoom about center, pan by half-window, or focus a selected/slowest scope.");
     if (context.Button("Write trace file##profiler-capture"))
     {
         try

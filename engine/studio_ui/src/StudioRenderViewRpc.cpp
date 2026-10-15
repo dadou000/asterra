@@ -321,6 +321,7 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"clipmap_partial_updates", layers.clipmapPartialUpdates},
         {"physical_pages", layers.physicalPages},
         {"clouds", layers.clouds},
+        {"cloud_b_preview", layers.cloudBPreview},
         {"cloud_resolution_scale", static_cast<f64>(layers.cloudResolutionScale)},
         {"cloud_temporal", layers.cloudTemporal},
         {"cloud_godray_strength", static_cast<f64>(layers.cloudGodrayStrength)},
@@ -336,6 +337,13 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"bypass_indirect_lighting", layers.bypassIndirectLighting},
         {"bypass_near_field_water", layers.bypassNearFieldWater},
         {"bypass_atmosphere", layers.bypassAtmosphere},
+        {"terrain_occluded_atmosphere", layers.terrainOccludedAtmosphere},
+        {"atmosphere_audit_mode", static_cast<f64>(layers.atmosphereAuditMode)},
+        {"atmosphere_audit_radiance_only", layers.atmosphereAuditRadianceOnly},
+        {"sun_audit_method", static_cast<f64>(layers.sunAuditMethod)},
+        {"sun_audit_disc_debug", layers.sunAuditDiscDebug},
+        {"sun_audit_relief_debug", layers.sunAuditReliefDebug},
+        {"sun_audit_sources_debug", layers.sunAuditSourcesDebug},
         {"bypass_hybrid_reflections", layers.bypassHybridReflections},
         {"reflection_exact_triangles", layers.reflectionExactTriangles},
         {"reflection_temporal", layers.reflectionTemporal},
@@ -921,6 +929,7 @@ void RegisterStudioRenderViewRpc(
                     layers.clipmapPartialUpdates);
                 applyFlag("physical_pages", layers.physicalPages);
                 applyFlag("clouds", layers.clouds);
+                applyFlag("cloud_b_preview", layers.cloudBPreview);
                 applyFlag("cloud_temporal", layers.cloudTemporal);
                 applyFlag("cloud_light_volume", layers.cloudLightVolume);
                 applyFlag("bypass_cloud_shadow", layers.bypassCloudShadow);
@@ -934,6 +943,35 @@ void RegisterStudioRenderViewRpc(
                 applyFlag("bypass_indirect_lighting", layers.bypassIndirectLighting);
                 applyFlag("bypass_near_field_water", layers.bypassNearFieldWater);
                 applyFlag("bypass_atmosphere", layers.bypassAtmosphere);
+                applyFlag("terrain_occluded_atmosphere", layers.terrainOccludedAtmosphere);
+                applyFlag("atmosphere_audit_radiance_only",
+                    layers.atmosphereAuditRadianceOnly);
+                if (const auto mode = values.find("atmosphere_audit_mode");
+                    mode != values.end())
+                {
+                    if (!mode->second.IsNumber() ||
+                        !std::isfinite(mode->second.AsNumber()) ||
+                        std::floor(mode->second.AsNumber()) != mode->second.AsNumber() ||
+                        mode->second.AsNumber() < 0.0 ||
+                        mode->second.AsNumber() > 4.0)
+                        throw rpc::Error(kInvalid,
+                            "atmosphere_audit_mode must be an integer from 0 to 4.");
+                    layers.atmosphereAuditMode =
+                        static_cast<u8>(mode->second.AsNumber());
+                }
+                applyFlag("sun_audit_disc_debug", layers.sunAuditDiscDebug);
+                applyFlag("sun_audit_relief_debug", layers.sunAuditReliefDebug);
+                applyFlag("sun_audit_sources_debug", layers.sunAuditSourcesDebug);
+                if (const auto audit = values.find("sun_audit_method");
+                    audit != values.end())
+                {
+                    if (!audit->second.IsNumber() ||
+                        !std::isfinite(audit->second.AsNumber()) ||
+                        std::floor(audit->second.AsNumber()) != audit->second.AsNumber() ||
+                        audit->second.AsNumber() < 0.0 || audit->second.AsNumber() > 3.0)
+                        throw rpc::Error(kInvalid, "sun_audit_method must be an integer from 0 to 3.");
+                    layers.sunAuditMethod = static_cast<u8>(audit->second.AsNumber());
+                }
                 applyFlag("bypass_hybrid_reflections", layers.bypassHybridReflections);
                 applyFlag("reflection_exact_triangles", layers.reflectionExactTriangles);
                 applyFlag("reflection_temporal", layers.reflectionTemporal);

@@ -15,6 +15,7 @@ invariants = [
   "The service works on authoritative body positions, radii and semantic radiative emitters and does not depend on the macro-globe, impostor or point-proxy choice.",
   "Source and occluder are finite apparent discs; an occluder contributes only when its centre is closer to the receiver than the source centre; single-occluder overlap uses the analytic circle-intersection area.",
   "Independent visibility fractions are never multiplied: several occluders are evaluated as the union of projected discs over the source disc with a deterministic equal-solid-angle golden-angle sample set.",
+  "ApparentDisc::limbDarkening (source only; 0 = uniform) turns obscured/visible fractions into shares of emitted light: samples are weighted by I(mu) = 1 - u (1 - mu), mu = sqrt(1 - (sin(offset)/sin(R))^2). CelestialLightingService passes the emitter's stellarAppearance.limbDarkening (default 0.58). With u = 0 the analytic and sampled paths are unchanged. A 0.4-radius occluder over the centre of a u = 0.58 Sun hides 19.4 % of the light against 16 % of the area; one on the limb hides less than its area.",
   "Results expose obscured and visible fractions plus front/overlap, total-eclipse and annular-eclipse states.",
 ]
 related = ["/celestial/radiometry", "/rendering/atmosphere", "/legacy/tree-history-research-v006-eclipse-reflected-light"]
@@ -23,7 +24,7 @@ used_by = ["/celestial/far-render", "/editor/studio-session", "/world/world-mode
 verify = [
   "ctest -R Orbit.CelestialLighting",
 ]
-verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
+verified = "ec5b9fe"
 +++
 
 

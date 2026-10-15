@@ -1,8 +1,8 @@
 +++
 path = "/rendering/unified-transport/refraction-and-glass"
-title = "Atmospheric refraction, hybrid visibility, glass and caustics (proposed)"
+title = "Atmospheric refraction, hybrid visibility, glass and caustics (partly implemented)"
 kind = "concept"
-status = "planned"
+status = "experimental"
 summary = """
 Proposed design for refractive index as an optical medium property (horizon bending, mirages, heat shimmer), one hybrid ray-query service shared by \
 mirrors, glass and mirages with confirmed/unresolved semantics, and a restructured glass and caustic pipeline that separates optics from visibility."""
@@ -21,6 +21,13 @@ invariants = [
   "The default path works without ray-tracing hardware; hardware ray queries accelerate the same visibility requests rather than add a second lighting implementation.",
 ]
 +++
+
+## Implementation status
+
+Done: planetary `RefractionTable` applied to the sun direction behind `ORBIT_REFRACT_SUN`; the caustic compute pre-pass behind `ORBIT_GLASS_CAUSTIC_COMPUTE`; the view-dependent photon
+budget; the glass BVH trace bounded by the screen hit. `VisibilityRegistry` already has hit/miss/unresolved semantics but glass does not call it. Not done: local
+inversions, mirages and heat shimmer (`BendRay` has no consumer), masked offscreen refracted visibility, separate glass optics, a thin-pane path, tile classification,
+removing the backdrop copy, hardware ray queries (needs an RHI change). Both flags were checked on screen on 2026-10-11 (`/rendering/unified-transport/design-review-refraction`, `design-review-systems`); the glass pre-pass cost about +0.3 ms for one sphere.
 
 ## Known hotspots (from source inspection, not GPU timings)
 

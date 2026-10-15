@@ -1,4 +1,7 @@
 #include <orbit/celestial_atmosphere/AtmosphereRenderer.hpp>
+#include <orbit/lighting/TerrainSunShadow.hpp>
+#include <orbit/lighting/SunVisibilityShader.hpp>
+#include <string>
 
 #include <algorithm>
 #include <array>
@@ -64,18 +67,21 @@ struct Constants
     float4 mieScatterAbsCenter; // Mie scattering (1/m), absorber centre (m)
     float4 mieExtinctAbsHalf;   // Mie extinction (1/m), absorber half width
     float4 absorptionE;         // absorber extinction (1/m), irradiance scale
+    float4 sunOcclusion;        // stellar angular radius, ellipsoid axes xyz (m)
+    float4 audit;               // x mode, y radiance-only, zw reserved
 };
 
 [[vk::push_constant]] Constants g;
 
-[[vk::binding(0, 0)]] [[vk::combinedImageSampler]] Texture2D g_scene;
-[[vk::binding(0, 0)]] [[vk::combinedImageSampler]] SamplerState g_sceneSampler;
-[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
-[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
-[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
-[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
+[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] Texture2D g_scene;
+[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] SamplerState g_sceneSampler;
+[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
+[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
+[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
+[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
+[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
+[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
+[[vk::binding(0, 0)]] ByteAddressBuffer g_terrainSunShadow;
 
 static const uint kSteps = 40u;
 static const float kPi = 3.14159265358979;
@@ -143,6 +149,84 @@ float MiePhase(float c, float gAnisotropy)
     return (1.0 - gg) / (4.0 * kPi * pow(d, 1.5));
 }
 
+// Monotonic density-aware integration boundaries. A fixed 40-step linear
+// march at orbital distance can stride across the entire dense atmosphere
+// in one or two steps; its midpoint crosses the terminator in discrete
+// arcs as the camera changes altitude. Cluster steps near the closest
+// approach to the planet (or near the surface intersection when clipped).
+float AtmosphereMarchBoundary(float u, float startT, float endT,
+    float closestT, float centerIndex)
+{
+    // Invert a two-sided cubic density centred on the ray's nearest
+    // approach. The split/index continuously varies from 0 to 1 as the
+    // closest approach crosses either end of the segment. There must be
+    // NO hard branch at a fixed percentage of the segment: the old 2.5%
+    // cutoff jumped an integration boundary by ~10% of an orbital ray.
+    if (u <= centerIndex)
+    {
+        const float q = saturate((centerIndex - u) /
+            max(centerIndex, 1.0e-6));
+        return startT + (closestT - startT) * (1.0 - q * q * q);
+    }
+    const float q = saturate((u - centerIndex) /
+        max(1.0 - centerIndex, 1.0e-6));
+    return closestT + (endT - closestT) * q * q * q;
+}
+
+// Exact zero-angular-radius eclipse interval for a parallel stellar ray.
+// An ellipsoid becomes a sphere under axis scaling. Its infinite shadow
+// is the intersection of a circular cylinder behind the planet and the
+// nightside half-space. Both are convex, so along the camera ray their
+// intersection is either empty or ONE contiguous interval [start,end].
+// Clip the quadratic cylinder and linear half-space in normalized view
+// segment coordinates to avoid tiny metre-scale quadratic coefficients.
+float2 EllipsoidEclipseInterval(float3 origin, float3 viewDirection,
+    float3 radii, float3 scaledSun, float startT, float endT)
+{
+    const float segment = endT - startT;
+    const float3 q0 = (origin + viewDirection * startT) / radii;
+    const float3 qv = (viewDirection * segment) / radii;
+    const float3 perp0 = q0 - scaledSun * dot(q0, scaledSun);
+    const float3 perpV = qv - scaledSun * dot(qv, scaledSun);
+    const float a = dot(perpV, perpV);
+    const float b = dot(perp0, perpV);
+    const float c = dot(perp0, perp0) - 1.0;
+    float lower = 0.0;
+    float upper = 1.0;
+    if (a <= 1.0e-16)
+    {
+        if (c > 0.0) return float2(endT, endT);
+    }
+    else
+    {
+        const float discriminant = b * b - a * c;
+        if (discriminant < 0.0) return float2(endT, endT);
+        const float root = sqrt(max(discriminant, 0.0));
+        lower = max(lower, (-b - root) / a);
+        upper = min(upper, (-b + root) / a);
+    }
+
+    // The front-facing half of the extended cylinder is sunlit. Only
+    // points with dot(q,scaledSun) < 0 can be eclipsed by the planet.
+    const float facing0 = dot(q0, scaledSun);
+    const float facingV = dot(qv, scaledSun);
+    if (facingV > 1.0e-9)
+        upper = min(upper, -facing0 / facingV);
+    else if (facingV < -1.0e-9)
+        lower = max(lower, -facing0 / facingV);
+    else if (facing0 >= 0.0)
+        return float2(endT, endT);
+
+    if (lower >= upper) return float2(endT, endT);
+    return float2(startT + segment * lower,
+                  startT + segment * upper);
+}
+
+)";
+
+// Keep each literal below MSVC's 16,380-character string limit.
+// Concatenate at runtime before injecting shared sunlight helpers.
+constexpr const char* kPixelShaderMain = R"(
 float4 main(VSOutput input) : SV_Target0
 {
     const int2 pixel = int2(input.position.xy);
@@ -209,15 +293,79 @@ float4 main(VSOutput input) : SV_Target0
     // full count.
     const uint steps =
         clamp(uint(ceil((tEnd - tStart) / 300.0)) + 3u, 4u, kSteps);
-    const float step = (tEnd - tStart) / float(steps);
+    const float closestT = clamp(-dot(origin, direction), tStart, tEnd);
+    const float closestFraction = saturate(
+        (closestT - tStart) / max(tEnd - tStart, 1.0e-4));
+    const float leftWeight = sqrt(closestFraction);
+    const float rightWeight = sqrt(1.0 - closestFraction);
+    const float centerIndex = leftWeight /
+        max(leftWeight + rightWeight, 1.0e-6);
     float3 transmittance = 1.0;
     float3 radiance = 0.0;
+    float largestSegment = 0.0;
+    float visibilityNear = 1.0;
+    float visibilityFar = 1.0;
+    static const uint kShadowInterval = 16u;
+    // The optional relief field only adds mountain occlusion. The
+    // planetary solar shadow interval below is always evaluated.
+    const bool terrainFieldReady =
+        g_terrainSunShadow.Load(12u) > 0u &&
+        g_terrainSunShadow.Load(16u) > 0u;
+    const float3 bodyRadii = max(g.sunOcclusion.yzw, float3(1.0, 1.0, 1.0));
+    const float3 scaledSun = normalize(sun / bodyRadii);
+    // Solve once per view ray rather than sampling a hard terminator only
+    // at each of 40 step midpoints. Each step will integrate its lit
+    // subinterval(s) with the correct Beer-Lambert camera attenuation.
+    const float2 eclipse = EllipsoidEclipseInterval(
+        origin, direction, bodyRadii, scaledSun, tStart, tEnd);
+    // Bound the finite-disc transition using the largest perpendicular ray
+    // displacement at either endpoint. This only partitions quadrature;
+    // exact local disc visibility determines how much sunlight is received.
+    const float shadowReach = max(max(-dot(origin + direction * tStart, sun),
+        -dot(origin + direction * tEnd, sun)), 0.0);
+    const float margin = shadowReach * tan(g.sunOcclusion.x);
+    const float3 outerAxes = bodyRadii + margin;
+    const float3 innerAxes = max(bodyRadii - margin, bodyRadii * 0.5);
+    const float2 penumbra = EllipsoidEclipseInterval(origin, direction,
+        outerAxes, normalize(sun / outerAxes), tStart, tEnd);
+    float2 umbra = EllipsoidEclipseInterval(origin, direction,
+        innerAxes, normalize(sun / innerAxes), tStart, tEnd);
+    if (umbra.y <= umbra.x)
+        umbra = (penumbra.x + penumbra.y) * 0.5;
+    umbra = clamp(umbra, penumbra.x, penumbra.y);
 
     [loop]
     for (uint i = 0u; i < steps; ++i)
     {
-        const float t = tStart + (float(i) + 0.5) * step;
+        const float edgeA = AtmosphereMarchBoundary(
+            float(i) / float(steps), tStart, tEnd, closestT, centerIndex);
+        const float edgeB = AtmosphereMarchBoundary(
+            float(i + 1u) / float(steps), tStart, tEnd, closestT, centerIndex);
+        const float stepLength = max(edgeB - edgeA, 0.0);
+        largestSegment = max(largestSegment, stepLength);
+        const float t = 0.5 * (edgeA + edgeB);
         const float3 position = origin + direction * t;
+        // Sparse view-ray knots bound terrain queries independently of
+        // simulation-time delta. Body-fixed geometry is reused across timewarp.
+        if (terrainFieldReady && (i % kShadowInterval) == 0u)
+        {
+            const uint endIndex = min(i + kShadowInterval, steps) - 1u;
+            const float endA = AtmosphereMarchBoundary(
+                float(endIndex) / float(steps), tStart, tEnd, closestT, centerIndex);
+            const float endB = AtmosphereMarchBoundary(
+                float(endIndex + 1u) / float(steps), tStart, tEnd, closestT, centerIndex);
+            const float endT = 0.5 * (endA + endB);
+            visibilityNear = TerrainSunReliefVisibility(g_terrainSunShadow, position,
+                sun, bottom, g.sunOcclusion.x);
+            visibilityFar = TerrainSunReliefVisibility(g_terrainSunShadow,
+                origin + direction * endT, sun, bottom, g.sunOcclusion.x);
+        }
+        const uint remaining = steps - (i / kShadowInterval) * kShadowInterval;
+        const float terrainVisibility = terrainFieldReady
+            ? lerp(visibilityNear, visibilityFar,
+                float(i % kShadowInterval) /
+                float(max(min(kShadowInterval, remaining) - 1u, 1u)))
+            : 1.0;
         const float radius = length(position);
         const float altitude = max(radius - bottom, 0.0);
 
@@ -236,25 +384,86 @@ float4 main(VSOutput input) : SV_Target0
 
         const float sunMu = dot(position / max(radius, 1.0), sun);
         const float2 lut = LutUv(radius, sunMu);
-        const float3 sunTransmittance =
-            g_transmittance.SampleLevel(g_transmittanceSampler, lut, 0).rgb;
         const float3 multiResponse =
             g_multi.SampleLevel(g_multiSampler, lut, 0).rgb;
 
-        const float3 source =
-            irradiance *
-            (sunTransmittance * (rayleigh * rayleighPhase + mie * miePhase) +
-             multiResponse * (rayleigh + mie) / (4.0 * kPi));
+        const float3 stepTransmittance = exp(-extinction * stepLength);
+        const float3 safeExtinction = max(extinction, 1.0e-12);
+        // Multiple scattering is a separate (approximate) illumination
+        // source. Never multiply it by the direct planet eclipse mask.
+        const float3 multiSource =
+            irradiance * multiResponse * (rayleigh + mie) / (4.0 * kPi);
+        if (g.audit.x != 1.0)
+            radiance += transmittance * multiSource *
+                (1.0 - stepTransmittance) / safeExtinction;
 
-        const float3 stepTransmittance = exp(-extinction * step);
-        // Integrate the source exactly across the step for a constant medium.
-        const float3 integral =
-            (1.0 - stepTransmittance) / max(extinction, 1.0e-12);
-        radiance += transmittance * source * integral;
+        // Integrate both sides of the solar-disc horizon. Clipping at the
+        // point-sun eclipse discards the shadow-side half of the penumbra and
+        // produces a hard seam. Split at conservative penumbra/umbra edges
+        // so a long atmospheric step cannot miss the narrow transition.
+        const float cuts[6] = {tStart, penumbra.x, umbra.x,
+            umbra.y, penumbra.y, tEnd};
+        const float3 directPhase = rayleigh * rayleighPhase + mie * miePhase;
+        [loop]
+        for (uint region = 0u; region < 5u; ++region)
+        {
+            const float litStart = max(edgeA, cuts[region]);
+            const float litEnd = min(edgeB, cuts[region + 1u]);
+            if (litEnd <= litStart + 1.0e-4 || region == 2u) continue;
+            const bool transition = region == 1u || region == 3u;
+            const uint samples = transition ? 4u : 1u;
+            const float nodes[4] = {0.0694318442, 0.3300094782, 0.6699905218, 0.9305681558};
+            const float weights[4] = {0.1739274226, 0.3260725774, 0.3260725774, 0.1739274226};
+            float3 sunlight = 0.0;
+            [loop]
+            for (uint q = 0u; q < samples; ++q)
+            {
+                const float sampleT = lerp(litStart, litEnd, transition ? nodes[q] : 0.5);
+                const float3 sunPoint = origin + direction * sampleT;
+                const float sunRadius = length(sunPoint);
+                const float sunMuLit = dot(sunPoint / max(sunRadius, 1.0), sun);
+                const float discVisibility = EllipsoidSunVisibility(
+                    sunPoint, bodyRadii, scaledSun, g.sunOcclusion.x);
+                const float3 sunTransmission = AtmosphereStellarTransmittance(
+                    g_transmittance, g_transmittanceSampler,
+                    sunRadius, bottom, top, sunMuLit, g.sunOcclusion.x);
+                sunlight += (transition ? weights[q] : 1.0) * sunTransmission *
+                    discVisibility * terrainVisibility;
+            }
+            const float3 opticalStart = exp(-extinction * max(litStart - edgeA, 0.0));
+            const float3 opticalEnd = exp(-extinction * max(litEnd - edgeA, 0.0));
+            if (g.audit.x != 2.0)
+                radiance += transmittance * irradiance * directPhase * sunlight *
+                    (opticalStart - opticalEnd) / safeExtinction;
+        }
         transmittance *= stepTransmittance;
     }
 
-    return float4(scene.rgb * transmittance + radiance, scene.a);
+    // Diagnostic modes override the atmosphere composite without affecting
+    // underlying material, cloud, or planet lighting calculations.
+    if (g.audit.x == 3.0)
+    {
+        // White: full ray is illuminated, black: eclipsed; gray:
+        // fraction illuminated. A spatially stepped image here implicates
+        // shadow geometry rather than the scattering LUT or integration.
+        const float shadowLength = max(0.0, eclipse.y - eclipse.x);
+        const float illumination = saturate(
+            1.0 - shadowLength / max(tEnd - tStart, 1.0e-4));
+        return float4(illumination.xxx, 1.0);
+    }
+    if (g.audit.x == 4.0)
+    {
+        // Encode worst single-step length relative to Rayleigh scale
+        // height; dark is well resolved, bright indicates undersampling.
+        const float relativeStep = largestSegment /
+            max(g.radii.z, 1.0);
+        return float4(saturate(relativeStep / 8.0),
+            saturate(relativeStep / 2.0),
+            saturate(relativeStep * 0.5), 1.0);
+    }
+    return float4(
+        (g.audit.y > 0.5 ? float3(0.0, 0.0, 0.0) :
+            scene.rgb * transmittance) + radiance, scene.a);
 }
 )";
 
@@ -276,14 +485,47 @@ AtmosphereRenderer::AtmosphereRenderer(
             .debug = false
         });
 
+    std::string pixelSource(kPixelShader);
+    pixelSource += kPixelShaderMain;
+    const auto mainPosition = pixelSource.find("float4 main(VSOutput input) : SV_Target0");
+    if (mainPosition == std::string::npos)
+        throw std::logic_error("Atmosphere shader entry point not found.");
+    // The density and transmittance LUT remain referenced to a sphere,
+    // but direct-sun visibility must instead use the body's real ellipsoid.
+    // The shadow cylinder integrates the point-sun occultation exactly
+    // along each segment; this local tangent-disc factor smooths the
+    // remaining narrow finite-solar-disc transition.
+    pixelSource.insert(mainPosition,
+        std::string(lighting::kSunVisibilityShader) + R"(
+float EllipsoidSunVisibility(float3 p, float3 axes,
+    float3 normalizedScaledSun, float angularRadius)
+{
+    const float3 q = p / axes;
+    const float d2 = dot(q, q);
+    if (d2 <= 1.0) return 0.0;
+    const float inverseD = rsqrt(d2);
+    const float mu = dot(q, normalizedScaledSun) * inverseD;
+    const float horizonMu = -sqrt(max(1.0 - inverseD * inverseD, 0.0));
+    const float clearance = mu - horizonMu;
+    // Uniform solar disc above a locally straight ellipsoid horizon.
+    // The curvature effect is negligible within the thin atmosphere;
+    // the width correction also avoids calling asin on full day/night.
+    const float spread = angularRadius * sqrt(max(1.0 - mu * mu, 0.0));
+    if (spread <= 1.0e-7) return clearance >= 0.0 ? 1.0 : 0.0;
+    if (clearance >= spread) return 1.0;
+    if (clearance <= -spread) return 0.0;
+    return StellarDiscFraction(clearance, spread);
+}
+)");
     const auto pixel =
         compiler.Compile({
-            .source = kPixelShader,
+            .source = pixelSource,
             .entryPoint = "main",
             .stage = shader::Stage::Pixel,
             .debug = false
         });
 
+    emptyTerrainShadow_ = lighting::CreateEmptyTerrainSunShadowBuffer(device);
     pipeline_ =
         device.CreateGraphicsPipeline({
             .vertexShader = {
@@ -296,8 +538,8 @@ AtmosphereRenderer::AtmosphereRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 36U,
-            .shaderResourceBuffers = 0U,
+            .pushConstantDwords = 44U,
+            .shaderResourceBuffers = 1U,
             .sampledTextures = 4U,
             .topology = rhi::PrimitiveTopology::TriangleList,
             .fillMode = rhi::FillMode::Solid,
@@ -336,7 +578,7 @@ void AtmosphereRenderer::Draw(
             return Bits(static_cast<f32>(value));
         };
 
-    const std::array<u32, 36> constants{
+    const std::array<u32, 44> constants{
         f(view.cameraPositionMeters.x),
         f(view.cameraPositionMeters.y),
         f(view.cameraPositionMeters.z),
@@ -380,7 +622,17 @@ void AtmosphereRenderer::Draw(
         f(p.absorptionExtinctionPerMeter.x),
         f(p.absorptionExtinctionPerMeter.y),
         f(p.absorptionExtinctionPerMeter.z),
-        Bits(std::max(view.irradianceScale, 0.0F))
+        Bits(std::max(view.irradianceScale, 0.0F)),
+        Bits(std::max(view.sunAngularRadiusRadians, 0.0F)),
+        Bits(view.bodyRadiiMeters.x > 0.0F
+            ? view.bodyRadiiMeters.x : static_cast<f32>(p.bottomRadiusMeters)),
+        Bits(view.bodyRadiiMeters.y > 0.0F
+            ? view.bodyRadiiMeters.y : static_cast<f32>(p.bottomRadiusMeters)),
+        Bits(view.bodyRadiiMeters.z > 0.0F
+            ? view.bodyRadiiMeters.z : static_cast<f32>(p.bottomRadiusMeters)),
+        Bits(static_cast<f32>(std::min<u8>(view.auditMode, 4U))),
+        Bits(view.auditRadianceOnly ? 1.0F : 0.0F),
+        0U, 0U
     };
 
     commands.SetRenderTarget(target);
@@ -405,6 +657,9 @@ void AtmosphereRenderer::Draw(
     commands.SetGraphicsTexture(1, depth);
     commands.SetGraphicsTexture(2, luts.Transmittance());
     commands.SetGraphicsTexture(3, luts.MultiScattering());
+    commands.SetGraphicsBuffer(0,
+        (view.terrainOcclusionEnabled && view.terrainSunShadow)
+            ? *view.terrainSunShadow : *emptyTerrainShadow_);
     commands.Draw(6);
 }
 } // namespace orbit::celestial_atmosphere

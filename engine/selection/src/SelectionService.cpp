@@ -1,6 +1,7 @@
 #include <orbit/selection/SelectionService.hpp>
 
 #include <algorithm>
+#include <unordered_set>
 #include <utility>
 
 namespace orbit::selection
@@ -12,22 +13,21 @@ void SelectionService::Set(
     std::vector<scene::ObjectId> next;
     next.reserve(objects.size());
 
-    for (const scene::ObjectId object :
-         objects)
+    // Avoid heap-allocating a hash set on ordinary single clicks. Larger
+    // Explorer range/subtree selections use near-linear stable de-duplication.
+    if(objects.size()<=8U)
     {
-        if (!object)
-        {
-            continue;
-        }
-
-        if (std::find(
-                next.begin(),
-                next.end(),
-                object) ==
-            next.end())
-        {
-            next.push_back(object);
-        }
+        for(const auto id:objects)
+            if(id && std::find(next.begin(),next.end(),id)==next.end())
+                next.push_back(id);
+    }
+    else
+    {
+        std::unordered_set<scene::ObjectId> seen;
+        seen.reserve(objects.size());
+        for(const auto id:objects)
+            if(id && seen.insert(id).second)
+                next.push_back(id);
     }
 
     if (next == selected_)

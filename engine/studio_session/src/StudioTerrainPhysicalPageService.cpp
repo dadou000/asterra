@@ -3,6 +3,7 @@
 
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/path_geometry/CorridorTerrainSource.hpp>
 #include <orbit/surface_authoring/TerrainConstraints.hpp>
 #include <orbit/surface_model/SurfaceMaterialResolver.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
@@ -32,6 +33,7 @@
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <tuple>
 #include <mutex>
 #include <numbers>
 #include <stdexcept>
@@ -246,6 +248,10 @@ struct BodyBuildInputs
     std::shared_ptr<
         const terrain::AnalyticTerrainSource>
         source;
+    // Optional immutable construction overlay captured with each worker's
+    // BodyBuildInputs. Publication must replace this snapshot, never mutate it.
+    std::shared_ptr<const path_geometry::CorridorTerrainSource>
+        corridorOverlay;
 
     terrain_geology::GeologicalMaterialLibrary geology;
     terrain_geology::RockTypeId defaultBedrock{};
@@ -274,6 +280,15 @@ struct BodyBuildInputs
     }
 };
 
+[[nodiscard]] terrain::TerrainSample SampleConstructionTerrain(
+    const BodyBuildInputs& inputs,
+    const terrain::TerrainQuery& query) noexcept
+{
+    if (inputs.corridorOverlay)
+        return inputs.corridorOverlay->Sample(query);
+    return inputs.source->Sample(query);
+}
+
 struct SharedBodyInputs
 {
     [[nodiscard]] std::shared_ptr<
@@ -282,6 +297,13 @@ struct SharedBodyInputs
     {
         std::scoped_lock lock(mutex);
         return current;
+    }
+
+    [[nodiscard]] std::shared_ptr<const BodyBuildInputs>
+    Latest() const
+    {
+        std::scoped_lock lock(mutex);
+        return pending ? pending : current;
     }
 
     void Store(
@@ -468,7 +490,7 @@ BoundarySample(
     const f64 footprintMeters)
 {
     const auto sample =
-        inputs.source->Sample({
+        SampleConstructionTerrain(inputs, {
             .unitDirection =
                 position.unitDirection,
             .footprintMeters =
@@ -782,7 +804,7 @@ BuildDrainageHalo(
                     y);
 
             const auto sample =
-                inputs.source->Sample({
+                SampleConstructionTerrain(inputs, {
                     .unitDirection =
                         position.
                             unitDirection,
@@ -2268,10 +2290,11 @@ InitialRevisions(
                     Revision(),
                 1U),
         .authoring =
-            std::max<u64>(
-                inputs.
-                    surfaceSourceRevision,
-                1U),
+            inputs.corridorOverlay
+                ? terrain::StableCombine64(
+                    std::max<u64>(inputs.surfaceSourceRevision, 1U),
+                    inputs.corridorOverlay->GenerationRevisions().authoring)
+                : std::max<u64>(inputs.surfaceSourceRevision, 1U),
         .biome =
             std::max<u64>(
                 inputs.biomes.
@@ -2807,7 +2830,9 @@ void StudioTerrainPhysicalPageService::Sync(
     const std::span<
         const StudioTerrainViewportRuntimeSnapshot>
         runtimes,
-    const time::SimulationTime atTime)
+    const time::SimulationTime atTime,
+    const std::span<const terrain::PhysicalTerrainPageAddress>
+        constructionInterests)
 {
     if (impl_->world == nullptr ||
         !impl_->world->HasWorld())
@@ -2936,7 +2961,21 @@ void StudioTerrainPhysicalPageService::Sync(
                  found->second->shared->Capture()->seasonalRainfallBin !=
                      inputs->seasonalRainfallBin)
         {
-            const auto previousInputs = found->second->shared->Capture();
+            const auto previousInputs = found->second->shared->Latest();
+            // Recomposition must not erase an independently published
+            // infrastructure snapshot. The terrain source may have changed;
+            // publication will refresh the overlay against the new source.
+            if (previousInputs && previousInputs->corridorOverlay)
+            {
+                // CaptureInputs publishes immutable build inputs. Preserve the
+                // independently authored corridor overlay by rebinding it on
+                // a fresh copy, never by mutating the captured snapshot.
+                // Existing worker jobs retain their original version.
+                auto rebound = std::make_shared<BodyBuildInputs>(*inputs);
+                rebound->corridorOverlay =
+                    previousInputs->corridorOverlay->Rebind(rebound->source);
+                inputs = std::move(rebound);
+            }
             const bool riverAuthoringChanged = previousInputs != nullptr &&
                 previousInputs->semanticRevision != inputs->semanticRevision;
             const bool seasonalRainfallChanged = previousInputs != nullptr &&
@@ -2992,53 +3031,29 @@ void StudioTerrainPhysicalPageService::Sync(
             interests[
                 runtime.body];
 
-        bodyInterests.insert(
-            runtime.
-                observerPhysicalPage);
-
-        impl_->RegisterInterest(
-            body,
-            runtime.
-                observerPhysicalPage);
-
-        constexpr std::array<
-            world::TileEdge,
-            4U>
-            edges{
-                world::TileEdge::North,
-                world::TileEdge::East,
-                world::TileEdge::South,
-                world::TileEdge::West
-            };
-
-        for (const auto edge :
-             edges)
+        // Match the renderer's complete 3x3 physical-page neighborhood.
+        // Diagonal pages are required when crossing corner seams.
+        const auto neighborhood = world::TileNeighborhood(
+            runtime.observerPhysicalPage.tile,
+            PhysicalPageCoverageRadius(runtime));
+        for (const auto& tile : neighborhood)
         {
-            const auto neighbor =
-                world::
-                    NeighborAcrossTileEdge(
-                        runtime.
-                            observerPhysicalPage.
-                            tile,
-                        edge);
-
-            const terrain::
-                PhysicalTerrainPageAddress
-                neighborAddress{
-                    .planet =
-                        runtime.
-                            observerPhysicalPage.
-                            planet,
-                    .tile =
-                        neighbor.tile
-                };
-
-            bodyInterests.insert(
-                neighborAddress);
-
-            impl_->RegisterInterest(
-                body,
-                neighborAddress);
+            const terrain::PhysicalTerrainPageAddress address{
+                .planet = runtime.observerPhysicalPage.planet,
+                .tile = tile
+            };
+            if (bodyInterests.insert(address).second)
+                impl_->RegisterInterest(body, address);
+        }
+        // Authored infrastructure receives a separate hard-capped interest
+        // set. No surrounding empty pages are requested for these footprints.
+        for (const auto& address : constructionInterests)
+        {
+            if (address.planet != runtime.planet.id ||
+                address.tile.level != runtime.physicalPageLevel)
+                continue;
+            if (bodyInterests.insert(address).second)
+                impl_->RegisterInterest(body, address);
         }
     }
 
@@ -3087,6 +3102,181 @@ void StudioTerrainPhysicalPageService::Sync(
             }
         }
     }
+}
+
+void StudioTerrainPhysicalPageService::StageCorridorConstruction(
+    const universe::BodyId body,
+    std::shared_ptr<const path_geometry::CorridorTerrainSource> overlay,
+    const std::span<const terrain::PhysicalTerrainPageAddress> affectedPages)
+{
+    if (!body || affectedPages.empty() || affectedPages.size() > 4096U)
+        throw std::invalid_argument(
+            "Corridor publication requires a valid body and bounded old/new pages.");
+    const auto found = impl_->bodies.find(body);
+    if (found == impl_->bodies.end())
+        throw std::invalid_argument(
+            "Construction target has no physical terrain runtime.");
+    auto& runtime = *found->second;
+    const auto current = runtime.shared->Latest();
+    if (!current || !current->source)
+        throw std::logic_error("Construction target has no terrain source.");
+    for (const auto& address : affectedPages)
+    {
+        if (address.planet != current->planet.id ||
+            address.tile.level > 24U ||
+            address.tile.x >= (1U << address.tile.level) ||
+            address.tile.y >= (1U << address.tile.level))
+            throw std::invalid_argument(
+                "Corridor construction page belongs to another planet or is invalid.");
+    }
+    // Copy-on-write: currently running workers retain their original inputs.
+    // The scheduler's applied-change callback commits the pending snapshot.
+    auto next = std::make_shared<BodyBuildInputs>(*current);
+    next->corridorOverlay = overlay
+        ? overlay->Rebind(current->source)
+        : nullptr;
+    runtime.shared->Stage(std::move(next));
+    for (const auto& address : affectedPages)
+    {
+        runtime.scheduler.QueueChange({
+            .kind = terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+            .scope = {
+                .planet = address.planet,
+                .global = false,
+                .center = address.tile,
+                .radiusTiles = 0U,
+                .downstreamRadiusTiles = 0U
+            }
+        });
+    }
+}
+
+std::optional<f64>
+StudioTerrainPhysicalPageService::HeightPageBatch::Sample(
+    const math::Double3& direction) const noexcept
+{
+    if (!planet || !std::isfinite(direction.x) ||
+        !std::isfinite(direction.y) || !std::isfinite(direction.z) ||
+        math::LengthSquared(direction) < 0.5)
+        return std::nullopt;
+    const auto tile = world::TileForDirection(direction, level);
+    const auto found = pages.find(tile);
+    if (found != pages.end() && found->second &&
+        found->second->address.planet == planet)
+    {
+        const auto coordinate = world::UnitDirectionToCube(
+            math::Normalize(direction));
+        const auto bounds = world::TileBounds(tile);
+        const f64 du = bounds.maximumUv.x - bounds.minimumUv.x;
+        const f64 dv = bounds.maximumUv.y - bounds.minimumUv.y;
+        if (du <= 0 || dv <= 0) return std::nullopt;
+        return found->second->SampleSurfaceHeight(
+            std::clamp((coordinate.uv.x - bounds.minimumUv.x)/du,0.0,1.0),
+            std::clamp((coordinate.uv.y - bounds.minimumUv.y)/dv,0.0,1.0));
+    }
+    return std::nullopt;
+}
+
+StudioTerrainPhysicalPageService::HeightPageBatch
+StudioTerrainPhysicalPageService::CaptureHeightTiles(
+    const world::PlanetId planet, const u8 level,
+    const std::span<const world::PlanetTileId> tiles) const
+{
+    HeightPageBatch result{};
+    result.planet = planet;
+    result.level = level;
+    result.revisionFingerprint = 1469598103934665603ULL;
+    for (const auto& tile : tiles)
+    {
+        if (tile.level != level) continue;
+        const auto snapshot = Find({.planet=planet,.tile=tile});
+        result.revisionFingerprint = terrain::StableCombine64(
+            result.revisionFingerprint,
+            (static_cast<u64>(static_cast<u8>(tile.face)) << 56U) ^
+            (static_cast<u64>(tile.level) << 48U) ^
+            (static_cast<u64>(tile.x) << 24U) ^ tile.y);
+        result.revisionFingerprint = terrain::StableCombine64(
+            result.revisionFingerprint,
+            snapshot ? snapshot->revisionFingerprint : 0U);
+        if (snapshot) result.pages.emplace(tile, snapshot);
+    }
+    return result;
+}
+
+StudioTerrainPhysicalPageService::HeightPageBatch
+StudioTerrainPhysicalPageService::CaptureHeightPages(
+    const world::PlanetId planet, const u8 level,
+    const std::span<const math::Double3> directions) const
+{
+    std::vector<world::PlanetTileId> tiles;
+    tiles.reserve(directions.size());
+    for (const auto& direction : directions)
+    {
+        if (!std::isfinite(direction.x) || !std::isfinite(direction.y) ||
+            !std::isfinite(direction.z) ||
+            math::LengthSquared(direction) < 0.5) continue;
+        tiles.push_back(world::TileForDirection(direction, level));
+    }
+    std::sort(tiles.begin(), tiles.end(), HeightPageBatch::TileLess{});
+    tiles.erase(std::unique(tiles.begin(), tiles.end()), tiles.end());
+    return CaptureHeightTiles(planet, level, tiles);
+}
+
+std::optional<f64>
+StudioTerrainPhysicalPageService::SamplePublishedSurfaceHeight(
+    const world::PlanetId planet,
+    const math::Double3& unitDirection,
+    const u8 pageLevel) const noexcept
+{
+    if (!planet || pageLevel > 24U ||
+        !std::isfinite(unitDirection.x) ||
+        !std::isfinite(unitDirection.y) ||
+        !std::isfinite(unitDirection.z) ||
+        math::LengthSquared(unitDirection) < 0.5)
+        return std::nullopt;
+    const auto coordinate = world::UnitDirectionToCube(
+        math::Normalize(unitDirection));
+    const terrain::PhysicalTerrainPageAddress address{
+        .planet = planet,
+        .tile = world::TileForDirection(unitDirection, pageLevel)
+    };
+    const auto snapshot = Find(address);
+    if (!snapshot || !snapshot->material)
+        return std::nullopt;
+    const auto bounds = world::TileBounds(address.tile);
+    const f64 du = bounds.maximumUv.x - bounds.minimumUv.x;
+    const f64 dv = bounds.maximumUv.y - bounds.minimumUv.y;
+    if (du <= 0.0 || dv <= 0.0)
+        return std::nullopt;
+    const f64 u = std::clamp(
+        (coordinate.uv.x - bounds.minimumUv.x) / du, 0.0, 1.0);
+    const f64 v = std::clamp(
+        (coordinate.uv.y - bounds.minimumUv.y) / dv, 0.0, 1.0);
+    return snapshot->SampleSurfaceHeight(u, v);
+}
+
+std::optional<f64> StudioTerrainPhysicalPageSnapshot::SampleSurfaceHeight(
+    const f64 u, const f64 v) const noexcept
+{
+    if (!material || !std::isfinite(u) || !std::isfinite(v) ||
+        u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
+        return std::nullopt;
+    const u32 n = material->Resolution();
+    if (n == 0U) return std::nullopt;
+    const f64 px = u * static_cast<f64>(n - 1U);
+    const f64 py = v * static_cast<f64>(n - 1U);
+    const u32 x0 = static_cast<u32>(px);
+    const u32 y0 = static_cast<u32>(py);
+    const u32 x1 = std::min(x0 + 1U, n - 1U);
+    const u32 y1 = std::min(y0 + 1U, n - 1U);
+    const f64 tx = px - static_cast<f64>(x0);
+    const f64 ty = py - static_cast<f64>(y0);
+    const f64 a = material->At(x0, y0).SurfaceHeightMeters();
+    const f64 b = material->At(x1, y0).SurfaceHeightMeters();
+    const f64 d = material->At(x0, y1).SurfaceHeightMeters();
+    const f64 e = material->At(x1, y1).SurfaceHeightMeters();
+    return (a * (1.0 - tx) + b * tx) * (1.0 - ty) +
+           (d * (1.0 - tx) + e * tx) * ty;
 }
 
 void StudioTerrainPhysicalPageService::

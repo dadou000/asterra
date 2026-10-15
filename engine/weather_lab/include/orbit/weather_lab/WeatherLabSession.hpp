@@ -120,6 +120,21 @@ struct ComparisonRow
 [[nodiscard]] const std::vector<std::string>& SliceFieldNames();
 [[nodiscard]] std::string SliceFieldUnit(const std::string& field);
 
+struct StormSnapshot
+{
+    bool valid = false;
+    double time = 0.0;                  // simulated seconds
+    std::uint32_t nx = 0, ny = 0, nz = 0;
+    float dx = 0.0F;                    // m, horizontal (square cells)
+    float dz = 0.0F;                    // m, vertical
+    std::vector<float> theta;           // full potential temperature, K
+    std::vector<float> w;               // m/s
+    std::vector<float> qc;              // kg/kg
+    std::vector<float> qr;              // kg/kg
+    std::vector<float> levelExner;      // per level
+    std::vector<float> levelDensity;    // per level, kg/m^3
+};
+
 class WeatherLabSession
 {
 public:
@@ -158,6 +173,10 @@ public:
     [[nodiscard]] std::vector<ComparisonRow> Compare() const;
 
     [[nodiscard]] Slice GetSlice(const SliceRequest& request) const;
+
+    // The raw fields of the most recent live sample, for consumers that derive other quantities from the storm (for
+    // example lightning). Cells are x fastest, then y, then z. `valid` is false until a live run has been sampled.
+    [[nodiscard]] StormSnapshot LiveSnapshot() const;
 
 private:
     struct Impl;

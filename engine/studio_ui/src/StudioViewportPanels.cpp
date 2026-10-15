@@ -1702,6 +1702,12 @@ void ActivateWorkspace(
         OpenPanels(ui, {"Planning", "Properties"});
         break;
 
+    case WorkspaceMode::Debug:
+        CloseSpecialistPanels(ui);
+        ClosePanels(ui, {"Build", "Output"});
+        OpenPanels(ui, {"Viewport", "Debug", "Display Diagnostics"});
+        break;
+
     case WorkspaceMode::Plugins:
         CloseSpecialistPanels(ui);
         ClosePanels(ui, {"Viewport", "Build", "Output"});
@@ -1769,6 +1775,12 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .menu = "Home",
         .label = "Workspace: Planning",
         .invoke = [&ui] { ActivateWorkspace(ui, WorkspaceMode::Planning); }
+    });
+
+    ui.RegisterMenuAction({
+        .menu = "Home",
+        .label = "Workspace: Debug",
+        .invoke = [&ui] { ActivateWorkspace(ui, WorkspaceMode::Debug); }
     });
 
     ui.RegisterMenuAction({
@@ -1877,6 +1889,14 @@ std::string_view StudioViewportPanels::WorkspaceModeName() const noexcept
 
 bool StudioViewportPanels::SetWorkspaceMode(const std::string_view name)
 {
+    // Accept the new debug workspace through scripting/RPC as well as tabs,
+    // independent of legacy workspace-name parsers.
+    if (name == "Debug" || name == "debug")
+    {
+        if (g_workspaceUi == nullptr) return false;
+        ActivateWorkspace(*g_workspaceUi, WorkspaceMode::Debug);
+        return true;
+    }
     const auto parsed = ParseWorkspaceMode(name);
     if (!parsed.has_value() || g_workspaceUi == nullptr)
     {
@@ -4185,14 +4205,15 @@ void StudioViewportPanels::DrawWorkspaceBand(
     }
 
     using editor_ui::NavigationIcon;
-    static constexpr std::array<editor_ui::NavigationTab, 7> kWorkspaceModes{{
+    static constexpr std::array<editor_ui::NavigationTab, 8> kWorkspaceModes{{
         {"Build", NavigationIcon::Build},
         {"Planet", NavigationIcon::Planet},
         {"Universe", NavigationIcon::Universe},
         {"Simulation", NavigationIcon::Simulation},
         {"Shading", NavigationIcon::Shading},
         {"Planning", NavigationIcon::Planning},
-        {"Plugins", NavigationIcon::Plugins}
+        {"Plugins", NavigationIcon::Plugins},
+        {"Debug", NavigationIcon::Simulation}
     }};
 
     i32 workspace = static_cast<i32>(g_workspaceMode);
@@ -4201,7 +4222,7 @@ void StudioViewportPanels::DrawWorkspaceBand(
             kWorkspaceModes,
             workspace))
     {
-        workspace = std::clamp(workspace, 0, 6);
+        workspace = std::clamp(workspace, 0, 7);
         ActivateWorkspace(
             *g_workspaceUi,
             static_cast<WorkspaceMode>(workspace));
@@ -4260,6 +4281,7 @@ i32 StudioViewportPanels::QuickCreateCommandPriority(
 
     case WorkspaceMode::Planning:
     case WorkspaceMode::Plugins:
+    case WorkspaceMode::Debug:
         return 0;
     }
 
@@ -4716,16 +4738,14 @@ void StudioViewportPanels::DrawActivityBand(
         context.SameLine();
         context.MutedText("|");
         context.SameLine();
-        const bool enabled = ecoModeGetter_();
+        const int mode = ecoModeGetter_();
         const editor_ui::ActionPresentation ecoAction{
-            .label = enabled ? "[Eco]" : "Eco",
+            .label = mode == 0 ? "Normal" : mode == 1 ? "[Eco]" : "[Eco+]",
             .enabled = true,
-            .invoke = [this, enabled]
+            .invoke = [this, mode]
             {
                 if (ecoModeSetter_)
-                {
-                    ecoModeSetter_(!enabled);
-                }
+                    ecoModeSetter_((mode + 1) % 3);
             }};
         context.Toolbar(std::span{&ecoAction, 1});
     }

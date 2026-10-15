@@ -724,7 +724,7 @@ u64 AtmosphereFingerprint(
     Validate(p, c);
 
     u64 seed =
-        0x4d323141544d4f31ULL;
+        0x4d323141544d4f32ULL;
 
     for (const auto value : {
              p.bottomRadiusMeters,
@@ -835,13 +835,13 @@ AtmosphereStaticLuts BuildStaticLuts(
              x < transmittance.width;
              ++x)
         {
-            const f64 mu =
-                -1.0 +
-                2.0 *
-                (static_cast<f64>(x) +
-                 0.5) /
-                static_cast<f64>(
-                    transmittance.width);
+            // Store only rays that escape the ground. Quadratic distance
+            // above the local horizon resolves grazing extinction without
+            // interpolating a discontinuous ground-blocked zero mask.
+            const f64 horizon = -std::sqrt(std::max(
+                1.0 - (p.bottomRadiusMeters / radius) * (p.bottomRadiusMeters / radius), 0.0));
+            const f64 u = (static_cast<f64>(x) + 0.5) / transmittance.width;
+            const f64 mu = horizon + (1.0 - horizon) * u * u;
 
             const f64 sinTheta =
                 std::sqrt(
@@ -1380,16 +1380,8 @@ AtmosphereSkyView BuildSkyView(
                         -1.0,
                         1.0);
 
-                const auto sunTransmittance =
-                    LutRgb(
-                        staticLuts.
-                            transmittance,
-                        localSunMu *
-                                0.5 +
-                            0.5,
-                        UnitFromRadius(
-                            p,
-                            radius));
+                const auto sunTransmittance = SunTransmittanceAt(
+                    p, staticLuts, radius, localSunMu);
 
                 const auto multiResponse =
                     LutRgb(
@@ -1605,12 +1597,20 @@ math::Double3 SunTransmittanceAt(
         return {1.0, 1.0, 1.0};
     }
 
-    return LutRgb(
-        staticLuts.transmittance,
-        std::clamp(sunCosineZenith, -1.0, 1.0) * 0.5 + 0.5,
-        UnitFromRadius(
-            parameters,
-            radiusMeters));
+    const f64 radius = std::max(radiusMeters, parameters.bottomRadiusMeters);
+    const f64 ratio = parameters.bottomRadiusMeters / radius;
+    const f64 horizon = -std::sqrt(std::max(1.0 - ratio * ratio, 0.0));
+    if (sunCosineZenith < horizon) return {};
+    const f64 u = std::sqrt(std::clamp((sunCosineZenith - horizon) /
+        (1.0 - horizon), 0.0, 1.0));
+    const f64 v = UnitFromRadius(parameters, radius);
+    // LutRgb interpolates endpoint coordinates; generation/GPU sampling use
+    // texel centres. Convert explicitly rather than shifting the horizon.
+    const auto unitToCpu = [](f64 x, u32 size)
+    { return (x * size - 0.5) / static_cast<f64>(size - 1U); };
+    return LutRgb(staticLuts.transmittance,
+        unitToCpu(u, staticLuts.transmittance.width),
+        unitToCpu(v, staticLuts.transmittance.height));
 }
 
 void GpuAtmosphereLuts::ReplaceSkyView(

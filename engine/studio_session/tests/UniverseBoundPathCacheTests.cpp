@@ -90,6 +90,62 @@ int main()
         Check(cache.RouteGeneration(edge).value_or(0U) == 7U);
         Check(cache.Products().size() == 1U);
 
+        orbit::path_geometry::PathCenterline centerline{
+            .edge = edge,
+            .frame = body->frame,
+            .sourceRevision = 2,
+            .samples = {
+                {.position = {0.0, 0.0, 0.0}},
+                {.position = {30.0, 0.0, 0.0}}
+            }
+        };
+        orbit::paths::PathProfile roadProfile{};
+        roadProfile.widthMeters = 6.0;
+        orbit::path_geometry::CorridorSweep roadSection{
+            .bands = {{{{-3.0, 0.0}, {0.0, 0.1}, {3.0, 0.0}}}}
+        };
+        Check(cache.StoreCorridorIfChanged(101U, centerline, roadProfile, roadSection));
+        const auto generatedSignature = cache.Find(edge)->buildSignature;
+        Check(!cache.StoreCorridorIfChanged(101U, centerline, roadProfile, roadSection));
+        Check(cache.Find(edge)->buildSignature == generatedSignature);
+        roadSection.bands[0].profile[1].elevationMeters = 0.2;
+        Check(cache.StoreCorridorIfChanged(102U, centerline, roadProfile, roadSection));
+        Check(cache.Find(edge)->buildSignature != generatedSignature);
+        Check(cache.Size() == 1U);
+        cache.MarkDirty(edge);
+        Check(cache.IsDirty(edge));
+        Check(cache.Find(edge) != nullptr); // keep previous version available
+        Check(cache.StoreCorridorIfChanged(102U, centerline, roadProfile, roadSection));
+        Check(!cache.IsDirty(edge));
+        Check(!cache.StoreCorridorIfChanged(102U, centerline, roadProfile, roadSection));
+
+        cache.MarkDirty(edge);
+        Check(cache.DirtyCount() == 1U);
+        const auto built = cache.RebuildDirty([&](const orbit::scene::ObjectId id)
+            -> std::optional<orbit::studio_session::UniverseBoundPathCache::RebuildRequest> {
+            if (id != edge) return std::nullopt;
+            orbit::studio_session::UniverseBoundPathCache::RebuildRequest req{};
+            req.authoredSignature = 103U;
+            req.centerline = centerline;
+            req.profile = roadProfile;
+            req.corridor = roadSection;
+            return req;
+        }, 1U);
+        Check(built == 1U);
+        Check(cache.DirtyCount() == 0U);
+        cache.MarkDirty(edge);
+        Check(cache.RebuildDirty([](const orbit::scene::ObjectId)
+            -> std::optional<orbit::studio_session::UniverseBoundPathCache::RebuildRequest> {
+            return std::nullopt;
+        }, 1U) == 1U);
+        Check(!cache.RebuildError(edge).empty());
+        Check(cache.RebuildDirty([](const orbit::scene::ObjectId)
+            -> std::optional<orbit::studio_session::UniverseBoundPathCache::RebuildRequest> {
+            return std::nullopt;
+        }, 1U) == 0U);
+        cache.MarkDirty(edge);
+        Check(cache.RebuildError(edge).empty());
+
         bool foreignFrameRejected = false;
         try
         {

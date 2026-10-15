@@ -1,6 +1,7 @@
 add_library(OrbitStudioUi STATIC
     src/CelestialAuthoringUi.cpp
     src/DebugViewUi.cpp
+    src/DebugTestRegistry.cpp
     src/DisplayDiagnosticsUi.cpp
     src/DisplayEyeRpc.cpp
     src/ImplementationPlan.cpp
@@ -14,6 +15,7 @@ add_library(OrbitStudioUi STATIC
     src/ReportThumbnailCache.cpp
     src/ShadingUi.cpp
     src/SimulationControlsUi.cpp
+    src/SessionState.cpp
     src/StudioExpansionShell.cpp
     src/StudioFlatMap.cpp
     src/StudioFlatMapRpc.cpp
@@ -22,6 +24,9 @@ add_library(OrbitStudioUi STATIC
     src/StudioSurfacePicking.cpp
     src/StudioTerrainDiagnosticOverlayGeometry.cpp
     src/StudioTerrainOverlayGeometry.cpp
+    src/LightningRpc.cpp
+    src/CloudShaderRpc.cpp
+    src/StormLightningController.cpp
     src/SurfaceAuthoringUi.cpp
     src/SurfaceVolumeDebugRenderer.cpp
     src/SystemViewUi.cpp
@@ -37,7 +42,11 @@ add_library(OrbitStudioUi STATIC
     src/StudioViewportTerrainPass.cpp
     src/StudioViewportVolumePass.cpp
     src/StudioViewportLightingPass.cpp
+    src/SunAuditViewportIndicator.cpp
     src/StudioViewportAtmospherePass.cpp
+    src/StudioViewportTerrainSunShadow.cpp
+    src/StudioViewportStorm.cpp
+    src/StormDomain.cpp
     src/StudioViewportBodyPass.cpp
     src/StudioViewportRenderer.cpp
     src/StudioShellInspector.cpp
@@ -93,6 +102,9 @@ target_link_libraries(OrbitStudioUi
         Orbit::EditorModel
         Orbit::EditorUi
         Orbit::Lighting
+        Orbit::StormElectrification
+        Orbit::WeatherLab
+        Orbit::WeatherGpu
         Orbit::MeshRender
         Orbit::Platform
         Orbit::PostProcess
@@ -391,6 +403,74 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioViewContinuity
         COMMAND OrbitStudioViewContinuityTests
+    )
+
+    add_executable(OrbitStormLightningControllerTests
+        tests/StormLightningControllerTests.cpp
+    )
+
+    target_link_libraries(OrbitStormLightningControllerTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitStormLightningControllerTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStormLightningControllerTests)
+
+    add_test(
+        NAME Orbit.StormLightningController
+        COMMAND OrbitStormLightningControllerTests
+    )
+
+    add_executable(OrbitCloudShaderRpcTests
+        tests/CloudShaderRpcTests.cpp
+    )
+
+    target_link_libraries(OrbitCloudShaderRpcTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitCloudShaderRpcTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitCloudShaderRpcTests)
+
+    add_test(
+        NAME Orbit.CloudShaderRpc
+        COMMAND OrbitCloudShaderRpcTests
+    )
+
+    add_executable(OrbitStormDomainTests
+        tests/StormDomainTests.cpp
+    )
+
+    target_link_libraries(OrbitStormDomainTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitStormDomainTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStormDomainTests)
+
+    add_test(
+        NAME Orbit.StormDomain
+        COMMAND OrbitStormDomainTests
+    )
+
+    add_executable(OrbitLightningRpcTests
+        tests/LightningRpcTests.cpp
+    )
+
+    target_link_libraries(OrbitLightningRpcTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitLightningRpcTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightningRpcTests)
+
+    add_test(
+        NAME Orbit.LightningRpc
+        COMMAND OrbitLightningRpcTests
     )
 
     add_executable(OrbitWeatherLabRpcTests

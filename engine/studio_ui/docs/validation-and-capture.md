@@ -111,3 +111,7 @@ A simpler one-shot capture, `viewport.screenshot` (MCP `orbit_viewport_screensho
 - a root `Orbit.exe` verified as version 0.0.7 with the stamped commit.
 
 The CPU tests above prove deterministic invariants and the report schema only; none of them is hardware evidence.
+
+## Canonical test location
+
+Use **Orbit Studio → Debug** to navigate engine tests and diagnostics. The existing Explorer `Validate:` scene-acceptance commands and viewport capture/RPC facilities remain their original owners and must not be described as moved until explicitly registered in the Debug hub. See `/editor/studio-ui/debug-center` for the current Debug UI and PASS/FAIL scope.

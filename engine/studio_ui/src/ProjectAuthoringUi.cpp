@@ -317,6 +317,8 @@ void ProjectAuthoringUi::DrawProjectBrowser(
 
         const bool scanning = discoveryFuture_.valid();
 
+        static_cast<void>(context.Checkbox("Show test content##project-test-content", showTestContent_));
+
         if (scanning)
         {
             context.MutedText("Scanning...");
@@ -330,9 +332,13 @@ void ProjectAuthoringUi::DrawProjectBrowser(
                 []
                 {
                     core::SetCurrentThreadName("Orbit.ProjectScan");
+                    auto roots = platform::UsualProjectFolders();
+                    studio_session::ProjectDiscoveryOptions options;
+                    options.testContentRoots =
+                        studio_session::ProjectBrowserModel::InternalProjectFolders();
+                    roots.insert(roots.end(), options.testContentRoots.begin(), options.testContentRoots.end());
                     return studio_session::ProjectBrowserModel::
-                        DiscoverProjects(
-                            platform::UsualProjectFolders());
+                        DiscoverProjects(roots, options);
                 });
         }
 
@@ -343,6 +349,11 @@ void ProjectAuthoringUi::DrawProjectBrowser(
 
         for (const auto& project : discovered_)
         {
+            if (project.testContent && !showTestContent_)
+            {
+                continue;
+            }
+
             const bool alreadyRecent = std::ranges::any_of(
                 recentProjects,
                 [&project](const studio_session::RecentProjectItem& item)
@@ -363,6 +374,10 @@ void ProjectAuthoringUi::DrawProjectBrowser(
                 project.displayName.empty()
                     ? Utf8(project.manifestPath.parent_path().filename())
                     : project.displayName;
+            if (project.testContent)
+            {
+                label += " [test]";
+            }
             label += "##found:";
             label += Utf8(project.manifestPath);
 

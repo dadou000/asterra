@@ -1,7 +1,10 @@
 #pragma once
 
 #include <orbit/editor_ui/EditorUi.hpp>
+#include <orbit/rpc/JsonRpc.hpp>
+#include <orbit/studio_ui/DebugTestRegistry.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/studio_session/StudioSession.hpp>
 
 namespace orbit::studio_ui
 {
@@ -13,9 +16,14 @@ namespace orbit::studio_ui
 class DebugViewUi
 {
 public:
-    explicit DebugViewUi(StudioRenderViewSet& views) noexcept;
+    explicit DebugViewUi(StudioRenderViewSet& views,
+        studio_session::StudioSession& session) noexcept;
 
     void Register(editor_ui::EditorUi& ui);
+    void SetEngineeringDispatcher(rpc::Dispatcher& dispatcher) noexcept
+    {
+        engineeringRpc_ = &dispatcher;
+    }
 
     inline static constexpr editor_ui::PanelId kPanelId{
         .high = 0x4f52424954535455ULL,
@@ -23,11 +31,21 @@ public:
     };
 
 private:
-    void Draw(editor_ui::PanelContext& context);
+    void Draw(editor_ui::EditorUi& ui, editor_ui::PanelContext& context);
     void DrawViewportRow(
         editor_ui::PanelContext& context,
         const StudioRenderViewInfo& info);
 
     StudioRenderViewSet* views_{nullptr};
+    studio_session::StudioSession* session_{nullptr};
+    DebugTestRegistry tests_;
+    rpc::Dispatcher* engineeringRpc_{nullptr};
+    std::string engineeringEdgeId_;
+    f64 engineeringSpeedMps_{20.0};
+    std::string engineeringResult_;
+    std::vector<scene::ObjectRecord> engineeringEdges_;
+    rpc::Value engineeringData_;
+    bool engineeringError_{false};
+    std::size_t engineeringSelectedFinding_{0U};
 };
 } // namespace orbit::studio_ui

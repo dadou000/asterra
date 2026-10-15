@@ -1,5 +1,6 @@
 add_library(OrbitCelestialAtmosphere STATIC
     src/Atmosphere.cpp
+    src/AtmosphereRefraction.cpp
     src/AtmosphereRenderer.cpp
     src/SkyIrradiance.cpp
 )
@@ -20,6 +21,8 @@ target_link_libraries(
     PUBLIC
         Orbit::Core
         Orbit::Math
+        Orbit::Lighting
+        Orbit::OpticalTransport
         Orbit::RHI
         Orbit::Shader
 )
@@ -30,6 +33,24 @@ orbit_enable_warnings(
     OrbitCelestialAtmosphere)
 
 if(BUILD_TESTING)
+    add_executable(
+        OrbitCelestialAtmosphereRefractionTests
+        tests/AtmosphereRefractionTests.cpp
+    )
+    target_link_libraries(
+        OrbitCelestialAtmosphereRefractionTests
+        PRIVATE
+            Orbit::CelestialAtmosphere
+    )
+    target_compile_features(
+        OrbitCelestialAtmosphereRefractionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitCelestialAtmosphereRefractionTests)
+    add_test(
+        NAME Orbit.CelestialAtmosphereRefraction
+        COMMAND OrbitCelestialAtmosphereRefractionTests
+    )
+
     add_executable(
         OrbitCelestialAtmosphereTests
         tests/AtmosphereTests.cpp

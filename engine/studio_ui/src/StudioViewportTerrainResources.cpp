@@ -225,44 +225,77 @@ BuildPhysicalRenderPages(
         return result;
     }
 
-    std::array<
-        terrain::PhysicalTerrainPageAddress,
-        5U>
-        addresses{};
+    // Keep all adjacent physical pages available to the clipmap compositor.
+    // Edge-only coverage leaves gaps when an observer or road crosses a page
+    // corner; TileNeighborhood handles cube-face orientation at those seams.
+    const auto neighboringTiles = world::TileNeighborhood(
+        runtime.observerPhysicalPage.tile,
+        studio_session::PhysicalPageCoverageRadius(runtime));
+    std::vector<terrain::PhysicalTerrainPageAddress> addresses;
+    addresses.reserve(neighboringTiles.size());
+    for (const auto& tile : neighboringTiles)
+        addresses.push_back({
+            .planet = runtime.observerPhysicalPage.planet,
+            .tile = tile
+        });
+    // M2.46: The camera's own physical tile must get first chance
+    // under the limited upload budget; the rest remain deterministic.
+    const auto center = runtime.observerPhysicalPage;
+    const auto centerIt = std::find(addresses.begin(), addresses.end(), center);
+    if (centerIt != addresses.end() && centerIt != addresses.begin())
+        std::iter_swap(addresses.begin(), centerIt);
+    // M2.47: Order the remaining local pages by angular distance to the
+    // observer, so a constrained frame budget fills nearby pages first.
+    const auto observerUp =
+        std::isfinite(runtime.observer.meters.x) &&
+        std::isfinite(runtime.observer.meters.y) &&
+        std::isfinite(runtime.observer.meters.z) &&
+        math::LengthSquared(runtime.observer.meters) > 0.5
+            ? math::Normalize(runtime.observer.meters)
+            : math::Double3{1.0, 0.0, 0.0};
+    if (addresses.size() > 1U)
+        std::stable_sort(addresses.begin() + 1, addresses.end(),
+            [&](const auto& a, const auto& b) {
+                const f64 da = math::Dot(observerUp,
+                    world::CubeToUnitDirection(world::TileCenter(a.tile)));
+                const f64 db = math::Dot(observerUp,
+                    world::CubeToUnitDirection(world::TileCenter(b.tile)));
+                return da > db;
+            });
 
-    addresses[0] =
-        runtime.observerPhysicalPage;
+    // Sparse construction pages are already tracked by the async page owner.
+    // Append only authored footprints; do not fill the intervening terrain.
+    const auto observerDirection = observerUp;
+    const auto constructionPages =
+        session.ConstructionPhysicalPages(runtime.body, 8U,
+            &observerDirection, runtime.viewportId);
+    for (const auto& address : constructionPages)
+        if (address.planet == runtime.planet.id &&
+            address.tile.level == runtime.physicalPageLevel &&
+            std::find(addresses.begin(), addresses.end(), address) ==
+                addresses.end())
+            addresses.push_back(address);
 
-    constexpr std::array<
-        world::TileEdge,
-        4U>
-        edges{
-            world::TileEdge::North,
-            world::TileEdge::East,
-            world::TileEdge::South,
-            world::TileEdge::West
-        };
+    // M2.45: Bound new physical GPU uploads per viewport compose.
+    // Already-resident pages do not consume this budget and remain visible.
+    constexpr u32 kLocalUploadBudget = 2U;
+    constexpr u32 kConstructionUploadBudget = 1U;
+    const std::size_t localPageCount = neighboringTiles.size();
+    u32 localUploads = 0U;
+    u32 constructionUploads = 0U;
+    constexpr u64 kUploadByteBudget = 512U * 1024U;
+    u64 attemptedUploadBytes = 0U;
 
-    for (u32 index = 0U;
-         index < edges.size();
-         ++index)
-    {
-        const auto neighbor =
-            world::NeighborAcrossTileEdge(
-                runtime.
-                    observerPhysicalPage.
-                    tile,
-                edges[index]);
-
-        addresses[index + 1U] = {
-            .planet =
-                runtime.
-                    observerPhysicalPage.
-                    planet,
-            .tile =
-                neighbor.tile
-        };
-    }
+    // Preserve local-first ordering while deduplicating non-adjacent
+    // construction addresses (a second occurrence must not trigger upload).
+    std::vector<terrain::PhysicalTerrainPageAddress> uniqueAddresses;
+    uniqueAddresses.reserve(addresses.size());
+    for (const auto& address : addresses)
+        if (std::find(uniqueAddresses.begin(), uniqueAddresses.end(),
+                address) == uniqueAddresses.end())
+            uniqueAddresses.push_back(address);
+    addresses = std::move(uniqueAddresses);
+    result.pages.reserve(addresses.size());
 
     auto& cache =
         services->Cache();
@@ -273,9 +306,10 @@ BuildPhysicalRenderPages(
             global.
             seaLevelMeters;
 
-    for (const auto& address :
-         addresses)
+    for (std::size_t addressIndex = 0; addressIndex < addresses.size(); ++addressIndex)
     {
+        const auto& address = addresses[addressIndex];
+        const bool localPriority = addressIndex < localPageCount;
         const auto snapshot =
             session.
                 TerrainPhysicalPages().
@@ -332,6 +366,21 @@ BuildPhysicalRenderPages(
             cached->physicalSurface ==
                 nullptr)
         {
+            // Preserve last-ready pages; defer new uploads instead of
+            // submitting unbounded host-visible allocations in one frame.
+            if (localPriority
+                ? localUploads >= kLocalUploadBudget
+                : constructionUploads >= kConstructionUploadBudget)
+                continue;
+            const u64 resolutionForBudget = snapshot->material->Resolution();
+            if (resolutionForBudget == 0U ||
+                resolutionForBudget > 4096U)
+                continue;
+            const u64 bytesForBudget = resolutionForBudget *
+                resolutionForBudget *
+                sizeof(terrain_gpu::GpuPhysicalSurfaceTexel);
+            if (bytesForBudget > kUploadByteBudget - attemptedUploadBytes)
+                continue;
             const auto uploadRevision =
                 session.
                     TerrainPhysicalPages().
@@ -358,6 +407,10 @@ BuildPhysicalRenderPages(
                 continue;
             }
 
+            // Count attempts, including failed uploads, to cap frame spikes.
+            attemptedUploadBytes += bytesForBudget;
+            if (localPriority) ++localUploads;
+            else ++constructionUploads;
             try
             {
                 const u32 resolution =
@@ -388,9 +441,13 @@ BuildPhysicalRenderPages(
                                     x,
                                     y);
 
-                        const f32 elevation =
+                        const f32 rawElevation =
                             cell.
                                 SurfaceHeightMeters();
+                        if (!std::isfinite(rawElevation))
+                            throw std::runtime_error(
+                                "Physical terrain surface contains a nonfinite elevation.");
+                        const f32 elevation = rawElevation;
 
                         texels[
                             static_cast<
@@ -405,9 +462,13 @@ BuildPhysicalRenderPages(
                                         static_cast<f32>(std::max(
                                             seaLevelMeters - static_cast<f64>(elevation),
                                             0.0)),
-                                        RiverWaterDepthAt(
+                                        std::isfinite(RiverWaterDepthAt(
                                             snapshot->rivers.get(), x, y, resolution,
-                                            snapshot->material->SpacingMeters(), elevation),
+                                            snapshot->material->SpacingMeters(), elevation))
+                                            ? std::max(0.0F, RiverWaterDepthAt(
+                                                snapshot->rivers.get(), x, y, resolution,
+                                                snapshot->material->SpacingMeters(), elevation))
+                                            : 0.0F,
                                         snapshot->lakes != nullptr
                                             ? static_cast<f32>(terrain_water::SampleLakeWater(
                                                 *snapshot->lakes,
@@ -513,6 +574,12 @@ BuildPhysicalRenderPages(
                 continue;
             }
         }
+
+        // Never publish an obsolete upload after a newer physical revision.
+        const auto latestStatus = session.TerrainPhysicalPages().PageStatus(address);
+        if (!latestStatus ||
+            latestStatus->revisionFingerprint != snapshot->revisionFingerprint)
+            continue;
 
         if ((cached->products &
              physicalProduct) == 0U ||

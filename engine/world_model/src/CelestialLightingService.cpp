@@ -176,7 +176,11 @@ CelestialLightingService::DirectLightingAtBody(
                 *receiverToEmitter,
             .radiusMeters =
                 radiative->
-                    photosphereRadiusMeters
+                    photosphereRadiusMeters,
+            .limbDarkening =
+                radiative->
+                    stellarAppearance.
+                        limbDarkening
         };
 
     std::vector<

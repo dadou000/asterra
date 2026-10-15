@@ -1,0 +1,544 @@
+{
+ "id": "R-20261011-181752-8a4a98db",
+ "rubric": "v1",
+ "council": {
+  "title": "Clouds frame cost: march step constants",
+  "question": "Can the Clouds march (about 9 ms of a 13 ms frame looking at a cumulus sky) be made cheaper by changing its step constants without losing cloud?",
+  "chosen": "baseline",
+  "verdict": "No constant buys time for free. Only the step-budget change (steps160: max 224->160, schedule 140->100) saves real frame time, 2.4 / 2.9 / 4.4 ms (18 to 24 percent) in the three ground cumulus scenes against 0.2 to 0.9 ms of repeat-launch drift, but it does so by thinning the distant horizon cloud bank (30k to 37k pixels changed by up to 160/255, darker where cloud was lost), which breaks the spec rule that a representation change must not remove clouds. base120 (base step 60->120) thins the same bank for less saving. foot1 (footprint step 0.5->1.0) saves nothing and darkens the whole orbital disc by 3.8/255. skip8 (empty-space skip 4->8) is invisible and saves nothing, which says empty-space skipping is not where the time goes. Keep the shipped constants. The cost is in rays that run long towards the horizon; the fix is the spec's hierarchical empty-space skipping and a far-field cloud representation, not a knob.",
+  "lenses": [
+   {
+    "name": "Ruthless Shader Artist",
+    "findings": "steps160 and base120 visibly thin the low cloud bank at the horizon in the sky views: it loses density and its tops flatten. That is the first thing a player looking at the sky would see. foot1 is fine on the ground but makes the orbital sea darker and the big storm cell less white. skip8 I cannot tell from baseline anywhere.",
+    "ratings": {
+     "baseline": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "full horizon bank"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "clean"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "natural"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "none seen"
+      ],
+      "scale_depth": [
+       8,
+       "medium",
+       "bank gives distance"
+      ]
+     },
+     "skip8": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "identical to baseline"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "same"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "same"
+      ],
+      "scale_depth": [
+       8,
+       "medium",
+       "same"
+      ]
+     },
+     "steps160": {
+      "shape_fidelity": [
+       5,
+       "medium",
+       "horizon bank thinned and flattened"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "same"
+      ],
+      "artifacts": [
+       7,
+       "low",
+       "no banding but cloud popping with distance is possible and not assessable in a still"
+      ],
+      "scale_depth": [
+       5,
+       "medium",
+       "distance cue weaker"
+      ]
+     },
+     "foot1": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "ground views unchanged"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       5,
+       "medium",
+       "orbital disc visibly darker (3.8/255 mean over 498k pixels)"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "none"
+      ],
+      "scale_depth": [
+       8,
+       "medium",
+       "same"
+      ]
+     },
+     "base120": {
+      "shape_fidelity": [
+       5,
+       "medium",
+       "same bank thinning as steps160"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "same"
+      ],
+      "artifacts": [
+       7,
+       "low",
+       "not assessable in a still"
+      ],
+      "scale_depth": [
+       5,
+       "medium",
+       "distance cue weaker"
+      ]
+     }
+    }
+   },
+   {
+    "name": "Perceptual Realist / Color Scientist",
+    "findings": "Where steps160 changes pixels they are darker by 17 to 25/255 on average (signed), consistent with lost cloud in front of the sky, not a tone shift; foot1 shifts the orbital sea by -3.8/255 across the disc, which is a tone change from the cloud pass's aerial-perspective integral. Exposure was the same in every run. A still cannot show whether distant cloud pops as the camera moves.",
+    "ratings": {
+     "steps160": {
+      "colour_exposure": [
+       8,
+       "medium",
+       "no tone shift outside the lost cloud"
+      ]
+     },
+     "foot1": {
+      "colour_exposure": [
+       5,
+       "medium",
+       "wide tone shift"
+      ]
+     }
+    }
+   },
+   {
+    "name": "GPU Engineer",
+    "findings": "Frame times (median, one launch each, controls drift 0.2 to 0.9 ms): steps160 -2.4/-2.9/-4.4/+0.0 ms across the four scenes, base120 +1.1/+0.2/-2.1/+0.8, foot1 +0.4/+0.4/-0.4/-0.2, skip8 +0.8/+0.5/-0.6/+0.1. Skipping empty space twice as far (skip8) changes nothing, so empty-space leaps are not the cost; a smaller step budget does, and it removes work only for rays that would have kept marching toward distant cloud. That points at the long horizon rays, which a hierarchy of occupancy bounds (spec: optical hierarchy, empty-space traversal) or a coarse far-field representation would cut without dropping cloud. Per-pass GPU time was not available: the profiler's top_gpu_passes totals are not monotonic and gave unusable deltas, so only whole-frame time is claimed."
+   },
+   {
+    "name": "Architectural Skeptic",
+    "findings": "The constants are tunable now through the existing ORBIT_CLOUD_DEFINES hook with shipped defaults, so no second march and no new state. Tuning them for production would be a parameter hack around a missing hierarchy."
+   },
+   {
+    "name": "Minimalist / Anti-Overengineering Guardian",
+    "findings": "A 20 percent frame saving that deletes the horizon clouds is a bad trade for a planet renderer, and the other three knobs save nothing. Do nothing now; the real work item is the occupancy hierarchy."
+   }
+  ],
+  "disagreements": [
+   "Artist and Minimalist agree to reject steps160. GPU Engineer notes the saving is real and the quality loss is concentrated in far rays, so the same saving should be reachable without loss by skipping far empty space hierarchically; that is a recommendation, not something measured."
+  ],
+  "hypotheses": [
+   "The time is spent on long rays toward the horizon (untested: no per-pass or per-ray timing).",
+   "A hierarchical occupancy structure would cut that cost without removing clouds (untested)."
+  ],
+  "verified_facts": [
+   "steps160 reduces whole-frame time by 2.4, 2.9 and 4.4 ms in the three ground scenes and by 0.0 ms in the orbit scene; repeat-launch drift is 0.92, 0.18, -0.18 and 0.30 ms.",
+   "steps160 and base120 change 15k to 37k pixels by up to 160/255 in the sky scenes and thin the horizon cloud bank (looked at in a 3x difference crop); the changed pixels are darker.",
+   "foot1 darkens the orbital disc by 3.8/255 mean over 498k pixels.",
+   "skip8 is within noise in pixels and frame time in every scene.",
+   "The first listing of the profiler's pass table shows Clouds averaging 9.2 ms of a 13 ms frame (single cumulative snapshot); deltas of that table are unusable."
+  ],
+  "open_issues": [
+   "No per-pass or per-ray GPU timing, so where the Clouds time goes is inferred.",
+   "One baseline repeat; no randomised launch order.",
+   "Stills cannot show cloud popping with distance for the reduced-budget variants.",
+   "Four scenes only; no storm or dense-deck scene."
+  ],
+  "recommended_changes": [
+   "Keep the shipped constants.",
+   "Implement the spec's hierarchical empty-space skipping for the cloud march (occupancy bounds per brick) and re-run this spec; the target is the steps160 saving with the baseline image.",
+   "Find a working per-pass GPU timer (profiler.viewport_capture or timestamp queries) before the next cost claim."
+  ],
+  "completed_changes": [
+   "CLOUD_MAX_STEPS, CLOUD_SCHEDULE_STEPS, CLOUD_FOOTPRINT_STEP, CLOUD_BASE_STEP, CLOUD_EMPTY_SKIP tunables with unchanged defaults.",
+   "A/B verdict now also counts changed pixels (a mean hid the thinned bank).",
+   "tools/ab_specs/cloud_cost.json and timewarp.json."
+  ]
+ },
+ "run": {
+  "baseline": "baseline",
+  "seconds": 2.6,
+  "provenance": {
+   "commit": "8a4a98db6d1efda9356be3add0557d7d0463235e",
+   "branch": "0.1.1-Harmony",
+   "dirty_files": [],
+   "exe": "C:\\Users\\david\\Documents\\GitHub\\asterra\\Orbit.exe",
+   "exe_sha256": "4c39250c294041595d7bd4971760116f66ce4ccc83af5cd2b772a132771d79b7",
+   "exe_mtime": "2026-10-11 18:07:21",
+   "gpu": "NVIDIA GeForce RTX 4090",
+   "date": "2026-10-11 18:17:50"
+  },
+  "variants": {
+   "baseline": {},
+   "skip8": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_SKIP=8.0"
+   },
+   "steps160": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_MAX_STEPS=160;CLOUD_SCHEDULE_STEPS=100"
+   },
+   "foot1": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_FOOTPRINT_STEP=1.0"
+   },
+   "base120": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_BASE_STEP=120.0"
+   }
+  },
+  "spec": {
+   "_comment": "Clouds frame cost: march constants (empty-space skip, step budget, footprint step, base step) against the baseline. Whole-frame time only: the profiler's top_gpu_passes totals are not monotonic, so per-pass deltas are unusable. Needs the CLOUD_* tunables in CloudRenderer.cpp.",
+   "world": "Worlds/Main.orbitworld",
+   "body": "Earth",
+   "baseline": "baseline",
+   "controls": 1,
+   "variants": {
+    "baseline": {
+     "env": {}
+    },
+    "skip8": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_SKIP=8.0"
+     }
+    },
+    "steps160": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_MAX_STEPS=160;CLOUD_SCHEDULE_STEPS=100"
+     }
+    },
+    "foot1": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_FOOTPRINT_STEP=1.0"
+     }
+    },
+    "base120": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_BASE_STEP=120.0"
+     }
+    }
+   },
+   "scenes": [
+    {
+     "name": "sky_cumulus",
+     "time_microseconds": 18070405751,
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 42,
+      "yaw_deg": 0,
+      "pitch_deg": 20
+     }
+    },
+    {
+     "name": "cumulus_far",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 1200,
+      "yaw_deg": 0,
+      "pitch_deg": 8
+     }
+    },
+    {
+     "name": "cumulus_near",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.05157,
+      "lon_deg": 0.03666,
+      "alt_m": 2600,
+      "yaw_deg": 35.3,
+      "pitch_deg": 21.74
+     }
+    },
+    {
+     "name": "orbit_deck",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "approach",
+      "target": {
+       "lat_deg": 5.3045,
+       "lon_deg": 0.0
+      },
+      "origin": {
+       "lat_deg": 0,
+       "lon_deg": 0,
+       "alt_km": 1590.95
+      },
+      "alt_km": 1500
+     }
+    }
+   ],
+   "project": "x"
+  },
+  "scenes": {
+   "sky_cumulus": {
+    "noise": [
+     {
+      "mean": 0.0665,
+      "max": 33.0,
+      "px_over": 163
+     }
+    ],
+    "variants": {
+     "skip8": {
+      "mean": 0.0623,
+      "max": 47.0,
+      "px_over": 224
+     },
+     "steps160": {
+      "mean": 0.3175,
+      "max": 160.0,
+      "px_over": 37257
+     },
+     "foot1": {
+      "mean": 0.0576,
+      "max": 33.0,
+      "px_over": 177
+     },
+     "base120": {
+      "mean": 0.2828,
+      "max": 124.0,
+      "px_over": 33536
+     }
+    },
+    "frame_ms": {
+     "baseline": 13.09,
+     "skip8": 13.92,
+     "steps160": 10.7,
+     "foot1": 13.44,
+     "base120": 14.23
+    },
+    "frame_ms_drift": [
+     0.92
+    ],
+    "image_sha256": {
+     "baseline": "c918105dbfbe666cf2af97b87a59b125dae8032afc3280aae0622845dee6b5c4",
+     "skip8": "9587a357faf7c3376b9fd8b5bde0b78856e04e70d4f2bc1df2cff5c3fa93490a",
+     "steps160": "b750fe11fc75010bec249ee6e1106a1207472398ed8d6a6aa81fba0807cc2d5f",
+     "foot1": "f0d5dce0aa2c0e27e55b91f46b1cad441a9cf28f9b954db34521e04e2874f957",
+     "base120": "e75249caa11cdcdf0b75fbd5ea47c203cf7fafd7bdf23bd4aeeb3e7428a7d8a5"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_far": {
+    "noise": [
+     {
+      "mean": 0.0269,
+      "max": 30.0,
+      "px_over": 93
+     }
+    ],
+    "variants": {
+     "skip8": {
+      "mean": 0.0384,
+      "max": 38.0,
+      "px_over": 208
+     },
+     "steps160": {
+      "mean": 0.2357,
+      "max": 160.0,
+      "px_over": 30268
+     },
+     "foot1": {
+      "mean": 0.0398,
+      "max": 27.0,
+      "px_over": 271
+     },
+     "base120": {
+      "mean": 0.23,
+      "max": 126.0,
+      "px_over": 27843
+     }
+    },
+    "frame_ms": {
+     "baseline": 14.53,
+     "skip8": 15.01,
+     "steps160": 11.63,
+     "foot1": 14.93,
+     "base120": 14.72
+    },
+    "frame_ms_drift": [
+     0.18
+    ],
+    "image_sha256": {
+     "baseline": "e57d2d6130bd6fc86adcc9104562aad99d532fbc7c1585916cad1bb29111bc7c",
+     "skip8": "97b374418c5d8e8557760bd4785aaaafc6b1960528d1faa466eae8e0dbd349ec",
+     "steps160": "615be43d258175e7a49e22fc9bd2f0f2e0a0a0951b4aad1d60a7f8214bfb9c8d",
+     "foot1": "1006726b8e407dacd96c85e4c821e14e6dd40d3ba73c0bd75dd5f06b92c65547",
+     "base120": "cc2fb59830b4be45d51840900a218b84fe181bda204b17911f188b7c0a39f4f9"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_near": {
+    "noise": [
+     {
+      "mean": 0.0441,
+      "max": 27.0,
+      "px_over": 61
+     }
+    ],
+    "variants": {
+     "skip8": {
+      "mean": 0.042,
+      "max": 33.0,
+      "px_over": 132
+     },
+     "steps160": {
+      "mean": 0.1229,
+      "max": 79.0,
+      "px_over": 15105
+     },
+     "foot1": {
+      "mean": 0.0489,
+      "max": 25.0,
+      "px_over": 186
+     },
+     "base120": {
+      "mean": 0.2494,
+      "max": 112.0,
+      "px_over": 24684
+     }
+    },
+    "frame_ms": {
+     "baseline": 18.65,
+     "skip8": 18.02,
+     "steps160": 14.22,
+     "foot1": 18.28,
+     "base120": 16.55
+    },
+    "frame_ms_drift": [
+     -0.18
+    ],
+    "image_sha256": {
+     "baseline": "0f187d8003a283b4a2e8443c4f41e6ebcf527a93fa243d7814591592525e7fc0",
+     "skip8": "9c2d1d3f62ac34c30f3628eaf6a0b560cc4575f82440a4dbc4ca1ceaf5e635a1",
+     "steps160": "45afc3ac329750d79c7bbb7de99ba641f2366dbe5f2dadf86041f00b9615a9a0",
+     "foot1": "32d9f8369678bd92d43350b58dd068842156130d95e7bdf95356774d63d4bb84",
+     "base120": "e06276f7ca4802716c704b2d761ca31e8721d5eb024f3521bcbcdf21fd4b7115"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "orbit_deck": {
+    "noise": [
+     {
+      "mean": 0.0355,
+      "max": 30.0,
+      "px_over": 176
+     }
+    ],
+    "variants": {
+     "skip8": {
+      "mean": 0.0255,
+      "max": 9.0,
+      "px_over": 0
+     },
+     "steps160": {
+      "mean": 0.0426,
+      "max": 43.0,
+      "px_over": 267
+     },
+     "foot1": {
+      "mean": 3.8101,
+      "max": 108.0,
+      "px_over": 498444
+     },
+     "base120": {
+      "mean": 0.0395,
+      "max": 51.0,
+      "px_over": 384
+     }
+    },
+    "frame_ms": {
+     "baseline": 9.96,
+     "skip8": 10.06,
+     "steps160": 10.0,
+     "foot1": 9.77,
+     "base120": 10.77
+    },
+    "frame_ms_drift": [
+     0.3
+    ],
+    "image_sha256": {
+     "baseline": "25680327decd4b59dfa858ff4c9b2c7186810712a3367d228c817b39598012b1",
+     "skip8": "4c9d7e598698116e67bdfcbe5751deec7dca02c462689c4b7452fa6ec75ee2d4",
+     "steps160": "4c2f5737c5ab755185273098eb22899f2f16f0cd5dc8104aec8e2938f5e9414d",
+     "foot1": "0638586be8bebf6d88a595e69b3c7f0f4e5222a7d397bf0857b5c1b7403c0e46",
+     "base120": "121510fd60751d8b2286a6284b0e8701b701d0c217b6807b739554c67f93aecf"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   }
+  }
+ },
+ "images": "full-resolution PNGs stay outside git (see run.scenes[*].image_sha256 and the capture folder at C:\\Users\\david\\AppData\\Local\\Temp\\claude\\C--Users-david-Documents-GitHub-asterra\\8929e869-7edf-4e5e-9d35-85da2894e8c6\\scratchpad\\ab_cost); sheet.png here is a downscaled contact sheet (top row variants, bottom row 5x difference vs baseline)"
+}

@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/ReportsUi.hpp>
 
 #include <orbit/studio_ui/ReportThumbnailCache.hpp>
+#include <orbit/profiler/Profiler.hpp>
 
 #include <algorithm>
 #include <array>
@@ -257,6 +258,79 @@ bool ReportsController::CaptureScreenshot(const u64 id, const bool endCondition)
     }
 }
 
+std::filesystem::path ReportsController::ExportCapture(
+    const u64 id, const bool endCondition)
+{
+    const auto* report = store_->Find(id);
+    if (report && !endCondition &&
+        (report->scopes & studio_reports::ScopeBit(
+            studio_reports::ReportScope::Performance)) != 0U &&
+        !store_->Path().empty())
+    {
+        const auto trace = store_->Path().parent_path() / "Captures" /
+            std::format("report-{}-performance.json", id);
+        if (std::filesystem::is_regular_file(trace))
+            return trace; // Already exported by the profiler capture pipeline.
+    }
+    const auto& condition = RequireCondition(id, endCondition);
+    if (condition.screenshot.empty())
+        throw std::runtime_error("Capture this report condition before exporting it.");
+    const auto source = store_->AssetPath(condition.screenshot);
+    if (!std::filesystem::is_regular_file(source))
+        throw std::runtime_error("Report screenshot file is missing.");
+    if (store_->Path().empty())
+        throw std::runtime_error("Save the report store before exporting captures.");
+    const auto targetFolder = store_->Path().parent_path() / "Captures";
+    std::filesystem::create_directories(targetFolder);
+    const auto target = targetFolder /
+        (std::format("report-{}-{}.png", id, endCondition ? "end" : "start"));
+    std::filesystem::copy_file(source, target,
+        std::filesystem::copy_options::overwrite_existing);
+    return target;
+}
+
+std::filesystem::path ReportsController::OpenCaptureFolder()
+{
+    if (store_->Path().empty())
+        throw std::runtime_error("Save the report store before opening captures.");
+    if (!openHook_)
+        throw std::runtime_error("Native file browser is unavailable.");
+    const auto folder = store_->Path().parent_path() / "Captures";
+    std::filesystem::create_directories(folder);
+    openHook_(folder);
+    return folder;
+}
+
+bool ReportsController::CapturePerformanceIssue(const u64 id)
+{
+    const auto* report = store_->Find(id);
+    if (!report)
+        throw std::out_of_range("Report not found.");
+    if ((report->scopes & studio_reports::ScopeBit(
+            studio_reports::ReportScope::Performance)) == 0U)
+        throw std::invalid_argument(
+            "Mark Performance issue on this report before capturing.");
+    if (performanceCapture_)
+        throw std::logic_error("A performance capture is already pending.");
+    // Require an actual recorded condition. Never substitute the current
+    // viewport for missing report state.
+    static_cast<void>(RequireCondition(id, false));
+    const auto restored = Restore(id, false);
+    if (restored.pose != "restored" && restored.pose != "pending")
+        throw std::runtime_error(
+            "Cannot capture report condition: " + restored.message);
+    if (!restored.timeRestored)
+        throw std::runtime_error(
+            "Cannot capture report condition: simulation time was not restored.");
+    performanceCapture_ = PendingPerformanceCapture{
+        .reportId = id,
+        .settleFrames = 8U,
+        .waitingForPose = restored.pose == "pending"
+    };
+    screenshotError_.clear();
+    return false; // asynchronous: screenshot is created by Tick().
+}
+
 void ReportsController::SetOpenHook(OpenHook hook)
 {
     openHook_ = std::move(hook);
@@ -449,10 +523,64 @@ ReportsController::RestoreResult ReportsController::Restore(
 
 void ReportsController::Tick()
 {
-    if (!pending_.has_value())
+    // The existing camera restore state machine must finish before capture.
+    if (!pending_.has_value() && performanceCapture_)
     {
+        if (performanceCapture_->waitingForPose &&
+            restoreStatus_ != "Camera restored.")
+        {
+            screenshotError_ = "Report camera restore failed: " + restoreStatus_;
+            performanceCapture_.reset();
+            return;
+        }
+        if (performanceCapture_->settleFrames > 0U)
+        {
+            --performanceCapture_->settleFrames;
+            return;
+        }
+        // Collect a time-bounded trace AFTER the saved condition and viewport have settled.
+        // profiler::Capture serializes the recent circular trace window; it
+        // must not be invoked on the first restored frame.
+        const auto now = std::chrono::steady_clock::now();
+        if (!performanceCapture_->profileStarted)
+        {
+            performanceCapture_->profileStarted = now;
+            return;
+        }
+        if (now - *performanceCapture_->profileStarted <
+            std::chrono::seconds(2))
+            return;
+        const u64 id = performanceCapture_->reportId;
+        performanceCapture_.reset();
+        const auto* report = store_->Find(id);
+        if (!report || (report->scopes & studio_reports::ScopeBit(
+                studio_reports::ReportScope::Performance)) == 0U)
+        {
+            restoreStatus_ = "Profiler capture cancelled: report changed or deleted.";
+            return;
+        }
+        try
+        {
+            if (store_->Path().empty())
+                throw std::runtime_error("Save the report store before capturing.");
+            const auto folder = store_->Path().parent_path() / "Captures";
+            std::filesystem::create_directories(folder);
+            const auto path = folder / std::format("report-{}-performance.json", id);
+            const auto info = profiler::Capture(path, 2000.0);
+            restoreStatus_ = std::format(
+                "Profiler trace saved: {} ({} events, {} threads).",
+                info.path.generic_string(), info.events, info.threads);
+            screenshotError_.clear();
+        }
+        catch (const std::exception& error)
+        {
+            screenshotError_ = error.what();
+            restoreStatus_ = "Profiler capture failed: " + screenshotError_;
+        }
         return;
     }
+    if (!pending_.has_value())
+        return;
 
     bool ready = false;
     try
@@ -490,6 +618,11 @@ void ReportsController::Tick()
         restored = false;
     }
     pending_.reset();
+    if (performanceCapture_ && !restored)
+    {
+        screenshotError_ = "Recorded camera pose could not be restored.";
+        performanceCapture_.reset();
+    }
     restoreStatus_ = restored
         ? "Camera restored."
         : "Camera could not be restored: the captured body did not become "
@@ -970,6 +1103,66 @@ void ReportsUi::DrawDetail(editor_ui::PanelContext& context)
     {
         patch.resolutionNote = resolution_;
         changed = true;
+    }
+
+    context.Heading("Capture tools");
+    if (context.Button("Export capture" + suffix + "-export-capture"))
+    {
+        try
+        {
+            status_ = "Capture exported: " +
+                controller_->ExportCapture(id, false).generic_string();
+            statusError_ = false;
+        }
+        catch (const std::exception& exception)
+        {
+            status_ = exception.what();
+            statusError_ = true;
+        }
+    }
+    context.SameLine();
+    if (context.Button("Open capture folder" + suffix + "-open-captures"))
+    {
+        try
+        {
+            status_ = "Opened: " +
+                controller_->OpenCaptureFolder().generic_string();
+            statusError_ = false;
+        }
+        catch (const std::exception& exception)
+        {
+            status_ = exception.what();
+            statusError_ = true;
+        }
+    }
+    if ((scopes & studio_reports::ScopeBit(ReportScope::Performance)) != 0U)
+    {
+        if (context.Button("Capture performance trace from condition" +
+                suffix + "-perf-capture"))
+        {
+            try
+            {
+                // When the checkbox was just ticked, persist the new scope
+                // before testing the controller's authoritative report state.
+                if (changed)
+                {
+                    store.Update(id, patch);
+                    changed = false;
+                    editRevision_ = store.Revision();
+                }
+                static_cast<void>(controller_->CapturePerformanceIssue(id));
+                status_ = "Restoring recorded condition; profiler trace queued.";
+                statusError_ = false;
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+                statusError_ = true;
+            }
+        }
+        context.MutedText("Restores saved time/camera, settles the viewport, records a profiler trace (JSON).");
+        if (controller_->PerformanceCapturePending())
+            context.MutedText("Restoring / recording performance trace...");
     }
 
     bool deleted = false;

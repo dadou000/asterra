@@ -9,7 +9,9 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <array>
 #include <optional>
 #include <span>
 #include <functional>
@@ -97,7 +99,9 @@ enum class UiKey : u8
     Up,
     Down,
     Enter,
-    Escape
+    Escape,
+    Delete,
+    A
 };
 
 // Drawing and pointer helpers for overlays on the item submitted just before
@@ -117,6 +121,20 @@ struct OverlayDisc
     f32 radiusPixels{5.0F};
     math::Float4 color{1.0F, 1.0F, 1.0F, 1.0F};
     bool filled{true};
+};
+
+// Screen-space information for drag selection within a dock panel.
+struct PanelMarqueePointer
+{
+    bool hoveredWindow{false};
+    bool overItem{false};
+    bool pressed{false};
+    bool down{false};
+    bool released{false};
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    math::Float2 screen{};
 };
 
 struct ItemPointer
@@ -320,6 +338,11 @@ public:
     // Left-button state relative to the last item, for gizmos that need to
     // keep tracking a drag after the pointer leaves it.
     [[nodiscard]] ItemPointer LastItemPointer() const;
+    [[nodiscard]] PanelMarqueePointer PanelMarqueeInput() const noexcept;
+    // Screen rectangle [left, top, right, bottom] of the last submitted row.
+    [[nodiscard]] std::array<f32,4> LastItemScreenRect() const noexcept;
+    // Screen-space overlay, clipped to the containing Explorer panel.
+    void DrawPanelMarquee(math::Float2 a, math::Float2 b) const;
     [[nodiscard]] CanvasInteraction Canvas(std::string_view id, UiSize size);
     void CanvasLine(math::Float2 a, math::Float2 b, math::Float4 color, f32 thickness = 1.0F);
     void CanvasCircle(math::Float2 center, f32 radiusPixels, math::Float4 color, bool filled = true, f32 thickness = 1.0F);
@@ -351,6 +374,11 @@ public:
     [[nodiscard]] bool InputInteger(std::string_view label, i64& value);
     [[nodiscard]] bool InputDouble3(std::string_view label, math::Double3& value);
     [[nodiscard]] bool ControlDown() const noexcept;
+    [[nodiscard]] bool ShiftDown() const noexcept;
+    [[nodiscard]] bool AltDown() const noexcept;
+    // Used for contextual keyboard commands without stealing input from
+    // another dock panel or a focused text field.
+    [[nodiscard]] bool WindowFocusedForShortcuts() const noexcept;
     [[nodiscard]] bool BeginDragSource();
     void SetDragPayload(std::string_view type, std::span<const std::byte> bytes);
     void EndDragSource();
@@ -572,6 +600,13 @@ public:
     [[nodiscard]] bool SetPanelOpen(PanelId id, bool open) noexcept;
     [[nodiscard]] bool PanelOpen(PanelId id) const noexcept;
     [[nodiscard]] bool PanelVisible(PanelId id) const noexcept;
+    // Screen rectangle {x, y, width, height} of a docked panel as it was last drawn by DrawStudioShell, if it was.
+    [[nodiscard]] std::optional<std::array<f32, 4>> PanelScreenRect(PanelId id) const;
+    // Screen rectangle {x, y, width, height} of the whole window's work area.
+    [[nodiscard]] std::array<f32, 4> MainViewportRect() const;
+    // Draws the texture over everything else in `rect`, centre-cropped to keep its aspect. Used for the viewport's
+    // animated transition to and from full screen; carries no interaction.
+    void DrawImageOverlay(rhi::Texture& texture, const std::array<f32, 4>& rect);
     // Opens the panel if needed and brings it to the front of its tab group.
     [[nodiscard]] bool FocusPanel(PanelId id) noexcept;
 
@@ -637,6 +672,32 @@ public:
         std::function<void()> onClick;
     };
     void SetProjectIndicator(ProjectIndicator indicator);
+
+    // One compact, global action immediately before the project chip.
+    // Presentation/status only; the hot-iteration service owns Git/build.
+    struct UpdateIndicator
+    {
+        std::string label;
+        std::string tooltip;
+        bool enabled{true};
+        bool available{false};
+        // Update and check are separate operations. Clicking the chip opens
+        // details, never triggers a surprise rebuild or restart.
+        std::string stage;
+        std::string detail;
+        std::string branch{"0.1.1-Harmony"};
+        std::string localCommit;
+        std::string remoteCommit;
+        std::uint64_t lastCheckedUnixSeconds{0};
+        std::uint64_t pendingCommits{0};
+        bool rebuildPending{false};
+        bool busy{false};
+        std::function<void()> onClick;
+        std::function<void()> onCheck;
+        bool hasLog{false};
+        std::function<void()> onOpenLog;
+    };
+    void SetUpdateIndicator(UpdateIndicator indicator);
 
     // Transient, non-modal, click-through popup stacked in the lower-right of
     // the main viewport. Presentation only: it never gates the operation it

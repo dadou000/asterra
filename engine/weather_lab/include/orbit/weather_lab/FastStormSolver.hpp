@@ -4,6 +4,7 @@
 #include <orbit/weather_lab/WxFormat.hpp>
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <cstdint>
 #include <string>
@@ -57,6 +58,9 @@ struct FastStormConfig
     float maxCourant = 1.2F;
     AdvectionScheme advection = AdvectionScheme::MonotoneCubic;
     bool moisture = true;
+    // Single-moment ice: cloud ice (qi), snow (qs) and graupel (qg) with deposition, freezing, riming, melting, sublimation and
+    // latent heat of fusion. Off = the warm-rain Kessler core.
+    bool ice = false;
     bool massFixer = true;
 
     // Explicit second-order mixing (m^2/s) on every prognostic field.
@@ -66,6 +70,18 @@ struct FastStormConfig
     // Rayleigh damping of w and theta' above spongeBase (1/s at the top).
     float spongeBase = 15000.0F;
     float spongeRate = 3.3333333e-3F;
+
+    // Lateral sponge, the open-boundary substitute on a periodic grid: within `lateralSpongeCells` of every edge the state is relaxed
+    // toward the environment (base wind, theta and vapour; no condensate, w = 0) at up to `lateralSpongeRate` (1/s), so outflow
+    // that reaches an edge is absorbed instead of re-entering on the other side. 0 = off (fully periodic).
+    std::uint32_t lateralSpongeCells = 0;
+    float lateralSpongeRate = 1.0e-2F;
+
+    // Storm-following frame: every `trackSeconds` the Galilean frame velocity (frameU, frameV) is adjusted to the measured motion of
+    // the main updraft (w above 12 m/s at 3 km, at most 1.5 m/s per update) and to bring its centroid back to the domain centre, so a long run stays inside the
+    // domain. The environment is horizontally homogeneous, so a moving grid is exactly equivalent.
+    bool trackStorm = false;
+    float trackSeconds = 300.0F;
 
     // 0 = hardware concurrency.
     std::uint32_t threads = 0;
@@ -95,6 +111,30 @@ struct FastStormDiagnostics
     FastStormTimings timings{};
 };
 
+// Raw prognostic arrays, staggered as inside the solver: u at x faces (x = i dx, y and z at centres), v at y faces, w at z faces
+// (nz + 1 levels), everything else at cell centres; index (k * ny + j) * nx + i. The ice arrays are null without cfg.ice.
+struct FastStormState
+{
+    float* u = nullptr;
+    float* v = nullptr;
+    float* w = nullptr;
+    float* theta = nullptr;
+    float* qv = nullptr;
+    float* qc = nullptr;
+    float* qr = nullptr;
+    float* qi = nullptr;
+    float* qs = nullptr;
+    float* qg = nullptr;
+    std::uint32_t nx = 0;
+    std::uint32_t ny = 0;
+    std::uint32_t nz = 0;
+};
+
+// Called inside every step after the forcing and before the pressure projection, with the time at the end of the step and its
+// length; the nesting uses it to relax the lateral boundary zone toward the parent (the projection then removes the divergence
+// the relaxation introduces).
+using FastStormHook = std::function<void(const FastStormState&, double endTime, float dt)>;
+
 class FastStormSolver
 {
 public:
@@ -115,13 +155,25 @@ public:
     // One explicit step of at most `dt` seconds (clamped by the CFL limit).
     float Step(float dt);
 
+    // Direct access to the prognostic arrays (for nesting and tests); valid until the solver is destroyed.
+    [[nodiscard]] FastStormState MutableState();
+    void SetPreProjectionHook(FastStormHook hook);
+    // Changes the Galilean frame velocity (a nested child follows its parent's frame through this).
+    void SetFrame(float u, float v);
+    // Sets the simulated time (a nested child created mid-run starts at its parent's time).
+    void SetTime(double seconds);
+    // Re-baselines the water budget after the state was overwritten from outside.
+    void MarkInitialState();
+
     [[nodiscard]] const FastStormConfig& Config() const;
     [[nodiscard]] const BaseState& Base() const;
     [[nodiscard]] const FastStormDiagnostics& Diagnostics() const;
 
     // Field names accepted by CopyField / exported by WriteFrame:
-    //   th qv qc qr u v w zvort   (all at cell centres, x fastest)
+    //   th qv qc qr u v w zvort   (all at cell centres, x fastest); qi qs qg are also accepted (zero without ice)
     [[nodiscard]] static const std::vector<std::string>& ExportFields();
+    // The fields WriteFrame writes for this run: ExportFields(), plus qi qs qg when the ice scheme is on.
+    [[nodiscard]] std::vector<std::string> ActiveExportFields() const;
     void CopyField(const std::string& name, std::vector<float>& out) const;
     [[nodiscard]] WxHeader MakeHeader(
         const std::vector<float>& times) const;

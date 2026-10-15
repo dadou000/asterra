@@ -1,10 +1,14 @@
 #pragma once
 
 #include <orbit/editor_ui/EditorUi.hpp>
+#include <orbit/celestial_clouds/AnalyticZoneSurvey.hpp>
+#include <orbit/studio_ui/StormDomain.hpp>
 #include <orbit/studio_ui/WeatherLabRpc.hpp>
 #include <orbit/weather_lab/WeatherLabSession.hpp>
 
 #include <string>
+#include <future>
+#include <vector>
 
 namespace orbit::studio_ui
 {
@@ -19,6 +23,8 @@ public:
     WeatherLabUi(weather_lab::WeatherLabSession& session, WeatherLabView& view);
 
     void Register(editor_ui::EditorUi& ui);
+    // The mailbox of the viewport renderer's storm domain (the same object the storm.* RPC drives); without it the section is hidden.
+    void SetStormDomain(StormDomainMailbox* mailbox) noexcept { storm_ = mailbox; }
 
     inline static constexpr editor_ui::PanelId kPanelId{
         .high = 0x5745415448455231ULL,
@@ -30,6 +36,8 @@ private:
     void DrawControls(editor_ui::PanelContext& context);
     void DrawSettings(editor_ui::PanelContext& context);
     void DrawPlayback(editor_ui::PanelContext& context);
+    void DrawStorm(editor_ui::PanelContext& context);
+    void DrawZoneSurvey(editor_ui::PanelContext& context);
     void DrawViews(editor_ui::PanelContext& context);
     void DrawMetrics(editor_ui::PanelContext& context);
     void DrawSlice(
@@ -40,6 +48,20 @@ private:
 
     weather_lab::WeatherLabSession* session_{nullptr};
     WeatherLabView* view_{nullptr};
+    StormDomainMailbox* storm_{nullptr};
+    StormPlaceRequest stormDraft_;
+    // Larger neighbor extent than the production default: equal-area diagnostic
+    // sample points are much farther apart than a high-resolution global solver grid.
+    celestial_clouds::SparseStormZones zoneSurveyZones_{
+        celestial_clouds::StormZoneConfig{.neighbourRadians=0.15, .matchRadians=0.25}};
+    std::future<std::vector<celestial_clouds::StormZoneProbe>> zoneSurveyFuture_;
+    f64 zoneSurveyTime_{0.0};
+    f64 zoneSurveyJobTime_{0.0};
+    i64 zoneSurveySamples_{1024};
+    u32 zoneSurveyProbeCount_{0};
+    StormAutoRequest stormAuto_;
+    bool stormAutoLoaded_{false};
+    std::string stormMessage_;
     weather_lab::WeatherLabSettings draft_;
     bool draftLoaded_{false};
     std::string playbackPath_;
