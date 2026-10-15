@@ -312,6 +312,16 @@ public:
         activePathNetwork;
     std::optional<orbit::scene::ObjectId>
         lastPlacedPathNode;
+    // Curve-mode staged interaction: start node -> outgoing tangent -> end node.
+    // The direction click is transient and never creates authored geometry.
+    std::optional<math::Double3> infrastructureCurveDirectionPoint;
+    scene::ObjectId infrastructureCurveDirectionNode{};
+    void ResetInfrastructureChain() noexcept
+    {
+        lastPlacedPathNode.reset();
+        infrastructureCurveDirectionPoint.reset();
+        infrastructureCurveDirectionNode = {};
+    }
     orbit::f64 viewportNavigationSpeedScale = 1.0;
     orbit::f64 viewportFrameDeltaSeconds = 0.0;
     orbit::platform::MouseDelta viewportFrameMouseDelta{};
