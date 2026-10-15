@@ -53,8 +53,16 @@ public:
         if(category_==0 && catalogId_.empty())catalogId_="rural-road";
         UpdateViewportTool();
     }
-    void OpenOverview() noexcept {page_=0;}
-    void OpenAdvanced() noexcept {page_=2;}
+    void OpenOverview() noexcept
+    {
+        DisarmConstructionForNavigation();
+        page_=0;
+    }
+    void OpenAdvanced() noexcept
+    {
+        DisarmConstructionForNavigation();
+        page_=2;
+    }
     [[nodiscard]] bool IsRoadBuilderOpen() const noexcept {return page_==1;}
 
     void Register(editor_ui::EditorUi& ui)
@@ -67,6 +75,16 @@ public:
         });
     }
 private:
+    void DisarmConstructionForNavigation() noexcept
+    {
+        if(viewportTool_ && viewportTool_->infrastructureDrawMode)
+        {
+            viewportTool_->infrastructureDrawMode=false;
+            viewportTool_->pathPlacementMode=false;
+            viewportTool_->lastPlacedPathNode.reset();
+        }
+    }
+
     [[nodiscard]] static std::filesystem::path PreferencesPath()
     {
         return platform::UserDataDirectory() / "studio_procedurals_preferences.txt";
@@ -695,7 +713,7 @@ private:
         context.SameLine();
         if(context.Button("Expert editor##road-expert"))
         {
-            page_=2;
+            OpenAdvanced();
             return;
         }
         const bool drawing=viewportTool_ &&
@@ -1187,7 +1205,7 @@ private:
             {
                 if(const auto id=scene::ObjectId::Parse(upgradeTargetEdgeId_))
                     SelectEdge(*id);
-                page_=2;
+                OpenAdvanced();
             }
         }
         if(context.Section("Single road quick upgrade##roads-upgrade-legacy",false))
@@ -1219,7 +1237,7 @@ private:
                     "Edit alignment and junctions##roads-upgrade-expert"))
                 {
                     SelectEdge(*id);
-                    page_=2;
+                    OpenAdvanced();
                 }
             }
             else
@@ -1247,7 +1265,7 @@ private:
             if(context.Button("Refresh authored inventory##road-refresh"))
                 Refresh();
             if(context.Button("Inspect selected road in expert editor##road-expert-last"))
-                page_=2;
+                OpenAdvanced();
             context.MutedText(
                 "Native generation is asynchronous/budgeted; these counts "
                 "never imply that bridges or traffic simulations are ready.");
@@ -1301,7 +1319,7 @@ private:
                 page_=1;
             context.MutedText("Roads, railway tracks, reference paths and junctions. Open the city-builder style construction palette.");
             if(context.Button("Advanced infrastructure editor##proc-hub-advanced"))
-                page_=2;
+                OpenAdvanced();
             return;
         }
         if(page_==1)
@@ -1310,9 +1328,15 @@ private:
             SavePreferencesIfChanged();
             return;
         }
-        if(context.Button("Back to Procedurals##proc-advanced-back"))
+        if(context.Button("Road builder##proc-advanced-builder"))
         {
-            page_=0;
+            OpenPathsAndRoads();
+            return;
+        }
+        context.SameLine();
+        if(context.Button("Procedurals home##proc-advanced-back"))
+        {
+            OpenOverview();
             return;
         }
         context.Heading("Build / Procedurals");
