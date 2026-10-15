@@ -300,6 +300,42 @@ void StudioExplorerPanel::Register()
                         StudioInspectorTargetKind::WorldSelection;
                 };
 
+                // Select hidden descendants without manually expanding
+                // nested tree rows. Explicit command only: ordinary clicks
+                // never surprise-select an entire hierarchy.
+                const auto selectSubtree=[&](
+                    const orbit::scene::ObjectId id,
+                    const bool includeRoot,
+                    const bool additive)
+                {
+                    std::vector<orbit::scene::ObjectId> next=
+                        additive?selection().Ordered():
+                            std::vector<orbit::scene::ObjectId>{};
+                    std::vector<orbit::scene::ObjectId> stack;
+                    std::unordered_set<orbit::scene::ObjectId> visited;
+                    if(includeRoot)stack.push_back(id);
+                    else
+                    {
+                        const auto children=explorer().Children(id);
+                        for(auto it=children.rbegin();it!=children.rend();++it)
+                            stack.push_back(it->id);
+                    }
+                    while(!stack.empty())
+                    {
+                        const auto current=stack.back();
+                        stack.pop_back();
+                        if(!visited.insert(current).second)continue;
+                        next.push_back(current);
+                        const auto children=explorer().Children(current);
+                        for(auto it=children.rbegin();it!=children.rend();++it)
+                            stack.push_back(it->id);
+                    }
+                    selection().Set(next);
+                    selectionAnchor=id;
+                    inspectorTarget.kind=
+                        StudioInspectorTargetKind::WorldSelection;
+                };
+
                 const auto deleteSelected=[&]()
                 {
                     std::vector<orbit::scene::ObjectId> targets;
@@ -349,7 +385,7 @@ void StudioExplorerPanel::Register()
                     previousSearch=explorerSearch;
                     previousFilter=explorerFilter;
                 }
-                context.MutedText("Ctrl+click: toggle | Shift+click: range | Delete: remove selected subtree");
+                context.MutedText("Ctrl+click: toggle | Shift+click: range | Ctrl+A: visible | Delete: subtree");
                 context.KeyValue("Selected",std::to_string(selection().Ordered().size()));
                 if(explorerFilter!=2)
                 {
@@ -369,10 +405,20 @@ void StudioExplorerPanel::Register()
                     }
                     if(selection().Ordered().size()==1U)
                     {
-                        if(const auto record=objects().Find(selection().Ordered().front()))
+                        const auto id=selection().Ordered().front();
+                        if(const auto record=objects().Find(id))
                         {
                             if(record->parent && context.Button("Select parent##explorer-parent"))
-                                selectRow(*record->parent);
+                            {
+                                selection().Set(std::array{*record->parent});
+                                selectionAnchor=*record->parent;
+                            }
+                            context.SameLine();
+                            if(context.Button("Select subtree##explorer-select-subtree"))
+                                selectSubtree(id,true,false);
+                            context.SameLine();
+                            if(context.Button("Select children##explorer-select-children"))
+                                selectSubtree(id,false,false);
                         }
                     }
                     if(!selection().Ordered().empty() &&
@@ -611,6 +657,21 @@ void StudioExplorerPanel::Register()
                                     }
                                 }
 
+                                context.Separator();
+                                if(context.Selectable(
+                                    "Select subtree##select-subtree-"+object.id.ToString(),
+                                    false))
+                                {
+                                    selectSubtree(object.id,true,context.ControlDown());
+                                    context.CloseCurrentPopup();
+                                }
+                                if(context.Selectable(
+                                    "Select children##select-children-"+object.id.ToString(),
+                                    false))
+                                {
+                                    selectSubtree(object.id,false,context.ControlDown());
+                                    context.CloseCurrentPopup();
+                                }
                                 if(object.type==orbit::world_model::kWorldType)
                                     context.MutedText("The world root is protected.");
                                 else
@@ -765,9 +826,20 @@ void StudioExplorerPanel::Register()
                 }
 
                 visibleRows=std::move(currentVisibleRows);
-                if(context.WindowFocusedForShortcuts() &&
-                   context.KeyPressed(orbit::editor_ui::UiKey::Delete))
-                    deleteSelected();
+                if(context.WindowFocusedForShortcuts())
+                {
+                    if(context.ControlDown() &&
+                       context.KeyPressed(orbit::editor_ui::UiKey::A) &&
+                       !visibleRows.empty())
+                    {
+                        selection().Set(visibleRows);
+                        selectionAnchor=visibleRows.front();
+                        inspectorTarget.kind=
+                            StudioInspectorTargetKind::WorldSelection;
+                    }
+                    else if(context.KeyPressed(orbit::editor_ui::UiKey::Delete))
+                        deleteSelected();
+                }
                 if (!explorerStatus.empty())
                     context.MutedText(explorerStatus);
                 }
