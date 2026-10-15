@@ -551,13 +551,16 @@ public:
         std::scoped_lock lock(updateMutex_);
         if (!running_.load() || updateState_.busy)
             return false;
-        updateState_ = {
-            .available = true,
-            .busy = true,
-            .stage = "Queued",
-            .detail = "Waiting for the current hot-iteration task to finish.",
-            .logPath = config_.runtimeRoot / "OrbitStudio_github_update.log"
-        };
+        // Preserve last verified comparison and any pending-build marker.
+        // A full reset here would erase recovery state whenever Retry build
+        // is queued, concealing subsequent build failures from the popup.
+        updateState_.available=true;
+        updateState_.busy=true;
+        updateState_.stage="Queued";
+        updateState_.detail=
+            "Waiting for the current hot-iteration task to finish.";
+        updateState_.logPath=
+            config_.runtimeRoot / "OrbitStudio_github_update.log";
         updateRequested_.store(true, std::memory_order_release);
         return true;
     }
