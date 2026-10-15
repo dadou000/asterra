@@ -104,6 +104,35 @@ ResolveUpProvider(
         }
     }
 
+    // Road authoring uses body-local FramePointAnchor nodes, not
+    // SurfaceAnchor nodes. They still require the body's outward normal.
+    // A world +Y fallback twists/stands the corridor on its edge away
+    // from the planet's north pole.
+    const auto* startFixed =
+        std::get_if<paths::FramePointAnchor>(&request.startNode.anchor);
+    const auto* endFixed =
+        std::get_if<paths::FramePointAnchor>(&request.endNode.anchor);
+    if(startFixed && endFixed && request.bodies &&
+       startFixed->frame == request.targetFrame &&
+       endFixed->frame == request.targetFrame)
+    {
+        for(const auto system : request.bodies->Systems())
+        {
+            for(const auto id : request.bodies->Bodies(system))
+            {
+                const auto* body=request.bodies->FindBody(id);
+                if(body && body->frame==request.targetFrame)
+                {
+                    const auto shape=body->shape;
+                    return [shape](const math::Double3& position)
+                    {
+                        return ReferenceNormal(shape,position);
+                    };
+                }
+            }
+        }
+    }
+
     return
         [](const math::Double3&)
         {
