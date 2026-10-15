@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <unordered_set>
 #include <stdexcept>
 #include <utility>
@@ -228,22 +229,27 @@ void CommandService::DeleteObjects(
     }
     if(snapshot.empty())return;
 
+    // Large hierarchies carry potentially large property blobs. Share one
+    // immutable undo snapshot across both lambdas rather than copying every
+    // descendant's data twice into command history.
+    const auto saved=std::make_shared<const std::vector<SavedObject>>(
+        std::move(snapshot));
     ApplyAndRecord(
-        snapshot.size()==1U?"Delete Object":"Delete Object Hierarchy",
+        saved->size()==1U?"Delete Object":"Delete Object Hierarchy",
         Action{
-            .redo=[this,snapshot](scene::MutationKey key)
+            .redo=[this,saved](scene::MutationKey key)
             {
-                for(auto it=snapshot.rbegin();it!=snapshot.rend();++it)
+                for(auto it=saved->rbegin();it!=saved->rend();++it)
                     objects_.Erase(key,it->record.id);
             },
-            .undo=[this,snapshot](scene::MutationKey key)
+            .undo=[this,saved](scene::MutationKey key)
             {
-                for(const auto& saved:snapshot)
+                for(const auto& item:*saved)
                 {
-                    objects_.Insert(key,saved.record);
-                    for(const auto& [property,value]:saved.properties)
+                    objects_.Insert(key,item.record);
+                    for(const auto& [property,value]:item.properties)
                         objects_.SetProperty(
-                            key,saved.record.id,property,value);
+                            key,item.record.id,property,value);
                 }
             }
         });
