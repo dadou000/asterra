@@ -327,7 +327,15 @@ public:
     orbit::platform::MouseDelta viewportFrameMouseDelta{};
     bool viewportRightGestureActive = false;
     bool fullscreenToggleRequested = false;   // set by the viewport toolbar button; the frame loop animates it
-    bool cloudSplitGrabbed = false;   // the cloud split divider is being dragged
+    bool cloudSplitGrabbed = false;
+    // Hold left mouse over the viewport to marquee-select spatial objects.
+    // A click below the movement threshold retains existing click behavior.
+    bool boxSelectHeld = false;
+    bool boxSelectDragging = false;
+    math::Float2 boxSelectStart{};
+    math::Float2 boxSelectCurrent{};
+    bool boxSelectAdditive = false;
+    std::vector<scene::ObjectId> boxSelectBase;   // the cloud split divider is being dragged
     bool viewportRightGestureDragged = false;
     orbit::i32 viewportRightGestureDistance = 0;
     bool viewportHomeWasDown = false;
