@@ -58,6 +58,10 @@ Minimum acceptance matrix:
 12. Headless MCP command parity, deterministic replay and clean cancellation under rapid edits.
 13. Profile on low-end GPU budget and full-capability GPU: CPU job time, GPU upload bandwidth, resident pages, collision cooks, visible LOD and frame variance.
 
+14. **Path near-plane regression:** Place a long paved corridor so one set of vertices lies behind or inside the camera near plane. Rotate the camera from looking along the road to looking across/away from it, then fly through its edge. The road must remain a bounded strip, with no large triangle connecting to an offscreen corner, even when the road crosses near/far frustum planes. Repeat with debug outlines on/off and Production Terrain's MRT path pass.
+
+The path renderer's HLSL vertex stage must preserve true homogeneous clip coordinates for *every* vertex (including those behind the camera) and leave whole-primitive clipping to Vulkan. Do not emulate frustum culling by overwriting out-of-range vertex positions with a constant clip-space point: triangles crossing the clip boundary become camera-dependent giant wedges. The Vulkan rasterization state uses normal clipping (depth clamp is not enabled), so the shader can rely on the hardware clipping rules.
+
 The current Debug physical-page sanity check only verifies presence, revision and finite center height; tests above are **planned** until implemented and run.
 
 # Implementation dependency sequence / gates
