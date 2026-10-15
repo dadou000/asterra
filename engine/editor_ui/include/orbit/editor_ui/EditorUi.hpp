@@ -9,6 +9,7 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <array>
 #include <optional>
@@ -659,7 +660,19 @@ public:
         std::string label;
         std::string tooltip;
         bool enabled{true};
+        // Update and check are separate operations. Clicking the chip opens
+        // details, never triggers a surprise rebuild or restart.
+        std::string stage;
+        std::string detail;
+        std::string branch{"0.1.1-Harmony"};
+        std::string localCommit;
+        std::string remoteCommit;
+        std::uint64_t lastCheckedUnixSeconds{0};
+        std::uint64_t pendingCommits{0};
+        bool busy{false};
         std::function<void()> onClick;
+        std::function<void()> onCheck;
+        std::function<void()> onOpenLog;
     };
     void SetUpdateIndicator(UpdateIndicator indicator);
 
