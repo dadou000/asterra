@@ -282,10 +282,10 @@ int main()
         // undo unit, even when a descendant appears before its ancestor in
         // the selected set. Undo restores IDs, hierarchy and properties.
         const auto child=commands.CreateObject(
-            orbit::editor_model::builtin::kPrimitiveType,
+            orbit::world_model::kPrimitiveType,
             "Owned child",bodyA);
         const auto grandchild=commands.CreateObject(
-            orbit::editor_model::builtin::kPrimitiveType,
+            orbit::world_model::kPrimitiveType,
             "Nested child",child);
         const auto oldRadius=objects.GetProperty(
             bodyA,orbit::editor_model::builtin::kBodyRadius);
