@@ -615,45 +615,30 @@ void PathPreviewRenderer::Draw(
             product->visualMesh.
                 vertices.size());
 
-        bool connected = true;
-
-        for (const auto& vertex :
-             product->visualMesh.vertices)
+        // Resolve the rigid frame once per product, rather than twice per
+        // vertex. The old normal calculation subtracted two already-rounded
+        // float camera-relative coordinates (position and position+normal),
+        // losing the one-metre offset at large planetary distances.
+        const auto cameraFromProduct=frames.ResolveTransform(
+            product->frame,camera.frame,atTime);
+        if(!cameraFromProduct)continue;
+        for(const auto& vertex:mesh.vertices)
         {
-            const auto relative =
-                frames.ToCameraRelative(
-                    {
-                        .frame =
-                            product->frame,
-                        .localMeters =
-                            vertex.position
-                    },
-                    cameraOrigin,
-                    atTime);
-
-            if (!relative.has_value())
-            {
-                connected = false;
-                break;
-            }
-
-            const auto tip = frames.ToCameraRelative(
-                {.frame = product->frame,
-                 .localMeters = vertex.position + vertex.normal},
-                cameraOrigin, atTime);
-            if (!tip.has_value())
-            {
-                connected = false;
-                break;
-            }
-            const auto n = math::Normalize(*tip - *relative);
-            relativeNormals.push_back(n);
-            relativeVertices.push_back(*relative);
-        }
-
-        if (!connected)
-        {
-            continue;
+            const auto relative=math::TransformPoint(
+                *cameraFromProduct,vertex.position)-
+                camera.localPositionMeters;
+            auto normal=math::Normalize(math::TransformVector(
+                cameraFromProduct->rotation,vertex.normal));
+            if(math::LengthSquared(normal)<0.25)
+                normal={0.0,1.0,0.0};
+            relativeVertices.push_back({
+                static_cast<f32>(relative.x),
+                static_cast<f32>(relative.y),
+                static_cast<f32>(relative.z)});
+            relativeNormals.push_back({
+                static_cast<f32>(normal.x),
+                static_cast<f32>(normal.y),
+                static_cast<f32>(normal.z)});
         }
 
         const u32 vertexBase =
