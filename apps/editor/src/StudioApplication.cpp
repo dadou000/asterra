@@ -3303,14 +3303,20 @@ int orbit::editor_app::StudioApplication::Run(
                     orbit::hot_reload::QueryGitHubUpdate();
                 ui.SetUpdateIndicator({
                     .label = gitUpdate.busy
-                        ? "Updating..."
-                        : gitUpdate.stage == "Failed" ||
-                          gitUpdate.stage == "Blocked"
-                            ? "Update failed"
-                            : "Update Orbit",
+                        ? (gitUpdate.stage == "Checking" ||
+                           gitUpdate.stage == "Fetching"
+                            ? "Checking updates..." : "Updating...")
+                        : gitUpdate.stage == "Up to date"
+                            ? "Up to date"
+                            : gitUpdate.stage == "Update available"
+                                ? "Update available"
+                                : gitUpdate.stage == "Failed" ||
+                                  gitUpdate.stage == "Blocked"
+                                    ? "Update unavailable"
+                                    : "Check updates",
                     .tooltip =
                         "GitHub origin/0.1.1-Harmony - fast-forward only. "
-                        "Save, incrementally rebuild and restart on success."
+                        "Check every five minutes; rebuild and restart only if new commits exist."
                         "\n" + gitUpdate.stage + ": " +
                         gitUpdate.detail +
                         (gitUpdate.logPath.empty()
