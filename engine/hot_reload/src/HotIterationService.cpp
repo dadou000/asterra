@@ -652,7 +652,11 @@ private:
         (void)SetHandleInformation(emptyInput, HANDLE_FLAG_INHERIT,
             HANDLE_FLAG_INHERIT);
         startup.hStdInput = emptyInput;
-        std::wstring command = std::wstring(L"git.exe ") + arguments;
+        // Never allow a credential helper to show a modal prompt inside the
+        // editor. The worker must remain responsive if GitHub is unreachable.
+        std::wstring command =
+            std::wstring(L"git.exe -c credential.interactive=never ") +
+            arguments;
         PROCESS_INFORMATION process{};
         const BOOL launched = CreateProcessW(nullptr, command.data(),
             nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
@@ -663,7 +667,16 @@ private:
         if (launched == FALSE)
             return {.output = std::format(
                 "Git could not start (Windows error {}).", launchError)};
-        (void)WaitForSingleObject(process.hProcess, INFINITE);
+        constexpr DWORD kGitTimeoutMilliseconds = 45000U;
+        const DWORD wait=WaitForSingleObject(
+            process.hProcess,kGitTimeoutMilliseconds);
+        if(wait!=WAIT_OBJECT_0)
+        {
+            // Git and credential helpers must never hang the entire
+            // hot-iteration worker indefinitely.
+            (void)TerminateProcess(process.hProcess,1U);
+            (void)WaitForSingleObject(process.hProcess,5000U);
+        }
         DWORD exitCode = 1U;
         (void)GetExitCodeProcess(process.hProcess, &exitCode);
         CloseHandle(process.hThread);
@@ -678,6 +691,10 @@ private:
             "OrbitStudio_github_update.log", std::ios::app);
         log << "git " << "[step]" << " (exit " << exitCode
             << ")\n" << output << "\n";
+        if(wait!=WAIT_OBJECT_0)
+            return {.success=false,
+                .output=std::format("Git command timed out or wait failed ({} ms).",
+                    kGitTimeoutMilliseconds)};
         return {.success = exitCode == 0U, .output = std::move(output)};
     }
 
