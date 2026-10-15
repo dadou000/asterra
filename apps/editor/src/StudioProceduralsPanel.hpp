@@ -1193,52 +1193,37 @@ private:
         if(context.Section("Single road quick upgrade##roads-upgrade-legacy",false))
         {
             context.MutedText(
-                "Change only an existing road's section profile. "
-                "Its alignment, node IDs and construction level stay intact.");
-            if(edges_.empty())
-                context.MutedText("No authored path edges in this world.");
-            else
+                "Select a road in the paged Road manager above. Changing "
+                "its profile preserves alignment, endpoints and construction mode.");
+            const auto id=scene::ObjectId::Parse(upgradeTargetEdgeId_);
+            const auto road=id?
+                session_->PathNetwork().Service().FindEdge(*id):
+                std::nullopt;
+            const auto* from=road?
+                path_geometry::FindRoadCatalog(
+                    road->infrastructureCatalogId):nullptr;
+            const auto* into=path_geometry::FindRoadCatalog(catalogId_);
+            if(from && into)
             {
-                for(const auto& entry:edges_)
+                context.KeyValue("Selected road",
+                    std::format("{} / {} lanes",
+                        from->label,from->laneCount));
+                context.KeyValue("Section change",
+                    std::format("{:.1f} m / {} lanes  ->  {:.1f} m / {} lanes",
+                        from->pavedWidthMeters,from->laneCount,
+                        into->pavedWidthMeters,into->laneCount));
+                if(context.PrimaryButton(
+                    "Upgrade selected road##roads-upgrade-run"))
+                    UpgradeRoadSection();
+                if(context.Button(
+                    "Edit alignment and junctions##roads-upgrade-expert"))
                 {
-                    const auto road=session_->PathNetwork().Service().FindEdge(
-                        entry.id);
-                    if(!road || !path_geometry::FindRoadCatalog(
-                        road->infrastructureCatalogId))continue;
-                    const auto* previous=path_geometry::FindRoadCatalog(
-                        road->infrastructureCatalogId);
-                    const auto label=std::format(
-                        "{} | {} lane(s)##roads-upgrade-{}",
-                        entry.name,previous->laneCount,entry.id.ToString());
-                    if(context.Selectable(label,
-                        upgradeTargetEdgeId_==entry.id.ToString()))
-                        upgradeTargetEdgeId_=entry.id.ToString();
-                }
-                if(!upgradeTargetEdgeId_.empty())
-                {
-                    const auto id=scene::ObjectId::Parse(upgradeTargetEdgeId_);
-                    const auto road=id?
-                        session_->PathNetwork().Service().FindEdge(*id):
-                        std::nullopt;
-                    const auto* from=road?
-                        path_geometry::FindRoadCatalog(
-                            road->infrastructureCatalogId):nullptr;
-                    const auto* into=path_geometry::FindRoadCatalog(catalogId_);
-                    if(from && into)
-                        context.KeyValue("Section change",
-                            std::format("{:.1f} m / {} lanes  ->  {:.1f} m / {} lanes",
-                                from->pavedWidthMeters,from->laneCount,
-                                into->pavedWidthMeters,into->laneCount));
-                    if(context.PrimaryButton(
-                        "Upgrade selected road##roads-upgrade-run"))
-                        UpgradeRoadSection();
-                    if(context.Button("Edit alignment and junctions##roads-upgrade-expert"))
-                    {
-                        if(id)SelectEdge(*id);
-                        page_=2;
-                    }
+                    SelectEdge(*id);
+                    page_=2;
                 }
             }
+            else
+                context.MutedText("No valid road selected yet.");
         }
         if(context.Section("Construction inventory and diagnostics##road-inventory",false))
         {
