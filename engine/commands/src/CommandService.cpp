@@ -181,13 +181,28 @@ void CommandService::DeleteObjects(
     // on redo. A shared child selected alongside its parent is visited once.
     std::vector<SavedObject> snapshot;
     std::unordered_set<scene::ObjectId> visited;
-    std::vector<scene::ObjectId> pending;
-    pending.reserve(objects.size());
+    std::unordered_set<scene::ObjectId> selected;
     for(const auto id:objects)
     {
         if(!id)continue;
         static_cast<void>(RequireObject(id));
-        pending.push_back(id);
+        selected.insert(id);
+    }
+
+    // Normalize overlapping selections BEFORE traversal: if a child was
+    // selected before its parent, undo must still insert the parent first.
+    std::vector<scene::ObjectId> pending;
+    pending.reserve(selected.size());
+    for(const auto id:selected)
+    {
+        bool nested=false;
+        auto parent=RequireObject(id).parent;
+        while(parent)
+        {
+            if(selected.contains(*parent)) {nested=true;break;}
+            parent=RequireObject(*parent).parent;
+        }
+        if(!nested)pending.push_back(id);
     }
     while(!pending.empty())
     {
