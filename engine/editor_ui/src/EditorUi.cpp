@@ -2461,6 +2461,7 @@ bool PanelContext::KeyPressed(
     case UiKey::Enter: imguiKey = ImGuiKey_Enter; break;
     case UiKey::Escape: imguiKey = ImGuiKey_Escape; break;
     case UiKey::Delete: imguiKey = ImGuiKey_Delete; break;
+    case UiKey::A: imguiKey = ImGuiKey_A; break;
     }
 
     return imguiKey != ImGuiKey_None &&
