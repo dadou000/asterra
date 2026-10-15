@@ -92,11 +92,14 @@
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/MaterialAssignmentBinding.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
+#include <orbit/world_model/PrimitiveBinding.hpp>
+#include <orbit/world_model/StaticMeshBinding.hpp>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -538,6 +541,16 @@ void StudioViewportPanel::Register()
                           primaryView->DisplayColor(),
                           imageSize);
 
+                // Snapshot the image pointer before tool overlays/gizmos
+                // submit other ImGui items. All coordinates remain relative
+                // to this exact displayed image, including ImageFit letterbox.
+                const auto selectionPointer=context.LastItemPointer();
+                const auto imageRect=context.LastItemScreenRect();
+                const float imagePixelWidth=
+                    std::max(1.0F,imageRect[2]-imageRect[0]);
+                const float imagePixelHeight=
+                    std::max(1.0F,imageRect[3]-imageRect[1]);
+
                 // Cloud split view: a draggable divider with an A / B label either side. While it is grabbed the press is not a
                 // selection click.
                 if (!studioViews.TerrainLayers("studio.primary").cloudBPreview &&
@@ -600,6 +613,158 @@ void StudioViewportPanel::Register()
                          window.RelativeMouseMode())
                 {
                     window.SetRelativeMouseMode(false);
+                }
+
+                // Drag-box selection has no authoring side effects.
+                // Construction/drag gizmos/cloud divider keep ownership of
+                // their own left-button gesture.
+                const bool boxToolAllowed=!pathPlacementMode &&
+                    !cloudSplitGrabbed &&
+                    !studioViewportPanels.GizmoDragging() &&
+                    !viewportCapture.Active() &&
+                    !window.RelativeMouseMode() &&
+                    !viewportRightGestureActive;
+                if(!boxToolAllowed)
+                {
+                    boxSelectHeld=false;
+                    boxSelectDragging=false;
+                    boxSelectBase.clear();
+                }
+                if(boxToolAllowed && selectionPointer.pressed)
+                {
+                    boxSelectHeld=true;
+                    boxSelectDragging=false;
+                    boxSelectStart=selectionPointer.position;
+                    boxSelectCurrent=boxSelectStart;
+                    boxSelectAdditive=context.ControlDown()||
+                        context.ShiftDown();
+                    boxSelectBase=selection().Ordered();
+                }
+                if(boxSelectHeld)
+                {
+                    boxSelectCurrent={
+                        std::clamp(selectionPointer.position.x,
+                            0.0F,imagePixelWidth),
+                        std::clamp(selectionPointer.position.y,
+                            0.0F,imagePixelHeight)};
+                    const auto d=boxSelectCurrent-boxSelectStart;
+                    if(selectionPointer.down &&
+                       d.x*d.x+d.y*d.y>=36.0F)
+                        boxSelectDragging=true;
+
+                    if(boxSelectDragging)
+                    {
+                        const float x0=std::min(
+                            boxSelectStart.x,boxSelectCurrent.x);
+                        const float x1=std::max(
+                            boxSelectStart.x,boxSelectCurrent.x);
+                        const float y0=std::min(
+                            boxSelectStart.y,boxSelectCurrent.y);
+                        const float y1=std::max(
+                            boxSelectStart.y,boxSelectCurrent.y);
+
+                        std::vector<orbit::scene::ObjectId> inBox=
+                            boxSelectAdditive?boxSelectBase:
+                                std::vector<orbit::scene::ObjectId>{};
+                        const auto camera=primaryView->Camera();
+                        const auto addProjected=[&](
+                            const orbit::scene::ObjectId id,
+                            const orbit::math::Double3 location,
+                            const double radiusMeters=0.0)
+                        {
+                            const auto uv=orbit::render_view::ProjectToViewport(
+                                camera,primaryView->Width(),
+                                primaryView->Height(),location);
+                            if(!uv || uv->depthMeters<=camera.nearPlaneMeters)
+                                return;
+                            const float cx=uv->u*imagePixelWidth;
+                            const float cy=uv->v*imagePixelHeight;
+                            const double pixelsPerMetre=
+                                imagePixelHeight*0.5/
+                                (uv->depthMeters*
+                                 std::tan(camera.verticalFovRadians*0.5));
+                            const float radius=static_cast<float>(
+                                std::clamp(radiusMeters*pixelsPerMetre,
+                                    5.0,500.0));
+                            if(cx+radius>=x0 && cx-radius<=x1 &&
+                               cy+radius>=y0 && cy-radius<=y1)
+                                inBox.push_back(id);
+                        };
+                        if(const auto* body=bodies().FindBody(bodyId))
+                        {
+                            const auto fromBody=frames().ResolveTransform(
+                                body->frame,camera.frame,
+                                studioSession.Clock().Time());
+                            if(fromBody)
+                            {
+                                // Only actual spatial scene objects are
+                                // candidates: a terrain pass itself is not
+                                // a selectable point in screen space.
+                                for(const auto& primitive:
+                                    orbit::world_model::ResolvePrimitives(
+                                        objects(),bodyObject))
+                                {
+                                    const auto position=
+                                        orbit::math::TransformPoint(
+                                            *fromBody,primitive.positionMeters);
+                                    const auto extent=primitive.sizeMeters;
+                                    const double radius=0.5*std::sqrt(
+                                        extent.x*extent.x+
+                                        extent.y*extent.y+
+                                        extent.z*extent.z);
+                                    addProjected(primitive.object,position,radius);
+                                }
+                                for(const auto& mesh:
+                                    orbit::world_model::ResolveStaticMeshes(
+                                        objects(),bodyObject))
+                                {
+                                    const auto position=
+                                        orbit::math::TransformPoint(
+                                            *fromBody,mesh.positionMeters);
+                                    addProjected(mesh.object,position,1.5);
+                                }
+                            }
+                        }
+                        selection().Set(inBox);
+                        inspectorTarget.kind=
+                            StudioInspectorTargetKind::WorldSelection;
+                        const orbit::math::Float4 stroke{
+                            0.39F,0.72F,1.0F,0.96F};
+                        const std::array<orbit::editor_ui::OverlaySegment,4> box{{
+                            {{x0,y0},{x1,y0},stroke,1.8F},
+                            {{x1,y0},{x1,y1},stroke,1.8F},
+                            {{x1,y1},{x0,y1},stroke,1.8F},
+                            {{x0,y1},{x0,y0},stroke,1.8F}}};
+                        context.OverlayShapesOnLastItem(box,{});
+                        interaction.clicked=false;
+                        interaction.doubleClicked=false;
+                    }
+                    if(selectionPointer.released || !selectionPointer.down)
+                    {
+                        if(!boxSelectDragging && selectionPointer.released &&
+                           !interaction.doubleClicked)
+                        {
+                            const std::array selected{bodyObject};
+                            if(boxSelectAdditive)
+                            {
+                                auto combined=boxSelectBase;
+                                if(std::find(combined.begin(),combined.end(),
+                                    bodyObject)==combined.end())
+                                    combined.push_back(bodyObject);
+                                selection().Set(combined);
+                            }
+                            else
+                                selection().Set(selected);
+                            inspectorTarget.kind=
+                                StudioInspectorTargetKind::WorldSelection;
+                        }
+                        boxSelectHeld=false;
+                        boxSelectDragging=false;
+                        boxSelectBase.clear();
+                    }
+                    // Single clicks are deferred to release to distinguish
+                    // a selection box from a normal click.
+                    interaction.clicked=false;
                 }
 
                 if (interaction.hovered &&
