@@ -4,6 +4,7 @@
 #include "StudioPanels.hpp"
 #include <orbit/path_geometry/RoadCatalog.hpp>
 #include <orbit/paths/PathNetwork.hpp>
+#include <orbit/platform/Paths.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <algorithm>
@@ -12,6 +13,10 @@
 #include <cctype>
 #include <set>
 #include <format>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -27,7 +32,10 @@ public:
         .high=0x4f5242495450524fULL,.low=0x4345445552414c53ULL};
     StudioProceduralsPanel(studio_session::StudioSession& session,
                            rpc::Dispatcher& rpc) noexcept
-        : session_(&session), rpc_(&rpc) {}
+        : session_(&session), rpc_(&rpc)
+    {
+        LoadPreferences();
+    }
 
     void BindViewportTool(StudioViewportPanel& viewport) noexcept
     {
@@ -54,6 +62,95 @@ public:
         });
     }
 private:
+    [[nodiscard]] static std::filesystem::path PreferencesPath()
+    {
+        return platform::UserDataDirectory() / "studio_procedurals_preferences.txt";
+    }
+
+    [[nodiscard]] std::string SerializePreferences() const
+    {
+        std::ostringstream out;
+        out << std::setprecision(17)
+            << 1 << ' '
+            << category_ << ' '
+            << std::quoted(catalogId_) << ' '
+            << newEdgeMode_ << ' '
+            << curveBias_ << ' '
+            << elevationMeters_ << ' '
+            << static_cast<int>(snapToNodes_) << ' '
+            << nodeSnapMeters_ << ' '
+            << designSpeedKmh_ << ' '
+            << static_cast<int>(easeTurns_) << ' '
+            << std::quoted(constructionMode_) << '\n';
+        return out.str();
+    }
+
+    void LoadPreferences() noexcept
+    {
+        try
+        {
+            std::ifstream in(PreferencesPath());
+            int version=0,category=0,alignment=0,snap=1,easing=1;
+            std::string catalog,construction;
+            f64 curve=0.25,height=0.0,radius=10.0,speed=60.0;
+            if(in >> version >> category >> std::quoted(catalog) >>
+                alignment >> curve >> height >> snap >> radius >>
+                speed >> easing >> std::quoted(construction) &&
+                version==1 && category>=0 && category<=2 &&
+                alignment>=0 && alignment<=2 &&
+                std::isfinite(curve) && curve>=0.0 && curve<=0.7 &&
+                std::isfinite(height) && height>=-10000.0 && height<=100000.0 &&
+                (snap==0 || snap==1) &&
+                std::isfinite(radius) && radius>=1.0 && radius<=50.0 &&
+                std::isfinite(speed) && speed>=10.0 && speed<=180.0 &&
+                (easing==0 || easing==1) &&
+                (construction=="terrain" || construction=="bridge" ||
+                 construction=="tunnel" || construction=="deck") &&
+                (category==0 ? path_geometry::FindRoadCatalog(catalog)!=nullptr :
+                 category==1 ? catalog=="ballasted-rail" : catalog.empty()))
+            {
+                category_=category;
+                catalogId_=catalog;
+                newEdgeMode_=alignment;
+                curveBias_=curve;
+                elevationMeters_=height;
+                snapToNodes_=snap!=0;
+                nodeSnapMeters_=radius;
+                designSpeedKmh_=speed;
+                easeTurns_=easing!=0;
+                constructionMode_=construction;
+            }
+            speed_=designSpeedKmh_/3.6;
+            newNetworkName_=category_==0?"Road Network":
+                category_==1?"Rail Network":"Path Network";
+            savedPreferences_=SerializePreferences();
+        }
+        catch(const std::exception&)
+        {
+            // Preferences must never prevent Studio from launching.
+        }
+    }
+
+    void SavePreferencesIfChanged() noexcept
+    {
+        try
+        {
+            const std::string data=SerializePreferences();
+            if(data==savedPreferences_)return;
+            const auto path=PreferencesPath();
+            std::filesystem::create_directories(path.parent_path());
+            std::ofstream out(path,std::ios::binary|std::ios::trunc);
+            if(!out)return;
+            out << data;
+            out.flush();
+            if(out) savedPreferences_=data;
+        }
+        catch(const std::exception&)
+        {
+            // Editor preferences are best-effort, never authored world data.
+        }
+    }
+
     void Refresh()
     {
         edges_.clear();
@@ -1164,6 +1261,7 @@ private:
         if(page_==1)
         {
             DrawBuilder(context);
+            SavePreferencesIfChanged();
             return;
         }
         if(context.Button("Back to Procedurals##proc-advanced-back"))
@@ -1675,6 +1773,7 @@ private:
     }
     StudioViewportPanel* viewportTool_{nullptr};
     i32 page_{1}; // Open directly in the road builder, including via View > Procedurals.
+    std::string savedPreferences_;
     f64 curveBias_{0.25};
     f64 elevationMeters_{0.0};
     std::string upgradeTargetEdgeId_;
@@ -1701,7 +1800,7 @@ private:
     std::string newNetworkName_{"New Infrastructure"};
     scene::ObjectId startNodeId_{};
     scene::ObjectId endNodeId_{};
-    i32 newEdgeMode_{1};
+    i32 newEdgeMode_{0}; // Straight is the least surprising first-run default.
     std::string newEdgeName_{"New Segment"};
     math::Double3 newStartHandle_{5.0,0.0,0.0};
     math::Double3 newEndHandle_{-5.0,0.0,0.0};
@@ -1724,7 +1823,7 @@ private:
     std::string junctionError_;
     std::size_t selectedFinding_{0};
     i32 category_{0};
-    std::string catalogId_;
+    std::string catalogId_{"rural-road"};
     i64 catalogVersion_{1};
     std::string constructionMode_{"terrain"};
     std::string status_;
