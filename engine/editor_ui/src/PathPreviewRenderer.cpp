@@ -173,11 +173,11 @@ SurfaceOutput main(VSOutput input)
             if(float(k)>=lanes) break;
             const float divider = -halfWidth+laneWidth*float(k);
             const float d = abs(lateral-divider);
-            const float line = 1.0-smoothstep(0.045-aa,0.065+aa,d);
+            const float dividerMark = 1.0-smoothstep(0.045-aa,0.065+aa,d);
             if(k*2 == int(lanes))
-                yellow = max(yellow,line);
+                yellow = max(yellow,dividerMark);
             else
-                white = max(white,line*dash);
+                white = max(white,dividerMark*dash);
         }
         base = lerp(base,float3(0.82,0.83,0.78),saturate(white));
         base = lerp(base,float3(0.88,0.67,0.16),saturate(yellow));
