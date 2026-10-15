@@ -2234,8 +2234,10 @@ int orbit::editor_app::StudioApplication::Run(
 
         // One authority path for the top-bar gizmo, Build menu and MCP.
         // Save project/world data before the successful generation handoff.
+        bool manualUpdateAwaitingResult=false;
         const auto updateOrbitFromGitHub =
-            [&project, &world, &worldSession]() -> bool
+            [&project, &world, &worldSession,
+             &manualUpdateAwaitingResult]() -> bool
             {
                 const auto current =
                     orbit::hot_reload::QueryGitHubUpdate();
@@ -2254,7 +2256,12 @@ int orbit::editor_app::StudioApplication::Run(
                         exception.what());
                     return false;
                 }
-                return orbit::hot_reload::RequestGitHubUpdate();
+                if(orbit::hot_reload::RequestGitHubUpdate())
+                {
+                    manualUpdateAwaitingResult=true;
+                    return true;
+                }
+                return false;
             };
 
         const auto checkOrbitFromGitHub = []() -> bool
@@ -3334,6 +3341,32 @@ int orbit::editor_app::StudioApplication::Run(
                 const auto& manifest = project.Manifest();
                 const auto gitUpdate =
                     orbit::hot_reload::QueryGitHubUpdate();
+                // Shift+F5/Build-menu update requests must visibly report a
+                // no-op, without spamming notifications for 5-minute polls.
+                if(manualUpdateAwaitingResult && !gitUpdate.busy)
+                {
+                    if(gitUpdate.stage=="Up to date")
+                    {
+                        ui.PushNotification({
+                            .title="Orbit is up to date",
+                            .detail="No new Harmony commits. No rebuild or restart.",
+                            .severity=orbit::editor_ui::EditorUi::
+                                NotificationSeverity::Info,
+                            .seconds=4.0F});
+                        manualUpdateAwaitingResult=false;
+                    }
+                    else if(gitUpdate.stage=="Failed" ||
+                            gitUpdate.stage=="Blocked")
+                    {
+                        ui.PushNotification({
+                            .title="Orbit update did not complete",
+                            .detail=gitUpdate.detail,
+                            .severity=orbit::editor_ui::EditorUi::
+                                NotificationSeverity::Error,
+                            .seconds=7.0F});
+                        manualUpdateAwaitingResult=false;
+                    }
+                }
                 ui.SetUpdateIndicator({
                     .label = gitUpdate.busy ?
                         (gitUpdate.stage == "Checking" ||
@@ -3342,8 +3375,8 @@ int orbit::editor_app::StudioApplication::Run(
                             "Checking..." : "Updating...") :
                         gitUpdate.stage == "Up to date" ? "Up to date" :
                         gitUpdate.stage == "Update available" ?
-                            std::to_string(gitUpdate.pendingCommits) +
-                            " update(s)" :
+                            "Update available ("+
+                            std::to_string(gitUpdate.pendingCommits)+")" :
                         gitUpdate.stage == "Blocked" ? "Update blocked" :
                         gitUpdate.rebuildPending ? "Build required" :
                         gitUpdate.stage == "Failed" ? "Check failed" :
