@@ -630,6 +630,7 @@ void StudioExplorerPanel::Register()
                                                     commandService().CreateObject(
                                                         type, name, object.id);
                                                 explorer().Select(created, false);
+                                                selectionAnchor=created;
                                                 inspectorTarget.kind =
                                                     StudioInspectorTargetKind::WorldSelection;
                                             });
