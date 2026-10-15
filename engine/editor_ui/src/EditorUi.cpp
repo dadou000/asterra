@@ -2077,6 +2077,49 @@ ItemPointer PanelContext::LastItemPointer() const
     };
 }
 
+PanelMarqueePointer PanelContext::PanelMarqueeInput() const noexcept
+{
+    const auto& io=ImGui::GetIO();
+    const ImVec2 pos=ImGui::GetMousePos();
+    return {
+        .hoveredWindow=ImGui::IsWindowHovered(
+            ImGuiHoveredFlags_RootAndChildWindows),
+        .overItem=ImGui::IsAnyItemHovered(),
+        .pressed=ImGui::IsMouseClicked(ImGuiMouseButton_Left),
+        .down=ImGui::IsMouseDown(ImGuiMouseButton_Left),
+        .released=ImGui::IsMouseReleased(ImGuiMouseButton_Left),
+        .shift=io.KeyShift,
+        .ctrl=io.KeyCtrl,
+        .screen={pos.x,pos.y}
+    };
+}
+
+std::array<f32,4> PanelContext::LastItemScreenRect() const noexcept
+{
+    const ImVec2 a=ImGui::GetItemRectMin();
+    const ImVec2 b=ImGui::GetItemRectMax();
+    return {a.x,a.y,b.x,b.y};
+}
+
+void PanelContext::DrawPanelMarquee(
+    const math::Float2 a,const math::Float2 b) const
+{
+    const ImVec2 topLeft{
+        std::min(a.x,b.x),std::min(a.y,b.y)};
+    const ImVec2 bottomRight{
+        std::max(a.x,b.x),std::max(a.y,b.y)};
+    auto* window=ImGui::GetCurrentWindow();
+    auto* draw=ImGui::GetForegroundDrawList();
+    const ImVec2 windowMin=window->Pos;
+    const ImVec2 windowMax=window->Pos+window->Size;
+    draw->PushClipRect(windowMin,windowMax,true);
+    draw->AddRectFilled(topLeft,bottomRight,
+        IM_COL32(75,155,255,45));
+    draw->AddRect(topLeft,bottomRight,
+        IM_COL32(110,185,255,230),0.0F,0,1.6F*g_uiScale);
+    draw->PopClipRect();
+}
+
 void PanelContext::CanvasText(
     const math::Float2 position,
     const math::Float4 color,
