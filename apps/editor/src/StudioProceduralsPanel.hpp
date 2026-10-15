@@ -81,7 +81,7 @@ private:
         {
             viewportTool_->infrastructureDrawMode=false;
             viewportTool_->pathPlacementMode=false;
-            viewportTool_->lastPlacedPathNode.reset();
+            viewportTool_->ResetInfrastructureChain();
         }
     }
 
@@ -209,7 +209,7 @@ private:
             if(viewportTool_)
             {
                 viewportTool_->activePathNetwork.reset();
-                viewportTool_->lastPlacedPathNode.reset();
+                viewportTool_->ResetInfrastructureChain();
             }
         }
         knownWorldGeneration_=session_->World().Objects().Revision();
@@ -253,7 +253,7 @@ private:
             newNetworkId_=created.id;
             if(viewportTool_) {
                 viewportTool_->activePathNetwork=newNetworkId_;
-                viewportTool_->lastPlacedPathNode.reset();
+                viewportTool_->ResetInfrastructureChain();
             }
             status_="Network created. Add anchor nodes through the existing node tools or connect nodes below.";
             error_.clear();
@@ -607,7 +607,7 @@ private:
                 "Upgraded {} road segments as one undoable edit.",
                 eligible.size());
             selectedRoads_.clear();
-            if(viewportTool_)viewportTool_->lastPlacedPathNode.reset();
+            if(viewportTool_)viewportTool_->ResetInfrastructureChain();
             Refresh();
         }
         catch(const std::exception& e)
@@ -658,6 +658,10 @@ private:
     void UpdateViewportTool() noexcept
     {
         if(!viewportTool_)return;
+        // An unfinished direction pick must never be reused after
+        // changing the underlying alignment mode.
+        if(viewportTool_->infrastructureAlignmentMode!=newEdgeMode_)
+            viewportTool_->ResetInfrastructureChain();
         viewportTool_->infrastructureCatalogId=
             category_==2?"":catalogId_.empty()?
                 (category_==1?"ballasted-rail":"rural-road"):catalogId_;
@@ -687,10 +691,12 @@ private:
         UpdateViewportTool();
         viewportTool_->pathPlacementMode=enable;
         viewportTool_->infrastructureDrawMode=enable;
-        if(!enable)viewportTool_->lastPlacedPathNode.reset();
+        if(!enable)viewportTool_->ResetInfrastructureChain();
         error_.clear();
         status_=enable?
-            "Construction tool armed. Click to place the start point, then click again to build a segment; continue clicking to extend.":
+            (newEdgeMode_==1 ?
+                "Curve tool armed: click start, click outgoing direction, then click end. Repeat direction/end to continue." :
+                "Construction tool armed. Click to place the start point, then click again to build a segment; continue clicking to extend.") :
             "Construction mode finished.";
     }
     void DrawBuilder(editor_ui::PanelContext& context)
@@ -736,7 +742,7 @@ private:
                     if(!commands.CanUndo())
                         throw std::runtime_error("There is no authored edit to undo.");
                     commands.Undo();
-                    if(viewportTool_)viewportTool_->lastPlacedPathNode.reset();
+                    if(viewportTool_)viewportTool_->ResetInfrastructureChain();
                     status_="Undo complete. Re-select an endpoint to resume drawing.";
                     error_.clear();
                     Refresh();
@@ -751,7 +757,7 @@ private:
                     if(!commands.CanRedo())
                         throw std::runtime_error("There is no authored edit to redo.");
                     commands.Redo();
-                    if(viewportTool_)viewportTool_->lastPlacedPathNode.reset();
+                    if(viewportTool_)viewportTool_->ResetInfrastructureChain();
                     status_="Redo complete. Select an endpoint to continue.";
                     error_.clear();
                     Refresh();
@@ -764,11 +770,22 @@ private:
         if(drawing)
         {
             context.KeyValue("Tool","Drawing - successive clicks extend the network");
+            if(newEdgeMode_==1)
+            {
+                const int step=!viewportTool_->lastPlacedPathNode?1:
+                    !viewportTool_->infrastructureCurveDirectionPoint?2:3;
+                context.KeyValue("Curve construction step",
+                    std::format("{} / 3",step));
+                context.MutedText(
+                    step==1?"Click the starting node (or snap to an existing one)." :
+                    step==2?"Click to fix the curve's outgoing direction; no node is created." :
+                    "Click the end node to commit the curve. The endpoint becomes the next start.");
+            }
             context.MutedText(
-                "Left click: add road | Right click: end chain | Escape: exit tool");
+                "Left click: build | Ctrl: bypass snapping | Right click / Enter: end chain | Esc: exit tool");
             if(context.Button("New independent road chain##road-new-chain"))
             {
-                viewportTool_->lastPlacedPathNode.reset();
+                viewportTool_->ResetInfrastructureChain();
                 viewportTool_->infrastructureLastAction=
                     "Next viewport click starts an independent road chain.";
             }
@@ -780,7 +797,7 @@ private:
                 context.KeyValue("Target",
                     viewportTool_->infrastructurePreviewSnapped ?
                         "Existing authored network node" :
-                        "New reference-surface point");
+                        "New terrain-surface point");
             }
             if(!viewportTool_->infrastructurePlacementError.empty())
                 context.ErrorText(
@@ -811,7 +828,7 @@ private:
             if(viewportTool_)
             {
                 viewportTool_->activePathNetwork.reset();
-                viewportTool_->lastPlacedPathNode.reset();
+                viewportTool_->ResetInfrastructureChain();
             }
             UpdateViewportTool();
         }
@@ -931,10 +948,12 @@ private:
         if(context.SegmentedControl(
             "Road alignment##road-geometry",alignment,newEdgeMode_))
             UpdateViewportTool();
-        if(newEdgeMode_==1 &&
-           context.SliderDouble(
-               "Curve offset##roads-curve",curveBias_,0.0,0.70))
-            UpdateViewportTool();
+        if(newEdgeMode_==1)
+            context.MutedText(
+                "Three clicks: start -> outgoing tangent direction -> end. "
+                "Tangent length follows the second-click distance, capped "
+                "to half the completed segment length. No extra node is "
+                "authored for the tangent.");
         if(newEdgeMode_==2)
             context.MutedText(
                 "Terrain routing uses the existing path router; native "
@@ -1040,7 +1059,7 @@ private:
                 newNetworkName_="Road Network";
                 if(viewportTool_)
                 {
-                    viewportTool_->lastPlacedPathNode.reset();
+                    viewportTool_->ResetInfrastructureChain();
                     viewportTool_->activePathNetwork.reset();
                 }
                 UpdateViewportTool();
@@ -1056,7 +1075,7 @@ private:
             if(context.Button("Create and select##roads-network-create"))
             {
                 CreateNetwork();
-                if(viewportTool_)viewportTool_->lastPlacedPathNode.reset();
+                if(viewportTool_)viewportTool_->ResetInfrastructureChain();
                 UpdateViewportTool();
             }
             for(const auto& entry:networks_)
@@ -1069,7 +1088,7 @@ private:
                     newNetworkId_==found->id))
                 {
                     newNetworkId_=found->id;
-                    if(viewportTool_)viewportTool_->lastPlacedPathNode.reset();
+                    if(viewportTool_)viewportTool_->ResetInfrastructureChain();
                     UpdateViewportTool();
                 }
             }
@@ -1079,7 +1098,7 @@ private:
                 if(viewportTool_)
                 {
                     viewportTool_->activePathNetwork.reset();
-                    viewportTool_->lastPlacedPathNode.reset();
+                    viewportTool_->ResetInfrastructureChain();
                 }
             }
             context.MutedText(
@@ -1302,7 +1321,7 @@ private:
             if(viewportTool_)
             {
                 viewportTool_->activePathNetwork.reset();
-                viewportTool_->lastPlacedPathNode.reset();
+                viewportTool_->ResetInfrastructureChain();
                 viewportTool_->infrastructureDrawMode=false;
                 viewportTool_->pathPlacementMode=false;
                 viewportTool_->infrastructurePlacementError.clear();
