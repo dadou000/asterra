@@ -1,6 +1,7 @@
 #include <orbit/selection/SelectionService.hpp>
 
 #include <algorithm>
+#include <unordered_set>
 #include <utility>
 
 namespace orbit::selection
@@ -12,22 +13,12 @@ void SelectionService::Set(
     std::vector<scene::ObjectId> next;
     next.reserve(objects.size());
 
-    for (const scene::ObjectId object :
-         objects)
+    std::unordered_set<scene::ObjectId> seen;
+    seen.reserve(objects.size());
+    for (const scene::ObjectId object : objects)
     {
-        if (!object)
-        {
-            continue;
-        }
-
-        if (std::find(
-                next.begin(),
-                next.end(),
-                object) ==
-            next.end())
-        {
+        if(object && seen.insert(object).second)
             next.push_back(object);
-        }
     }
 
     if (next == selected_)
