@@ -2311,6 +2311,17 @@ bool PanelContext::ControlDown() const noexcept
     return ImGui::GetIO().KeyCtrl;
 }
 
+bool PanelContext::ShiftDown() const noexcept
+{
+    return ImGui::GetIO().KeyShift;
+}
+
+bool PanelContext::WindowFocusedForShortcuts() const noexcept
+{
+    return ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput;
+}
+
 bool PanelContext::BeginDragSource()
 {
     return ImGui::BeginDragDropSource(
@@ -2449,6 +2460,7 @@ bool PanelContext::KeyPressed(
     case UiKey::Down: imguiKey = ImGuiKey_DownArrow; break;
     case UiKey::Enter: imguiKey = ImGuiKey_Enter; break;
     case UiKey::Escape: imguiKey = ImGuiKey_Escape; break;
+    case UiKey::Delete: imguiKey = ImGuiKey_Delete; break;
     }
 
     return imguiKey != ImGuiKey_None &&
