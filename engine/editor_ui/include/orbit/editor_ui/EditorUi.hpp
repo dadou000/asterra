@@ -670,6 +670,7 @@ public:
         std::string remoteCommit;
         std::uint64_t lastCheckedUnixSeconds{0};
         std::uint64_t pendingCommits{0};
+        bool rebuildPending{false};
         bool busy{false};
         std::function<void()> onClick;
         std::function<void()> onCheck;
