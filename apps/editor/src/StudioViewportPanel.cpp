@@ -1347,6 +1347,24 @@ void StudioViewportPanel::Register()
                                         markers.push_back({
                                             *startScreen,5.0F,
                                             {1.0F,0.92F,0.62F,1.0F},true});
+                                    // Once the direction is locked, show the
+                                    // actual first Bezier control handle so
+                                    // its tangent is clear before committing.
+                                    if(infrastructureAlignmentMode==1 &&
+                                       infrastructureCurveDirectionPoint)
+                                    {
+                                        const auto guideEnd=screen(p1);
+                                        const auto guideStart=screen(start);
+                                        if(guideStart && guideEnd)
+                                        {
+                                            strokes.push_back({
+                                                *guideStart,*guideEnd,
+                                                {1.0F,0.78F,0.31F,0.95F},1.8F});
+                                            markers.push_back({
+                                                *guideEnd,4.5F,
+                                                {1.0F,0.78F,0.31F,1.0F},true});
+                                        }
+                                    }
                                 }
                             }
                         }
