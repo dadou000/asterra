@@ -59,11 +59,17 @@ public:
     // Runs destroy now if serial is complete, otherwise when it completes.
     void Retire(u64 serial, std::function<void()> destroy);
 
-    // Runs the deferred destroys whose serial has completed.
-    void Collect();
+    // Budget the CPU cost of GPU-complete Vulkan/VMA destruction per submit.
+    // Uncollected objects remain alive; Flush destroys all at device teardown.
+    void Collect(std::size_t maxReleases = 32U);
 
     // Device must be idle: runs every deferred destroy.
     void Flush();
+
+    [[nodiscard]] std::size_t PendingRetirementCount() const noexcept
+    {
+        return retiredCount_.load(std::memory_order_acquire);
+    }
 
     [[nodiscard]] u64 HazardWaitCount() const noexcept;
     [[nodiscard]] f64 HazardWaitMilliseconds() const noexcept;
