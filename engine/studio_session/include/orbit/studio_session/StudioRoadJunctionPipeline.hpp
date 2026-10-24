@@ -92,6 +92,10 @@ private:
     std::vector<DiscoveredEdge> discoveredEdges_;
     std::vector<scene::ObjectId> discoveryParents_;
     std::vector<scene::ObjectRecord> discoveryChildren_;
+    std::optional<scene::ObjectId> discoveryActiveParent_;
+    u32 discoveryChildOffset_{0U};
+    u32 discoveryRootOffset_{0U};
+    bool discoveryRootsExhausted_{false};
     std::size_t discoveryNextChild_{0U};
     std::size_t discoveryScanned_{0U};
     u64 discoveryFingerprint_{0U};
