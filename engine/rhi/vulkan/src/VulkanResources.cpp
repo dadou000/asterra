@@ -59,12 +59,13 @@ namespace
 } // namespace
 
 // See the declaration in VulkanObjects.hpp for why this exists.
-void TransitionNewImageBlocking(
+void ScheduleInitialImageTransition(
     const VkDevice device,
     const u32 graphicsFamilyIndex,
     const VkImage image,
     const VkImageAspectFlags aspectMask,
-    const ResourceState targetState)
+    const ResourceState targetState,
+    GpuProgress* const progress)
 {
     VkQueue queue = VK_NULL_HANDLE;
     vkGetDeviceQueue(device, graphicsFamilyIndex, 0, &queue);
@@ -136,9 +137,41 @@ void TransitionNewImageBlocking(
     submitInfo.commandBufferInfoCount = 1;
     submitInfo.pCommandBufferInfos = &commandBufferInfo;
 
-    vkQueueSubmit2(queue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(queue);
+    // This command is submitted on the SAME graphics queue as ordinary
+    // frame commands. Queue order and the barrier dependency establish the
+    // initial layout before later uses, without an on-frame GPU idle wait.
+    if (vkQueueSubmit2(queue, 1U, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS)
+    {
+        vkDestroyCommandPool(device, pool, nullptr);
+        throw std::runtime_error("Orbit could not enqueue initial image layout.");
+    }
 
+    // A later frame's graphics submission signals the GPU timeline only
+    // after the above initialization command has executed. Retire the pool
+    // against that serial; it is never destroyed while its command buffer
+    // could still be in flight. Shutdown Flush() handles no-next-frame cases.
+    if (progress != nullptr)
+    {
+        try
+        {
+            progress->Retire(progress->NextSerial(), [device, pool] {
+                vkDestroyCommandPool(device, pool, nullptr);
+            });
+            return;
+        }
+        catch (...)
+        {
+            // Allocation failure in deferred-retirement bookkeeping must
+            // not lead to destruction of a command pool still on the GPU.
+            static_cast<void>(vkQueueWaitIdle(queue));
+            vkDestroyCommandPool(device, pool, nullptr);
+            throw;
+        }
+    }
+
+    // Progress is always present on the normal Vulkan device. Retain the
+    // synchronous fallback for hypothetical minimal/test-only devices.
+    static_cast<void>(vkQueueWaitIdle(queue));
     vkDestroyCommandPool(device, pool, nullptr);
 }
 
@@ -370,7 +403,7 @@ VulkanTexture::VulkanTexture(
       mipLevels_(mipLevels),
       sampler_(sampler),
       // Regular (ownsImage=true) textures are already pre-warmed into
-      // their real initial layout by TransitionNewImageBlocking
+      // their real initial layout by ScheduleInitialImageTransition
       // before this constructor runs; a swapchain-provided
       // (ownsImage=false) image starts truly UNDEFINED and unacquired
       // -- see EverUsed()'s declaration in VulkanObjects.hpp.
@@ -1417,12 +1450,13 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
         }
     }
 
-    TransitionNewImageBlocking(
+    ScheduleInitialImageTransition(
         nativeDevice_,
         graphicsFamilyIndex_,
         nativeImage,
         aspectMask,
-        desc.initialState);
+        desc.initialState,
+        progress_.get());
 
     return std::make_unique<VulkanTexture>(
         nativeDevice_,
