@@ -41,6 +41,14 @@ struct DeviceCapabilities
     u32 shaderModelMinor{0};
 };
 
+struct PipelineCompilationStats
+{
+    u64 queued{0U};
+    u64 compiling{0U};
+    u64 completed{0U};
+    u64 rejected{0U};
+};
+
 class Device
 {
 public:
@@ -93,6 +101,11 @@ public:
     TryCreateComputePipelineAsync(const ComputePipelineDesc&)
     {
         return std::nullopt;
+    }
+
+    [[nodiscard]] virtual PipelineCompilationStats PipelineCompilation() noexcept
+    {
+        return {};
     }
 
     [[nodiscard]] virtual std::unique_ptr<Swapchain> CreateSwapchain(
