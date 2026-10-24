@@ -225,6 +225,11 @@ private:
     u64 terrainPagesWorldGeneration_{~u64{0}};
     u64 infrastructureDiscoveryRevision_{~u64{0}};
     u64 infrastructureDiscoveryWorldGeneration_{~u64{0}};
+    // Resumable scene discovery. A revision invalidates the cursor; each tick
+    // processes a bounded number of records rather than the entire world.
+    std::vector<scene::ObjectId> infrastructureDiscoveryParents_;
+    std::vector<scene::ObjectRecord> infrastructureDiscoveryChildren_;
+    std::size_t infrastructureDiscoveryChildCursor_{0U};
     editor_rpc::EditorSessionRpcHost rpc_;
 };
 } // namespace orbit::studio_session
