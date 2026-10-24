@@ -5,6 +5,7 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
+#include <orbit/rhi/DeferredPipeline.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <memory>
@@ -71,7 +72,7 @@ public:
         const AtmosphereRenderView& view);
 
 private:
-    std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+    std::unique_ptr<rhi::DeferredGraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::Buffer> emptyTerrainShadow_;
 };
 } // namespace orbit::celestial_atmosphere
