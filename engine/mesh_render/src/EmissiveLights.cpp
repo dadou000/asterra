@@ -267,7 +267,7 @@ std::array<EmissiveLight, kMaxEmissiveLights> SelectEmissiveLights(
 EmissiveLightRenderer::EmissiveLightRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler)
-    : device_(device)
+    : device_(device), lightUploads_(device)
 {
     const auto cs = compiler.Compile({
         .source = LightSource(),
@@ -329,14 +329,6 @@ void EmissiveLightRenderer::Light(
     const lighting::LightingView& view,
     const lighting::SdfGatherInput* const sdf)
 {
-    ++tick_;
-    std::erase_if(
-        lightBuffers_,
-        [this](const RetiredBuffer& buffer)
-        {
-            return tick_ >= buffer.retireAtTick;
-        });
-
     if (lightPipeline_ == nullptr || lightPipeline_->Poll() == nullptr ||
         width == 0U || height == 0U)
     {
@@ -361,13 +353,9 @@ void EmissiveLightRenderer::Light(
         out[6] = selected[i].radiance[2];
         out[7] = selected[i].boundingRadius;
     }
-    auto buffer = device_.CreateBuffer({
-        .sizeBytes = floats.size() * sizeof(f32),
-        .usage = rhi::BufferUsage::Structured,
-        .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::ShaderResource});
-    std::memcpy(buffer->Map(), floats.data(), floats.size() * sizeof(f32));
-    buffer->Unmap();
+    auto& buffer = lightUploads_.Acquire(floats.size() * sizeof(f32));
+    std::memcpy(buffer.Map(), floats.data(), floats.size() * sizeof(f32));
+    buffer.Unmap();
 
     const bool sdfAvailable =
         sdf != nullptr && sdf->distance != nullptr && sdf->albedo != nullptr &&
@@ -398,7 +386,7 @@ void EmissiveLightRenderer::Light(
 
     commands.SetComputePipeline(*lightPipeline_->Poll());
     commands.SetComputeConstants(constants);
-    commands.SetComputeBuffer(0U, *buffer);
+    commands.SetComputeBuffer(0U, buffer);
     commands.SetComputeBuffer(1U, sdfAvailable ? *sdf->distance : *dummySdf_);
     commands.SetComputeBuffer(2U, sdfAvailable ? *sdf->albedo : *dummySdf_);
     commands.SetComputeBuffer(3U, sdfAvailable ? *sdf->normal : *dummySdf_);
@@ -410,7 +398,7 @@ void EmissiveLightRenderer::Light(
     commands.SetComputeTexture(3U, depth);
     commands.Dispatch((width + 7U) / 8U, (height + 7U) / 8U, 1U);
 
-    lightBuffers_.push_back({std::move(buffer), tick_ + kBufferRetireTicks});
+
 }
 
 void EmissiveLightRenderer::Composite(
