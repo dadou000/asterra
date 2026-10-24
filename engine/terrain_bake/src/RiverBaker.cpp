@@ -4,6 +4,7 @@
 #include <orbit/terrain/TerrainContracts.hpp>
 #include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
 
+#include <orbit/jobs/JobSystem.hpp>
 #include <algorithm>
 #include <atomic>
 #include <bit>
@@ -201,7 +202,9 @@ std::shared_ptr<const terrain::BakedRiverNetwork> BakeRivers(
     u32 workers = options.workerThreads;
     if (workers == 0U)
     {
-        workers = std::max(1U, std::thread::hardware_concurrency());
+        // Default to a CPU share, not every logical core: rendering and
+        // physics retain headroom while a global bake is running.
+        workers = jobs::PoolWorkerCount("ORBIT_RIVER_BAKE_WORKERS", 4U, 1U);
     }
     workers = std::min(workers, rowsTotal);
     {
