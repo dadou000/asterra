@@ -516,13 +516,16 @@ std::unique_ptr<GraphicsPipeline> VulkanDevice::CreateGraphicsPipeline(
     pipelineCreateInfo.layout = pipelineLayout;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    const VkResult result = vkCreateGraphicsPipelines(
-        nativeDevice_,
-        VK_NULL_HANDLE,
-        1,
-        &pipelineCreateInfo,
-        nullptr,
-        &pipeline);
+    // VkPipelineCache is externally synchronized. All graphics and compute
+    // creators serialize only this driver call; cache data can be reused
+    // across sessions and cache persistence at device shutdown is safe.
+    VkResult result = VK_ERROR_UNKNOWN;
+    {
+        std::scoped_lock cacheLock(pipelineCacheMutex_);
+        result = vkCreateGraphicsPipelines(
+            nativeDevice_, pipelineCache_, 1, &pipelineCreateInfo,
+            nullptr, &pipeline);
+    }
 
     vkDestroyShaderModule(nativeDevice_, vertexModule, nullptr);
     vkDestroyShaderModule(nativeDevice_, pixelModule, nullptr);
@@ -796,13 +799,13 @@ std::unique_ptr<ComputePipeline> VulkanDevice::CreateComputePipeline(
     pipelineCreateInfo.layout = pipelineLayout;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    const VkResult result = vkCreateComputePipelines(
-        nativeDevice_,
-        VK_NULL_HANDLE,
-        1,
-        &pipelineCreateInfo,
-        nullptr,
-        &pipeline);
+    VkResult result = VK_ERROR_UNKNOWN;
+    {
+        std::scoped_lock cacheLock(pipelineCacheMutex_);
+        result = vkCreateComputePipelines(
+            nativeDevice_, pipelineCache_, 1, &pipelineCreateInfo,
+            nullptr, &pipeline);
+    }
 
     vkDestroyShaderModule(nativeDevice_, computeModule, nullptr);
 
