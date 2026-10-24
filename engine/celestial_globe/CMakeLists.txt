@@ -20,6 +20,7 @@ target_link_libraries(
     PUBLIC
         Orbit::CelestialAppearance
         Orbit::Core
+        Orbit::Jobs
         Orbit::Math
         Orbit::RenderView
         Orbit::RHI
