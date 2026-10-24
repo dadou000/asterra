@@ -22,7 +22,6 @@ namespace orbit::mesh_render
 {
 namespace
 {
-constexpr u64 kRecordRetireTicks = 24U;
 
 // Shared by both stages. Per-draw data lives in a structured buffer
 // (kMeshDrawRecordVectors float4s per draw) because the instance transform
@@ -198,7 +197,7 @@ std::array<f32, 12> MakeInstanceRows(
 MeshSurfaceRenderer::MeshSurfaceRenderer(
     rhi::Device& device,
     const shader::Compiler&)
-    : device_(device)
+    : device_(device), recordUploads_(device)
 {
 }
 
@@ -283,8 +282,6 @@ void MeshSurfaceRenderer::Draw(
     const lighting::LightingView& view,
     const SdfExtraGeometry* sdfExtra)
 {
-    ++tick_;
-
     // Uploads and retirement happen outside any render pass.
     library.Pump(commands);
 
@@ -293,13 +290,6 @@ void MeshSurfaceRenderer::Draw(
         sdfScene_->Update(
             commands, instances, view.cameraPositionInFrameMeters, sdfExtra);
     }
-
-    std::erase_if(
-        records_,
-        [this](const RetiredRecords& records)
-        {
-            return tick_ >= records.retireAtTick;
-        });
 
     if (!PipelineReady() || width == 0U || height == 0U)
     {
@@ -320,13 +310,9 @@ void MeshSurfaceRenderer::Draw(
         return;
     }
 
-    auto buffer = device_.CreateBuffer({
-        .sizeBytes = records.size() * sizeof(f32),
-        .usage = rhi::BufferUsage::Structured,
-        .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::ShaderResource});
-    std::memcpy(buffer->Map(), records.data(), records.size() * sizeof(f32));
-    buffer->Unmap();
+    auto& buffer = recordUploads_.Acquire(records.size() * sizeof(f32));
+    std::memcpy(buffer.Map(), records.data(), records.size() * sizeof(f32));
+    buffer.Unmap();
 
     const auto proxyConstants = lighting::PackProxySurfaceConstants(
         view, width, height, math::Double3{}, {});
@@ -366,7 +352,7 @@ void MeshSurfaceRenderer::Draw(
         const auto& material = model.Materials()[draw.part->material];
 
         commands.SetGraphicsConstants(constants);
-        commands.SetGraphicsBuffer(0U, *buffer);
+        commands.SetGraphicsBuffer(0U, buffer);
         for (u32 slot = 0U; slot < kMeshTextureSlots; ++slot)
         {
             rhi::Texture* texture = model.Texture(material.texture[slot]);
@@ -383,6 +369,6 @@ void MeshSurfaceRenderer::Draw(
         commands.DrawIndexed(draw.part->indexCount, draw.part->firstIndex, 0);
     }
 
-    records_.push_back({std::move(buffer), tick_ + kRecordRetireTicks});
+
 }
 } // namespace orbit::mesh_render
