@@ -8,6 +8,7 @@
 #include <orbit/rhi/DeferredPipeline.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 
+#include <future>
 #include <memory>
 
 namespace orbit::celestial_atmosphere
@@ -57,7 +58,7 @@ public:
 
     // Test before adding render-graph scratch/copyback passes: if the driver
     // is compiling, a copyback from unwritten scratch would corrupt color.
-    [[nodiscard]] bool Ready() { return pipeline_ && pipeline_->Poll(); }
+    [[nodiscard]] bool Ready();
 
     AtmosphereRenderer(const AtmosphereRenderer&) = delete;
     AtmosphereRenderer& operator=(const AtmosphereRenderer&) = delete;
@@ -76,6 +77,14 @@ public:
         const AtmosphereRenderView& view);
 
 private:
+    struct CompiledShaders
+    {
+        shader::Binary vertex;
+        shader::Binary pixel;
+    };
+    // DXC and Vulkan driver compilation have independent asynchronous stages.
+    // Neither stage may block Studio's command-recording thread.
+    std::future<CompiledShaders> pendingShaders_;
     std::unique_ptr<rhi::DeferredGraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::Buffer> emptyTerrainShadow_;
 };
