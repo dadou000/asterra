@@ -5,6 +5,7 @@
 #include <orbit/path_geometry/CorridorSweep.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 
+#include <atomic>
 #include <functional>
 #include <future>
 #include <memory>
@@ -126,6 +127,10 @@ private:
     std::unordered_map<scene::ObjectId, PendingCorridor> pendingCorridors_;
     std::unordered_map<scene::ObjectId, u64> dirtyTokens_;
     u64 nextDirtyToken_{0};
+    // Account also for discarded jobs that still occupy background workers.
+    // Shared ownership keeps admission bookkeeping alive across cache resets.
+    std::shared_ptr<std::atomic<u32>> activeCorridorJobs_{
+        std::make_shared<std::atomic<u32>>(0U)};
     std::unordered_map<scene::ObjectId, DependencySnapshot> dependencySnapshots_;
     u64 observedSceneRevision_{~u64{0}};
     editor_session::EditorWorldSession* world_{nullptr};
