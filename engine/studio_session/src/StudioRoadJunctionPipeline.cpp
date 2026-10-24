@@ -196,19 +196,11 @@ void StudioRoadJunctionPipeline::Refresh(
         return;
     }
 
-    const auto products = cache.Products();
     const u64 generation = world.UniverseGeneration();
     u64 fingerprint = Mix(
         Mix(0xcbf29ce484222325ULL, world.Objects().Revision()), generation);
     fingerprint = Mix(fingerprint, cache.BindingGeneration());
-    fingerprint = Mix(fingerprint, cache.DirtyCount());
-    for (const auto* product : products)
-    {
-        fingerprint = Mix(fingerprint, product->edge.high);
-        fingerprint = Mix(fingerprint, product->edge.low);
-        fingerprint = Mix(fingerprint, product->buildSignature);
-        fingerprint = Mix(fingerprint, cache.IsDirty(product->edge) ? 1U : 0U);
-    }
+    fingerprint = Mix(fingerprint, cache.ContentRevision());
 
     // Publish a fully cooked packet + contact scene only at the owner-thread
     // boundary. A newer semantic fingerprint invalidates an obsolete result.
@@ -380,6 +372,7 @@ void StudioRoadJunctionPipeline::Refresh(
             std::shared_ptr<const path_geometry::PathDerivedProduct>> products;
         std::set<scene::ObjectId> dirty;
     };
+    const auto products = cache.Products();
     BuildInput input;
     input.worldGeneration = generation;
     input.edges = discoveredEdges_;
