@@ -1,3 +1,4 @@
+#include <orbit/jobs/JobSystem.hpp>
 #include "StudioViewportInternals.hpp"
 #include <orbit/core/Log.hpp>
 
@@ -41,7 +42,7 @@ std::shared_ptr<rhi::Buffer> StudioViewportRenderer::EnsureTerrainSunShadow(
         cache.pendingSource = source;
         cache.pendingBody = body;
         cache.pendingRadius = radius;
-        cache.pending = std::async(std::launch::async, [source, radius]
+        cache.pending = jobs::SubmitBackgroundCpu( [source, radius]
         {
             return lighting::BuildTerrainSunShadowField(*source, radius);
         });
