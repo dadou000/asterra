@@ -1,4 +1,6 @@
 #include "StudioViewportInternals.hpp"
+#include <orbit/jobs/JobSystem.hpp>
+#include <chrono>
 
 namespace orbit::studio_ui
 {
@@ -23,6 +25,37 @@ void StudioViewportRenderer::ComposeTerrainPass(StudioScenePassContext& context)
     {
         throw std::logic_error(
             "Studio production-terrain presentation lost its device, compiler or runtime binding.");
+    }
+
+    // GPU pipelines still have render-thread affinity, but DXC compilation
+    // is independent CPU work. Start all immutable terrain shader requests on
+    // the bounded worker pool before constructing any terrain renderer.
+    if (!terrainShadersWarm_)
+    {
+        if (terrainShadersFailed_) return;
+        if (!terrainShaderPrewarm_.valid())
+        {
+            const shader::Compiler* const compiler = compiler_;
+            terrainShaderPrewarm_ = jobs::SubmitBackgroundCpu([compiler] {
+                terrain_gpu::GpuFieldGenerator::PrewarmShaders(*compiler);
+                terrain_gpu::GpuPhysicalPageComposite::PrewarmShaders(*compiler);
+                terrain_render::TerrainPreviewRenderer::PrewarmShaders(*compiler);
+            }, jobs::JobPriority::High);
+        }
+        if (terrainShaderPrewarm_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+            return; // Continue displaying the existing orbital representation.
+        try
+        {
+            terrainShaderPrewarm_.get();
+            terrainShadersWarm_ = true;
+        }
+        catch (const std::exception& exception)
+        {
+            terrainShadersFailed_ = true;
+            log::Error(std::string("Terrain shader prewarm failed: ") + exception.what());
+            return;
+        }
     }
 
     const auto& source =
