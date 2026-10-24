@@ -916,6 +916,13 @@ void VulkanDevice::PipelineCompileLoop() noexcept
     }
 }
 
+u64 VulkanDevice::PendingGpuRetirements() const noexcept
+{
+    return progress_ != nullptr
+        ? static_cast<u64>(progress_->PendingRetirementCount())
+        : 0U;
+}
+
 PipelineCompilationStats VulkanDevice::PipelineCompilation() noexcept
 {
     std::scoped_lock lock(pipelineQueueMutex_);
