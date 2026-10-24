@@ -424,6 +424,18 @@ public:
         return flatMapRenderer_.Status(viewportId);
     }
 
+    [[nodiscard]] bool HasDrawnProductionTerrain() const noexcept
+    {
+        for (const auto& [id, presentation] : terrainPresentations_)
+        {
+            static_cast<void>(id);
+            if (presentation.renderer &&
+                presentation.renderer->StreamingStats().drawCallsLastFrame > 0U)
+                return true;
+        }
+        return false;
+    }
+
     [[nodiscard]] celestial_globe::MacroGlobeWorkStats TerrainWorkStats() const noexcept
     {
         return macroGlobeRenderer_.WorkStats();
