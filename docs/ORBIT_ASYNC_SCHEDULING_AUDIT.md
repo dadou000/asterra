@@ -25,6 +25,7 @@ Base: `0.1.1-Harmony` at `e96d400b697898b0e2e4f634c576bb0329bfb612`.
 10. Extended corridor, junction and background job tests for asynchronous completion, stale-work discard and immutable product lifetime.
 11. Production terrain renderer, analytic GPU field generator and physical page composite now expose device-free shader prewarming requests. Studio submits these to the bounded worker pool before first clipmap construction; DXC's process-wide shader binary cache reuses the compiled products when Vulkan resources are created on the main thread. A failed prewarm is reported without repeatedly compiling every frame. Shader prewarm is covered by the headless DXC terrain shader tests.
 12. Cloud per-texel summary reduction moved into the background field build, eliminating a repeated complete cloud-map scan during viewport composition. Completed fields publish with strong staging of the GPU product; a same-body previous time bucket remains eligible for last-ready display during continuous clock advancement.
+13. Shader prewarming owns an isolated DXC compiler inside the worker task, avoiding use-after-free when Studio closes while a compile is still queued. The orbital patch builder also refuses borrowed, non-owned terrain authorities rather than dereferencing a null shared owner.
 
 ## Not yet guaranteed by this patch
 
