@@ -421,6 +421,7 @@ void EmissiveLightRenderer::Composite(
     const u32 height)
 {
     if (compositePipeline_ == nullptr || compositePipeline_->Poll() == nullptr ||
+        lightPipeline_ == nullptr || lightPipeline_->Poll() == nullptr ||
         width == 0U || height == 0U)
     {
         return;
