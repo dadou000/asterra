@@ -108,6 +108,13 @@ public:
         return {};
     }
 
+    // GPU-completed Vulkan/VMA objects awaiting a bounded retirement pass.
+    // Supported backends override this for profiler/validation integration.
+    [[nodiscard]] virtual u64 PendingGpuRetirements() const noexcept
+    {
+        return 0U;
+    }
+
     [[nodiscard]] virtual std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
         const SwapchainDesc& desc) = 0;
