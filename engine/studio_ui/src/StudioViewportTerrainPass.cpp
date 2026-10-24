@@ -1,5 +1,6 @@
 #include "StudioViewportInternals.hpp"
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/core/Log.hpp>
 #include <chrono>
 
@@ -36,11 +37,13 @@ void StudioViewportRenderer::ComposeTerrainPass(StudioScenePassContext& context)
         if (terrainShadersFailed_) return;
         if (!terrainShaderPrewarm_.valid())
         {
-            const shader::Compiler* const compiler = compiler_;
-            terrainShaderPrewarm_ = jobs::SubmitBackgroundCpu([compiler] {
-                terrain_gpu::GpuFieldGenerator::PrewarmShaders(*compiler);
-                terrain_gpu::GpuPhysicalPageComposite::PrewarmShaders(*compiler);
-                terrain_render::TerrainPreviewRenderer::PrewarmShaders(*compiler);
+            // Own an independent compiler inside the task. Studio's caller-
+            // owned compiler may be destroyed before an abandoned job runs.
+            terrainShaderPrewarm_ = jobs::SubmitBackgroundCpu([] {
+                const shader::dxc::DxcShaderCompiler compiler;
+                terrain_gpu::GpuFieldGenerator::PrewarmShaders(compiler);
+                terrain_gpu::GpuPhysicalPageComposite::PrewarmShaders(compiler);
+                terrain_render::TerrainPreviewRenderer::PrewarmShaders(compiler);
             }, jobs::JobPriority::High);
         }
         if (terrainShaderPrewarm_.wait_for(std::chrono::seconds(0)) !=
