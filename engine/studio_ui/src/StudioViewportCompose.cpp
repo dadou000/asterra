@@ -56,6 +56,9 @@ StudioViewportRenderer::Compose(
     lighting::LightingTimestampRecorder* const lightingTimestamps,
     const StudioComposeCpuTimingRecorder& cpuTimingRecorder)
 {
+    // Reap only completed async work; never destroy a live std::async future
+    // on the frame path because its destructor can join the worker thread.
+    CollectRetiredCloudJobs();
     hybridReflectionRenderer_.BeginFrame(frameIndex, framesInFlight_);
     meshSdfScene_.BeginReflectionFrame(frameIndex, framesInFlight_);
     glassSurfaceRenderer_.BeginFrame(frameIndex, framesInFlight_);
