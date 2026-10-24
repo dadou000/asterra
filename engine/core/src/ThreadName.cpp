@@ -49,4 +49,11 @@ void SetBackgroundThreadPriority() noexcept
         GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL));
 #endif
 }
+void SetForegroundThreadPriority() noexcept
+{
+#if defined(_WIN32)
+    static_cast<void>(SetThreadPriority(
+        GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL));
+#endif
+}
 } // namespace orbit::core
