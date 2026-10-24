@@ -253,6 +253,12 @@ void StudioRoadJunctionPipeline::Refresh(
 
     if (fingerprint == observedFingerprint_)
         return;
+    // A previous full junction build is still running. Deferring its
+    // replacement prevents a flood of obsolete workers under rapid edits.
+    // Consumers already reject packets whose raw corridors are dirty.
+    if (pendingBuild_ && pendingBuild_->future.wait_for(
+            std::chrono::seconds(0)) != std::future_status::ready)
+        return;
 
     // A stale packet is not suitable for collision or navigation. Invalidating
     // does not block on the old job, and no derived geometry is recalculated
@@ -323,16 +329,13 @@ void StudioRoadJunctionPipeline::Refresh(
         }
     }
 
-    // Discarding a packaged-task future never joins. Bound stale+active work
-    // by allowing only two junction computations in this cache at a time.
-    if (pendingBuild_ && pendingBuild_->future.wait_for(
-            std::chrono::seconds(0)) != std::future_status::ready)
+    // Do not launch a worker when the world has no road junction sources.
+    observedFingerprint_ = fingerprint;
+    if (input.edges.empty())
     {
-        // The new authority will be scheduled on a later tick after the old
-        // task retires. Do not mark this fingerprint as observed yet.
+        pendingBuild_.reset();
         return;
     }
-    observedFingerprint_ = fingerprint;
 
     auto future = jobs::SubmitBackgroundCpu(
         [snapshot = std::move(input)]() mutable -> PreparedBatch
