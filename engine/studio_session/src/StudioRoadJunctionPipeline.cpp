@@ -23,6 +23,13 @@ struct FrameBatch {
 }
 void StudioRoadJunctionPipeline::Clear() noexcept {
     pendingBuild_.reset();
+    discoveredEdges_.clear();
+    discoveryParents_.clear();
+    discoveryChildren_.clear();
+    discoveryNextChild_ = 0U;
+    discoveryScanned_ = 0U;
+    discoveryFingerprint_ = 0U;
+    discoveryInProgress_ = false;
     frames_.clear();
     contactScenes_.clear();
     renderPatches_.clear();
@@ -253,32 +260,94 @@ void StudioRoadJunctionPipeline::Refresh(
             std::chrono::seconds(0)) != std::future_status::ready)
         return;
 
-    // A stale packet is not suitable for collision or navigation. Invalidating
-    // does not block on the old job, and no derived geometry is recalculated
-    // inside the session tick.
-    frames_.clear();
-    contactScenes_.clear();
-    renderPatches_.clear();
-    lastError_.clear();
-    ++revision_;
-
-    // Capture ONLY semantic endpoints and immutable published corridor handles
-    // on the owner thread. Workers never touch the mutable scene or cache.
-    struct CapturedEdge
+    // The previous completed packet is stale as soon as the semantic graph
+    // changes, not when a replacement worker eventually finishes. Invalidate
+    // once per fingerprint; then resume discovery over multiple frames.
+    if (discoveryFingerprint_ != fingerprint)
     {
-        scene::ObjectId id{}, start{}, end{};
-        bool rail{false};
-    };
+        frames_.clear();
+        contactScenes_.clear();
+        renderPatches_.clear();
+        lastError_.clear();
+        ++revision_;
+        discoveredEdges_.clear();
+        discoveryParents_.clear();
+        discoveryChildren_.clear();
+        discoveryNextChild_ = 0U;
+        discoveryScanned_ = 0U;
+        discoveryFingerprint_ = fingerprint;
+        discoveryInProgress_ = true;
+        const auto roots = world.Objects().Roots();
+        for (const auto& root : roots)
+            discoveryParents_.push_back(root.id);
+    }
+
+    // Children() still materializes one direct-child list synchronously,
+    // but at most 96 records are interpreted on the owner thread per tick.
+    // The next call resumes exactly where it stopped unless an authoritative
+    // revision changed, in which case all earlier captured edges are dropped.
+    constexpr std::size_t kJunctionObjectsPerTick = 96U;
+    constexpr std::size_t kJunctionMaximumSceneObjects = 131072U;
+    std::size_t thisTick = 0U;
+    while (discoveryInProgress_ && thisTick < kJunctionObjectsPerTick)
+    {
+        if (discoveryNextChild_ >= discoveryChildren_.size())
+        {
+            discoveryChildren_.clear();
+            discoveryNextChild_ = 0U;
+            if (discoveryParents_.empty())
+            {
+                discoveryInProgress_ = false;
+                break;
+            }
+            const auto parent = discoveryParents_.back();
+            discoveryParents_.pop_back();
+            discoveryChildren_ = world.Objects().Children(parent);
+            continue;
+        }
+        const auto& child = discoveryChildren_[discoveryNextChild_++];
+        ++thisTick;
+        if (++discoveryScanned_ > kJunctionMaximumSceneObjects)
+        {
+            lastError_ = "Road junction discovery exceeds the scene safety limit.";
+            observedFingerprint_ = fingerprint;
+            discoveryInProgress_ = false;
+            discoveredEdges_.clear();
+            return;
+        }
+        if (child.type != paths::kPathEdgeType)
+        {
+            if (child.type != paths::kPathNodeType)
+                discoveryParents_.push_back(child.id);
+            continue;
+        }
+        const auto edge = network.FindEdge(child.id);
+        if (!edge || edge->infrastructureCatalogVersion != 1U ||
+            edge->constructionMode != "terrain") continue;
+        const bool road = path_geometry::FindRoadCatalog(
+            edge->infrastructureCatalogId) != nullptr;
+        const bool rail = edge->infrastructureCatalogId == "ballasted-rail";
+        if (road || rail)
+            discoveredEdges_.push_back({child.id, edge->startNode,
+                edge->endNode, rail});
+    }
+    if (discoveryInProgress_)
+        return;
+
+    // Only once a complete revision-matched capture is ready do we copy the
+    // corridor handles into the immutable worker input. No worker accesses
+    // the editor's live scene, network or mutable cache.
     struct BuildInput
     {
         u64 worldGeneration{0U};
-        std::vector<CapturedEdge> edges;
+        std::vector<DiscoveredEdge> edges;
         std::map<scene::ObjectId,
             std::shared_ptr<const path_geometry::PathDerivedProduct>> products;
         std::set<scene::ObjectId> dirty;
     };
     BuildInput input;
     input.worldGeneration = generation;
+    input.edges = discoveredEdges_;
     for (const auto* product : products)
     {
         auto snapshot = cache.Snapshot(product->edge);
@@ -286,40 +355,6 @@ void StudioRoadJunctionPipeline::Refresh(
             input.products.emplace(product->edge, std::move(snapshot));
         if (cache.IsDirty(product->edge))
             input.dirty.insert(product->edge);
-    }
-
-    const auto& objects = world.Objects();
-    std::vector<scene::ObjectId> pending;
-    for (const auto& root : objects.Roots()) pending.push_back(root.id);
-    std::size_t scanned = 0U;
-    while (!pending.empty())
-    {
-        if (++scanned > 8192U)
-        {
-            lastError_ = "Road junction discovery exceeded 8192 scene objects.";
-            observedFingerprint_ = fingerprint;
-            pendingBuild_.reset();
-            return;
-        }
-        const auto parent = pending.back();
-        pending.pop_back();
-        for (const auto& child : objects.Children(parent))
-        {
-            if (child.type != paths::kPathEdgeType)
-            {
-                if (child.type != paths::kPathNodeType)
-                    pending.push_back(child.id);
-                continue;
-            }
-            const auto edge = network.FindEdge(child.id);
-            if (!edge || edge->infrastructureCatalogVersion != 1U ||
-                edge->constructionMode != "terrain") continue;
-            const bool road = path_geometry::FindRoadCatalog(
-                edge->infrastructureCatalogId) != nullptr;
-            const bool rail = edge->infrastructureCatalogId == "ballasted-rail";
-            if (!road && !rail) continue;
-            input.edges.push_back({child.id, edge->startNode, edge->endNode, rail});
-        }
     }
 
     // Do not launch a worker when the world has no road junction sources.
