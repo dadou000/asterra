@@ -206,6 +206,11 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                 .terrainSunShadow = context.terrainSunShadow
             };
 
+        // A cold Vulkan driver pipeline cannot produce scratch color yet.
+        // Never run the CopyBack pass unless the atmosphere has actually
+        // acquired its graphics pipeline; clouds can still render below.
+        if (atmosphereRenderer_.Ready())
+        {
         graph.AddPass(
             prefix + ".Atmosphere",
             {
@@ -298,6 +303,8 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                     width,
                     height);
             });
+
+        }
 
         // Not drawing clouds this frame leaves the history stale.
         if (!info.layers.clouds)
