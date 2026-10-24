@@ -1204,18 +1204,19 @@ StudioTickResult StudioSession::Tick(
             // Domain recipe, not another hand-authored Studio-specific
             // triangle set. Curvature and design speed can generate bounded
             // railway cant in the same station frame as the swept railhead.
-            const auto planned = path_geometry::PlanInfrastructureSection(
-                *centerline, profile, {},
-                edge->designSpeedKmh > 0.0 ?
-                    edge->designSpeedKmh / 3.6 :
-                    (isRail?85.0:roadPreset->designSpeedKmh)/3.6,
-                edge->easeTurns);
+            // Planning/engineering/cant and final mesh production now run
+            // together on a bounded CPU worker. Only authoritative source
+            // resolution and immutable input capture occur on this thread.
             UniverseBoundPathCache::RebuildRequest request{};
             request.authoredSignature = world_.Objects().Revision();
             if (request.authoredSignature == 0U) request.authoredSignature = 1U;
             request.centerline = *centerline;
             request.profile = std::move(profile);
-            request.corridor = planned.section;
+            request.autoPlanInfrastructure = true;
+            request.designSpeedMetersPerSecond = edge->designSpeedKmh > 0.0
+                ? edge->designSpeedKmh / 3.6
+                : (isRail ? 85.0 : roadPreset->designSpeedKmh) / 3.6;
+            request.applyAutomaticCant = edge->easeTurns;
             return request;
         }, 2U));
     // Stage one complete immutable road junction generation after all
