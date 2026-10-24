@@ -79,6 +79,29 @@ void StudioViewportRenderer::RetireCloudPresentation(const std::string& viewport
     cloudPresentations_.erase(found);
 }
 
+void StudioViewportRenderer::CollectRetiredAtmosphereJobs()
+{
+    for (auto it = retiredAtmosphereStatic_.begin(); it != retiredAtmosphereStatic_.end();)
+        if (it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            it = retiredAtmosphereStatic_.erase(it);
+        else ++it;
+    for (auto it = retiredAtmosphereSky_.begin(); it != retiredAtmosphereSky_.end();)
+        if (it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            it = retiredAtmosphereSky_.erase(it);
+        else ++it;
+}
+
+void StudioViewportRenderer::RetireAtmospherePresentation(const std::string& viewportId)
+{
+    const auto found = atmospherePresentations_.find(viewportId);
+    if (found == atmospherePresentations_.end()) return;
+    if (found->second.pendingStatic.valid())
+        retiredAtmosphereStatic_.push_back(std::move(found->second.pendingStatic));
+    if (found->second.pendingSky.valid())
+        retiredAtmosphereSky_.push_back(std::move(found->second.pendingSky));
+    atmospherePresentations_.erase(found);
+}
+
 bool StudioViewportRenderer::EnsureUnifiedCloudRenderer()
 {
     if (unifiedCloudRenderer_) return true;
@@ -2586,59 +2609,57 @@ StudioViewportRenderer::ComposeBase(
                             parameters,
                         atmosphereConfig);
 
-            const bool staticChanged =
-                presentation.staticLuts ==
-                    nullptr ||
-                presentation.body !=
-                    logicalTarget->
-                        target->body ||
-                presentation.staticFingerprint !=
-                    staticFingerprint;
-
-            if (staticChanged &&
-                acquireCelestialGrant(
-                    info.id,
-                    logicalTarget->
-                        target->body,
-                    celestial_scheduler::
-                        WorkKind::AtmosphereLut,
-                    staticFingerprint,
-                    celestial_scheduler::
-                        WorkBackend::Gpu,
-                    4U,
-                    90,
-                    true))
+            // Poll only: no CPU LUT computation or waiting on Studio's frame.
+            if (presentation.pendingStatic.valid() &&
+                presentation.pendingStatic.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
             {
-                presentation.staticLuts =
-                    std::make_unique<
-                        celestial_atmosphere::
-                            AtmosphereStaticLuts>(
-                                celestial_atmosphere::
-                                    BuildStaticLuts(
-                                        resolvedAtmosphere->
-                                            parameters,
-                                        atmosphereConfig));
+                try
+                {
+                    auto built = presentation.pendingStatic.get();
+                    if (presentation.pendingStaticBody == logicalTarget->target->body &&
+                        presentation.pendingStaticFingerprint == staticFingerprint)
+                    {
+                        presentation.staticLuts =
+                            std::make_shared<const celestial_atmosphere::AtmosphereStaticLuts>(std::move(built));
+                        presentation.body = presentation.pendingStaticBody;
+                        presentation.staticFingerprint = presentation.pendingStaticFingerprint;
+                        presentation.parameters = resolvedAtmosphere->parameters;
+                        if (presentation.pendingSky.valid())
+                            retiredAtmosphereSky_.push_back(std::move(presentation.pendingSky));
+                        presentation.skyView.reset();
+                        presentation.gpu.reset();
+                        presentation.skyFingerprint = 0U;
+                    }
+                }
+                catch (const std::exception& error)
+                {
+                    log::Warning(std::string("Atmosphere LUT build failed: ") + error.what());
+                }
+                static_cast<void>(completeCelestialGrant(
+                    info.id, presentation.pendingStaticBody,
+                    celestial_scheduler::WorkKind::AtmosphereLut,
+                    presentation.pendingStaticFingerprint));
+            }
 
-                presentation.body =
-                    logicalTarget->
-                        target->body;
-                presentation.staticFingerprint =
-                    staticFingerprint;
-                presentation.parameters =
-                    resolvedAtmosphere->
-                        parameters;
-                presentation.skyView.reset();
-                presentation.gpu.reset();
-                presentation.skyFingerprint = 0U;
+            const bool staticChanged =
+                presentation.staticLuts == nullptr ||
+                presentation.body != logicalTarget->target->body ||
+                presentation.staticFingerprint != staticFingerprint;
 
-                static_cast<void>(
-                    completeCelestialGrant(
-                        info.id,
-                        logicalTarget->
-                            target->body,
-                        celestial_scheduler::
-                            WorkKind::AtmosphereLut,
-                        staticFingerprint));
+            if (staticChanged && !presentation.pendingStatic.valid() &&
+                retiredAtmosphereStatic_.size() < 24U &&
+                acquireCelestialGrant(info.id, logicalTarget->target->body,
+                    celestial_scheduler::WorkKind::AtmosphereLut,
+                    staticFingerprint, celestial_scheduler::WorkBackend::Cpu,
+                    4U, 90, true))
+            {
+                const auto params = resolvedAtmosphere->parameters;
+                presentation.pendingStatic = std::async(std::launch::async,
+                    [params, atmosphereConfig] {
+                        return celestial_atmosphere::BuildStaticLuts(params, atmosphereConfig);
+                    });
+                presentation.pendingStaticFingerprint = staticFingerprint;
+                presentation.pendingStaticBody = logicalTarget->target->body;
             }
 
             const bool atmosphereCurrent =
@@ -2850,8 +2871,7 @@ StudioViewportRenderer::ComposeBase(
         }
         else
         {
-            atmospherePresentations_.erase(
-                info.id);
+            RetireAtmospherePresentation(info.id);
             atmosphereDiagnostics_.erase(
                 info.id);
         }
