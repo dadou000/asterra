@@ -331,7 +331,7 @@ std::size_t UniverseBoundPathCache::RebuildDirty(
             activeJobs->fetch_add(1U, std::memory_order_relaxed);
             try
             {
-                pending.result = jobs::SubmitBackgroundCpu(
+                auto admitted = jobs::TrySubmitBackgroundCpu(
                     [snapshot = std::move(*request), activeJobs]() mutable {
                         try
                         {
@@ -359,6 +359,12 @@ std::size_t UniverseBoundPathCache::RebuildDirty(
                             throw;
                         }
                     }, jobs::JobPriority::Normal);
+                if (!admitted)
+                {
+                    activeJobs->fetch_sub(1U, std::memory_order_relaxed);
+                    break; // Next tick retries; do not mark this edit failed.
+                }
+                pending.result = std::move(*admitted);
             }
             catch (...)
             {
