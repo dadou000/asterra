@@ -1,5 +1,6 @@
 #include "StudioViewportInternals.hpp"
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/core/Log.hpp>
 #include <chrono>
 
 namespace orbit::studio_ui
