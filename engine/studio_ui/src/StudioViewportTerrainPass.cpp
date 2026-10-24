@@ -39,12 +39,15 @@ void StudioViewportRenderer::ComposeTerrainPass(StudioScenePassContext& context)
         {
             // Own an independent compiler inside the task. Studio's caller-
             // owned compiler may be destroyed before an abandoned job runs.
-            terrainShaderPrewarm_ = jobs::SubmitBackgroundCpu([] {
+            auto admitted = jobs::TrySubmitBackgroundCpu([] {
                 const shader::dxc::DxcShaderCompiler compiler;
                 terrain_gpu::GpuFieldGenerator::PrewarmShaders(compiler);
                 terrain_gpu::GpuPhysicalPageComposite::PrewarmShaders(compiler);
                 terrain_render::TerrainPreviewRenderer::PrewarmShaders(compiler);
             }, jobs::JobPriority::High);
+            if (!admitted)
+                return; // Wait for capacity, never block frame composition.
+            terrainShaderPrewarm_ = std::move(*admitted);
         }
         if (terrainShaderPrewarm_.wait_for(std::chrono::seconds(0)) !=
             std::future_status::ready)
