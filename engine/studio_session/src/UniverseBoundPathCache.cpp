@@ -1,4 +1,7 @@
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+
+#include <chrono>
 
 #include <algorithm>
 #include <orbit/paths/PathNetwork.hpp>
@@ -211,6 +214,8 @@ std::size_t UniverseBoundPathCache::RefreshSemanticInvalidation()
         if (!world_->Objects().Find(edge).has_value())
         {
             routeGenerations_.erase(edge);
+            dirtyTokens_.erase(edge);
+            pendingCorridors_.erase(edge);
             corridorAuthoredSignatures_.erase(edge);
             dependencySnapshots_.erase(edge);
             dirtyCorridors_.erase(edge);
@@ -235,39 +240,95 @@ std::size_t UniverseBoundPathCache::RebuildDirty(
     const RebuildResolver& resolver, const std::size_t budget)
 {
     static_cast<void>(RefreshBinding());
-    if (!resolver || budget == 0 || world_ == nullptr || !world_->HasWorld()) return 0;
+    if (!resolver || budget == 0 || world_ == nullptr || !world_->HasWorld())
+        return 0;
+
+    // Poll completed work without ever waiting for unfinished mesh generation.
+    // packaged_task futures can be discarded safely on invalidation.
+    for (auto it = pendingCorridors_.begin(); it != pendingCorridors_.end();)
+    {
+        if (it->second.result.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        {
+            ++it;
+            continue;
+        }
+        const scene::ObjectId edge = it->first;
+        auto& pending = it->second;
+        const bool current =
+            pending.bindingGeneration == bindingGeneration_ &&
+            pending.dirtyToken == dirtyTokens_[edge] &&
+            dirtyCorridors_.contains(edge) &&
+            pending.sourceDependencies == CaptureDependencies(edge);
+        if (current)
+        {
+            try
+            {
+                auto product = pending.result.get();
+                Store(std::move(product), pending.routeGeneration);
+                corridorAuthoredSignatures_[edge] = pending.authoredSignature;
+            }
+            catch (const std::exception& error)
+            {
+                rebuildErrors_[edge] = error.what();
+            }
+        }
+        it = pendingCorridors_.erase(it);
+    }
+
+    // Avoid unbounded allocation and background backlog during rapid editing.
+    constexpr std::size_t kMaxPendingCorridors = 8U;
+    if (pendingCorridors_.size() >= kMaxPendingCorridors)
+        return 0;
+
     std::vector<scene::ObjectId> candidates;
     for (const auto edge : dirtyCorridors_)
-        if (!rebuildErrors_.contains(edge)) candidates.push_back(edge);
+        if (!rebuildErrors_.contains(edge) && !pendingCorridors_.contains(edge))
+            candidates.push_back(edge);
     std::sort(candidates.begin(), candidates.end(), [](const auto a, const auto b) {
         return a.high != b.high ? a.high < b.high : a.low < b.low;
     });
-    std::size_t processed = 0;
+
+    std::size_t scheduled = 0;
     for (const auto edge : candidates)
     {
-        if (processed >= budget) break;
-        ++processed;
+        if (scheduled >= budget || pendingCorridors_.size() >= kMaxPendingCorridors)
+            break;
         try
         {
-            const auto request = resolver(edge);
+            auto request = resolver(edge);
             if (!request)
             {
                 rebuildErrors_[edge] = "No current corridor build request for edge.";
+                ++scheduled;
                 continue;
             }
             if (request->centerline.edge != edge)
                 throw std::invalid_argument("Rebuild request edge does not match dirty edge.");
-            static_cast<void>(StoreCorridorIfChanged(request->authoredSignature,
-                request->centerline, request->profile, request->corridor,
-                request->options, request->refinement, request->routeGeneration));
-            rebuildErrors_.erase(edge);
+
+            PendingCorridor pending{};
+            pending.authoredSignature = request->authoredSignature;
+            pending.routeGeneration = request->routeGeneration;
+            pending.bindingGeneration = bindingGeneration_;
+            pending.dirtyToken = dirtyTokens_[edge];
+            pending.sourceDependencies = CaptureDependencies(edge);
+            pending.result = jobs::SubmitBackgroundCpu(
+                [snapshot = std::move(*request)]() mutable {
+                    return path_geometry::BuildCorridorDerived(
+                        snapshot.centerline, snapshot.profile,
+                        snapshot.corridor, snapshot.options,
+                        snapshot.refinement);
+                }, jobs::JobPriority::Normal);
+            pendingCorridors_.emplace(edge, std::move(pending));
+            ++scheduled;
         }
         catch (const std::exception& error)
         {
             rebuildErrors_[edge] = error.what();
+            ++scheduled;
         }
     }
-    return processed;
+    return scheduled;
 }
 
 std::string UniverseBoundPathCache::RebuildError(const scene::ObjectId edge) const
@@ -283,7 +344,15 @@ std::size_t UniverseBoundPathCache::DirtyCount() const noexcept
 
 void UniverseBoundPathCache::MarkDirty(const scene::ObjectId edge) noexcept
 {
-    if (edge) { dirtyCorridors_.insert(edge); rebuildErrors_.erase(edge); }
+    if (edge)
+    {
+        dirtyCorridors_.insert(edge);
+        rebuildErrors_.erase(edge);
+        dirtyTokens_[edge] = ++nextDirtyToken_;
+        // Never destroy a std::async future here: background results are
+        // packaged tasks, so dropping an invalidated result cannot join.
+        pendingCorridors_.erase(edge);
+    }
 }
 
 bool UniverseBoundPathCache::IsDirty(const scene::ObjectId edge) const noexcept
@@ -296,6 +365,8 @@ bool UniverseBoundPathCache::Erase(
 {
     routeGenerations_.erase(edge);
     dirtyCorridors_.erase(edge);
+    dirtyTokens_.erase(edge);
+    pendingCorridors_.erase(edge);
     rebuildErrors_.erase(edge);
     corridorAuthoredSignatures_.erase(edge);
     dependencySnapshots_.erase(edge);
@@ -305,6 +376,8 @@ bool UniverseBoundPathCache::Erase(
 void UniverseBoundPathCache::Clear() noexcept
 {
     products_.clear();
+    pendingCorridors_.clear();
+    dirtyTokens_.clear();
     routeGenerations_.clear();
     corridorAuthoredSignatures_.clear();
     dependencySnapshots_.clear();
