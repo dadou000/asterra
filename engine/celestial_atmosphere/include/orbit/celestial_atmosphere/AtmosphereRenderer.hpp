@@ -55,6 +55,10 @@ public:
         const shader::Compiler& compiler);
     ~AtmosphereRenderer();
 
+    // Test before adding render-graph scratch/copyback passes: if the driver
+    // is compiling, a copyback from unwritten scratch would corrupt color.
+    [[nodiscard]] bool Ready() { return pipeline_ && pipeline_->Poll(); }
+
     AtmosphereRenderer(const AtmosphereRenderer&) = delete;
     AtmosphereRenderer& operator=(const AtmosphereRenderer&) = delete;
 
