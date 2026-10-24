@@ -323,14 +323,14 @@ void StudioRoadJunctionPipeline::Refresh(
     }
 
     // Do not launch a worker when the world has no road junction sources.
-    observedFingerprint_ = fingerprint;
     if (input.edges.empty())
     {
         pendingBuild_.reset();
+        observedFingerprint_ = fingerprint;
         return;
     }
 
-    auto future = jobs::SubmitBackgroundCpu(
+    auto future = jobs::TrySubmitBackgroundCpu(
         [snapshot = std::move(input)]() mutable -> PreparedBatch
         {
             PreparedBatch result;
@@ -438,6 +438,9 @@ void StudioRoadJunctionPipeline::Refresh(
             }
             return result;
         }, jobs::JobPriority::Normal);
-    pendingBuild_ = PendingBuild{std::move(future), fingerprint, generation};
+    if (!future)
+        return; // Retry next tick; keep observed fingerprint unchanged.
+    observedFingerprint_ = fingerprint;
+    pendingBuild_ = PendingBuild{std::move(*future), fingerprint, generation};
 }
 } // namespace orbit::studio_session
