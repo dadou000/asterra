@@ -198,6 +198,61 @@ VkPipelineLayout VulkanGraphicsPipeline::Layout() const noexcept
     return layout_;
 }
 
+std::optional<std::future<std::unique_ptr<GraphicsPipeline>>>
+VulkanDevice::TryCreateGraphicsPipelineAsync(const GraphicsPipelineDesc& desc)
+{
+    if (desc.vertexShader.data == nullptr || desc.pixelShader.data == nullptr ||
+        desc.vertexShader.size == 0U || desc.pixelShader.size == 0U)
+        throw std::invalid_argument("Async graphics pipeline requires shader bytes.");
+
+    // Descriptors contain borrowed spans. Make deep copies before returning
+    // to the caller, otherwise the Vulkan worker may dereference freed DXC
+    // binary or attribute data after a renderer reconfiguration.
+    std::vector<u8> vertex(desc.vertexShader.data,
+        desc.vertexShader.data + desc.vertexShader.size);
+    std::vector<u8> pixel(desc.pixelShader.data,
+        desc.pixelShader.data + desc.pixelShader.size);
+    std::vector<VertexAttribute> attributes(desc.vertexAttributes.begin(),
+        desc.vertexAttributes.end());
+    auto task = std::make_shared<
+        std::packaged_task<std::unique_ptr<GraphicsPipeline>()>>(
+        [this, desc, vertex = std::move(vertex),
+         pixel = std::move(pixel), attributes = std::move(attributes)] {
+            auto source = desc;
+            source.vertexShader = {vertex.data(), vertex.size()};
+            source.pixelShader = {pixel.data(), pixel.size()};
+            source.vertexAttributes = attributes;
+            return CreateGraphicsPipeline(source);
+        });
+    auto future = task->get_future();
+    if (!TryQueuePipelineCompile([task] { (*task)(); }))
+        return std::nullopt;
+    return std::optional<std::future<std::unique_ptr<GraphicsPipeline>>>{
+        std::move(future)};
+}
+
+std::optional<std::future<std::unique_ptr<ComputePipeline>>>
+VulkanDevice::TryCreateComputePipelineAsync(const ComputePipelineDesc& desc)
+{
+    if (desc.computeShader.data == nullptr || desc.computeShader.size == 0U)
+        throw std::invalid_argument("Async compute pipeline requires shader bytes.");
+
+    std::vector<u8> bytecode(desc.computeShader.data,
+        desc.computeShader.data + desc.computeShader.size);
+    auto task = std::make_shared<
+        std::packaged_task<std::unique_ptr<ComputePipeline>()>>(
+        [this, desc, bytecode = std::move(bytecode)] {
+            auto source = desc;
+            source.computeShader = {bytecode.data(), bytecode.size()};
+            return CreateComputePipeline(source);
+        });
+    auto future = task->get_future();
+    if (!TryQueuePipelineCompile([task] { (*task)(); }))
+        return std::nullopt;
+    return std::optional<std::future<std::unique_ptr<ComputePipeline>>>{
+        std::move(future)};
+}
+
 std::unique_ptr<GraphicsPipeline> VulkanDevice::CreateGraphicsPipeline(
     const GraphicsPipelineDesc& desc)
 {
