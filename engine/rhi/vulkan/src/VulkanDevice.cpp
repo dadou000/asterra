@@ -841,6 +841,49 @@ void VulkanDevice::SavePipelineCache() noexcept
     }
 }
 
+bool VulkanDevice::TryQueuePipelineCompile(std::function<void()> work)
+{
+    std::scoped_lock lock(pipelineQueueMutex_);
+    if (pipelineQueueStopping_ || !pipelineCompileThread_.joinable() ||
+        pipelineQueue_.size() + pipelineCompilesInProgress_ >=
+            kMaxOutstandingPipelineCompiles)
+        return false;
+    pipelineQueue_.push_back(std::move(work));
+    pipelineQueueCv_.notify_one();
+    return true;
+}
+
+void VulkanDevice::PipelineCompileLoop() noexcept
+{
+    // Cold Vulkan driver compilations are allowed to spend substantial CPU
+    // time, but they must not preempt the event/render thread.
+    static_cast<void>(SetThreadPriority(
+        GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL));
+    static_cast<void>(SetThreadDescription(
+        GetCurrentThread(), L"Orbit.VulkanPipeline"));
+    while (true)
+    {
+        std::function<void()> work;
+        {
+            std::unique_lock lock(pipelineQueueMutex_);
+            pipelineQueueCv_.wait(lock, [this] {
+                return pipelineQueueStopping_ || !pipelineQueue_.empty();
+            });
+            if (pipelineQueue_.empty() && pipelineQueueStopping_)
+                return;
+            work = std::move(pipelineQueue_.front());
+            pipelineQueue_.pop_front();
+            ++pipelineCompilesInProgress_;
+        }
+        try { work(); }
+        catch (...) { /* Packaged tasks own their exceptions. */ }
+        {
+            std::scoped_lock lock(pipelineQueueMutex_);
+            --pipelineCompilesInProgress_;
+        }
+    }
+}
+
 VulkanDevice::VulkanDevice(
     const VkInstance instance,
     const VkPhysicalDevice physicalDevice,
@@ -885,6 +928,17 @@ VulkanDevice::VulkanDevice(
             "Orbit failed to create the default Vulkan sampler.");
     }
     InitializePipelineCache();
+    try
+    {
+        pipelineCompileThread_ = std::thread([this] {
+            PipelineCompileLoop();
+        });
+    }
+    catch (const std::system_error& error)
+    {
+        log::Warning(std::string("Cold Vulkan pipeline worker unavailable: ") +
+            error.what());
+    }
 }
 
 RenderDocCapture* VulkanDevice::GetRenderDocCapture() const noexcept
@@ -904,6 +958,16 @@ VkSampler VulkanDevice::DefaultSampler() const noexcept
 
 VulkanDevice::~VulkanDevice()
 {
+    // Drain pipeline driver calls before invalidating VkDevice or persisting
+    // the cache. This join occurs only at device teardown, never per frame.
+    {
+        std::scoped_lock lock(pipelineQueueMutex_);
+        pipelineQueueStopping_ = true;
+    }
+    pipelineQueueCv_.notify_all();
+    if (pipelineCompileThread_.joinable())
+        pipelineCompileThread_.join();
+
     if (nativeDevice_ != VK_NULL_HANDLE)
     {
         vkDeviceWaitIdle(nativeDevice_);
