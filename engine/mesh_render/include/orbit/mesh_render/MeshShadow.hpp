@@ -6,6 +6,7 @@
 #include <orbit/mesh_render/MeshSurface.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
+#include <orbit/rhi/DeferredPipeline.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <array>
@@ -138,7 +139,7 @@ private:
     };
 
     rhi::Device& device_;
-    std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+    std::unique_ptr<rhi::DeferredGraphicsPipeline> pipeline_;
     std::vector<RetiredRecords> records_;
     u64 tick_{0U};
 };
@@ -186,7 +187,7 @@ public:
 
 private:
     rhi::Device& device_;
-    std::unique_ptr<rhi::ComputePipeline> pipeline_;
+    std::unique_ptr<rhi::DeferredComputePipeline> pipeline_;
     struct RetiredBuffer
     {
         std::unique_ptr<rhi::Buffer> buffer;
