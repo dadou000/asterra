@@ -13,10 +13,28 @@ StudioTerrainBakeController::StudioTerrainBakeController(
 
 StudioTerrainBakeController::~StudioTerrainBakeController() = default;
 
+void StudioTerrainBakeController::ReapRetiredServices()
+{
+    // Do not join an unfinished worker on the editor frame. A service is
+    // destroyed only once all its workers have completed or were never run.
+    for (auto it = retiredServices_.begin(); it != retiredServices_.end();)
+    {
+        if ((*it)->WorkersQuiescent())
+            it = retiredServices_.erase(it);
+        else
+            ++it;
+    }
+}
+
 void StudioTerrainBakeController::Clear()
 {
-    service_.reset();
+    if (service_)
+    {
+        service_->RequestCancelAll();
+        retiredServices_.push_back(std::move(service_));
+    }
     root_.clear();
+    ReapRetiredServices();
 }
 
 std::optional<world::PlanetId> StudioTerrainBakeController::PlanetFor(
@@ -43,6 +61,7 @@ std::optional<world::PlanetId> StudioTerrainBakeController::PlanetFor(
 
 bool StudioTerrainBakeController::Tick()
 {
+    ReapRetiredServices();
     if (!world_.HasWorld())
     {
         Clear();
@@ -52,6 +71,11 @@ bool StudioTerrainBakeController::Tick()
     const std::filesystem::path root = world_.Project().RootDirectory();
     if (service_ == nullptr || root != root_)
     {
+        if (service_)
+        {
+            service_->RequestCancelAll();
+            retiredServices_.push_back(std::move(service_));
+        }
         service_ = std::make_unique<terrain_bake::TerrainBakeService>(
             root / "Bakes");
         service_->SetGeologyBakeBackend(geologyBakeBackend_);
