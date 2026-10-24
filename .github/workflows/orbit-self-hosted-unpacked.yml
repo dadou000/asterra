@@ -65,6 +65,17 @@ jobs:
           if not exist "build\apps\editor\Release\dxcompiler.dll" exit /b 1
           echo Unpacked Studio: %CD%\build\apps\editor\Release\OrbitStudio.exe
 
-      - name: Optional real-device Vulkan UI smoke
+      - name: Optional real-device Vulkan cold-pipeline smoke
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.gpu_smoke }}
+        run: call tools\validation\run_terrain_ui_smoke.bat release nobuild nopause
+
+      - name: Verify Vulkan driver cache persisted
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.gpu_smoke }}
+        run: |
+          if not exist "%LOCALAPPDATA%\Orbit\PipelineCache" exit /b 1
+          dir /b "%LOCALAPPDATA%\Orbit\PipelineCache\*.bin" >nul 2>nul
+          if errorlevel 1 exit /b 1
+
+      - name: Optional warm-cache Vulkan UI smoke
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.gpu_smoke }}
         run: call tools\validation\run_terrain_ui_smoke.bat release nobuild nopause
