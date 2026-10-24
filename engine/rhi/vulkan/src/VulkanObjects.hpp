@@ -786,6 +786,7 @@ public:
     TryCreateGraphicsPipelineAsync(const GraphicsPipelineDesc& desc) override;
     [[nodiscard]] std::optional<std::future<std::unique_ptr<ComputePipeline>>>
     TryCreateComputePipelineAsync(const ComputePipelineDesc& desc) override;
+    [[nodiscard]] PipelineCompilationStats PipelineCompilation() noexcept override;
 
     [[nodiscard]] std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
@@ -856,5 +857,7 @@ private:
     bool pipelineQueueStopping_{false};
     static constexpr std::size_t kMaxOutstandingPipelineCompiles = 6U;
     std::size_t pipelineCompilesInProgress_{0U};
+    u64 pipelineCompilesCompleted_{0U};
+    u64 pipelineCompilesRejected_{0U};
 };
 } // namespace orbit::rhi::vulkan::detail
