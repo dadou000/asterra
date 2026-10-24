@@ -59,6 +59,26 @@ constexpr f64 kNodeJitterMeters = 125.0;
 }
 } // namespace
 
+void StudioViewportRenderer::CollectRetiredCloudJobs()
+{
+    for (auto it = retiredCloudBuilds_.begin(); it != retiredCloudBuilds_.end();)
+    {
+        if (it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            it = retiredCloudBuilds_.erase(it);
+        else
+            ++it;
+    }
+}
+
+void StudioViewportRenderer::RetireCloudPresentation(const std::string& viewportId)
+{
+    const auto found = cloudPresentations_.find(viewportId);
+    if (found == cloudPresentations_.end()) return;
+    if (found->second.pending.valid())
+        retiredCloudBuilds_.push_back(std::move(found->second.pending));
+    cloudPresentations_.erase(found);
+}
+
 bool StudioViewportRenderer::EnsureUnifiedCloudRenderer()
 {
     if (unifiedCloudRenderer_) return true;
@@ -1867,7 +1887,7 @@ StudioViewportRenderer::ComposeBase(
             if (requiresClimate &&
                 cloudClimateSource == nullptr)
             {
-                cloudPresentations_.erase(
+                RetireCloudPresentation(
                     info.id);
                 cloudDiagnostics_.erase(
                     info.id);
@@ -1955,11 +1975,11 @@ StudioViewportRenderer::ComposeBase(
                         70,
                         true))
                 {
-                  if (cloudPresentation.field != nullptr &&
-                      cloudPresentation.body == logicalTarget->target->body)
+                  // Both first-use and refresh builds belong on workers. The
+                  // previous GPU field remains visible; a cold field starts
+                  // without holding up the viewport for ~1 second.
+                  if (retiredCloudBuilds_.size() < 24U)
                   {
-                    // The same body with a newer time: build it on another thread. The task keeps the terrain source alive (concurrent
-                    // Sample calls are part of TerrainSource's contract: the streaming workers do the same).
                     std::shared_ptr<const terrain::TerrainSource> climateHold =
                         macroGlobeSurface != nullptr ? macroGlobeSurface->terrain : nullptr;
                     cloudPresentation.pending = std::async(
@@ -1970,44 +1990,6 @@ StudioViewportRenderer::ComposeBase(
                     cloudPresentation.hasPending = true;
                     cloudPresentation.pendingFingerprint = cloudFingerprint;
                     cloudPresentation.pendingBody = logicalTarget->target->body;
-                  }
-                  else
-                  {
-                    cloudPresentation.field =
-                        std::make_unique<
-                            celestial_clouds::
-                                CloudFieldProduct>(
-                                    celestial_clouds::
-                                        BuildCloudField(
-                                            cloudClimateSource,
-                                            nullptr,
-                                            referenceRadius,
-                                            cloudParameters,
-                                            atTime,
-                                            cloudConfig));
-
-                    cloudPresentation.gpu =
-                        std::make_unique<
-                            celestial_clouds::
-                                GpuCloudFieldProduct>(
-                                    *device_,
-                                    *cloudPresentation.
-                                        field);
-
-                    cloudPresentation.body =
-                        logicalTarget->
-                            target->body;
-                    cloudPresentation.fingerprint =
-                        cloudFingerprint;
-
-                    static_cast<void>(
-                        completeCelestialGrant(
-                            info.id,
-                            logicalTarget->
-                                target->body,
-                            celestial_scheduler::
-                                WorkKind::CloudField,
-                            cloudFingerprint));
                   }
                 }
 
@@ -2091,7 +2073,7 @@ StudioViewportRenderer::ComposeBase(
                 // authority; Studio waits for the selected source object's
                 // coverage adapter rather than silently substituting
                 // procedural weather.
-                cloudPresentations_.erase(
+                RetireCloudPresentation(
                     info.id);
                 cloudDiagnostics_.erase(
                     info.id);
@@ -2099,7 +2081,7 @@ StudioViewportRenderer::ComposeBase(
         }
         else
         {
-            cloudPresentations_.erase(
+            RetireCloudPresentation(
                 info.id);
             cloudDiagnostics_.erase(
                 info.id);
