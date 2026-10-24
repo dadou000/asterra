@@ -23,11 +23,13 @@ Base: `0.1.1-Harmony` at `e96d400b697898b0e2e4f634c576bb0329bfb612`.
 8. Road junction geometry construction, full-scene packet assembly, patch mesh preparation and collision-scene cooking now execute on background workers reading captured immutable path snapshots. The owner thread retains atomic render/contact publication and rejects superseded scene generations. Rapid edits cannot queue unlimited overlapping junction builds.
 9. Orbital patch upload processing now has a two-patch-per-compose maximum and a 700-microsecond *between-uploads* budget, with failed preparation/upload isolated from other patches. One individual upload remains non-preemptible.
 10. Extended corridor, junction and background job tests for asynchronous completion, stale-work discard and immutable product lifetime.
+11. Production terrain renderer, analytic GPU field generator and physical page composite now expose device-free shader prewarming requests. Studio submits these to the bounded worker pool before first clipmap construction; DXC's process-wide shader binary cache reuses the compiled products when Vulkan resources are created on the main thread. A failed prewarm is reported without repeatedly compiling every frame. Shader prewarm is covered by the headless DXC terrain shader tests.
+12. Cloud per-texel summary reduction moved into the background field build, eliminating a repeated complete cloud-map scan during viewport composition. Completed fields publish with strong staging of the GPU product; a same-body previous time bucket remains eligible for last-ready display during continuous clock advancement.
 
 ## Not yet guaranteed by this patch
 
 * `StudioSession::Tick` still resolves path-source centerlines and captures mutable scene inputs synchronously. Although corridor engineering, meshing, junction construction and contact cooking have moved off-thread, source resolution and semantic scene traversal are not yet time-sliced or deadline-bound. Other synchronous Studio updates also remain.
-* `GpuFieldGenerator` and `TerrainPreviewRenderer` can still construct/compile shader and driver pipelines inline when terrain identity changes. Shader binaries should be cached/precompiled, with GPU pipeline installation deferred.
+* `GpuFieldGenerator`, `GpuPhysicalPageComposite` and `TerrainPreviewRenderer` now precompile their exact HLSL requests through the global DXC cache off-thread. However Vulkan pipeline and resource creation still occur inline when terrain identity or clipmap configuration changes, and a newly generated shader variant outside the prewarm set could still compile synchronously. Pipeline installation and retirement need an explicit GPU-thread staging budget.
 * `StudioApplication` still shares its main thread across editor update, viewport composition, command recording, and submission. Frame-slot fences, swapchain resize and presentation may block for GPU/OS reasons.
 * Legacy independent pools are still present, and `BackgroundCpuPool` is not yet a process-wide admission/affinity/deadline budget for **all** engine subsystems.
 * CPU-to-GPU promotion of completed cloud/atmosphere products is currently bounded by one product per view on completion, not a measured microsecond budget.
@@ -38,7 +40,7 @@ These require dedicated scheduler / snapshot architecture changes and Windows Vu
 ## Validation
 
 1. Compile `OrbitStudio` with MSVC, warnings-as-errors, on the base's supported Windows environment.
-2. Run `Orbit.JobSystemTelemetry`, atmosphere tests, `Orbit.StudioSession` and `Orbit.StudioRenderingIntegration`, then Studio terrain smoke.
+2. Run `Orbit.JobSystemTelemetry`, `Orbit.TerrainSurfaceShader`, `Orbit.TerrainGpuPhysicalPageCompositeShader`, atmosphere tests, `Orbit.StudioSession` and `Orbit.StudioRenderingIntegration`, then Studio terrain smoke.
 3. Profile first planet opening, first cloud generation, sun and altitude animation, source revision invalidation, rapid world swaps, road/rail edits, junction contact generation, and orbital LOD refinement.
 4. Record p50/p95/p99/p99.9 frame CPU timings and `vk.fence_wait` separately; inspect Perfetto for `BuildCloudField`, `BuildSkyView`, `BuildStaticLuts`, `BakeNow` and CPU texel packing on `Orbit.Main`.
 5. Stress CPU-heavy tasks concurrently and confirm obsolete products never overwrite newer generation state. Test dozens of rapid road edits while a junction worker is running and validate that old collision packets cannot be used for vehicle contacts.
@@ -49,4 +51,4 @@ These require dedicated scheduler / snapshot architecture changes and Windows Vu
 - Source review completed for the changed corridor cache, road-junction pipeline, atmosphere renderer, job scheduler and orbital patch uploader; brace and C++ comment/string lexical balance checks passed for the main modified source files. This is **not equivalent to compilation**.
 - The existing self-hosted Windows workflow `.github/workflows/orbit-self-hosted-unpacked.yml` accepts trusted manual dispatch but intentionally has no pull-request trigger. There were no completed workflow runs for this draft head during this pass.
 - `PlanInfrastructureSection` used to call `BuildPathDerived` synchronously inside the corridor resolver. It is now within the async job, where it can spend unbounded time without extending `StudioSession::Tick`.
-- GPU allocation and Vulkan pipeline construction are still non-preemptible render-thread operations. Their tail latency must be measured separately; the 700-microsecond inter-upload limit is not a hard deadline on an individual operation.
+- Terrain shader prewarming removes initial CPU DXC compilation from the ordinary viewport path, but GPU allocation and Vulkan pipeline construction are still non-preemptible render-thread operations. Their tail latency must be measured separately; the 700-microsecond inter-upload limit is not a hard deadline on an individual operation.
