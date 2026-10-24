@@ -115,6 +115,7 @@ void UniverseBoundPathCache::Store(
     rebuildErrors_.erase(edge);
     products_[edge] = std::make_shared<const path_geometry::PathDerivedProduct>(
         std::move(product));
+    ++contentRevision_;
     dependencySnapshots_[edge] = CaptureDependencies(edge);
 
     if (routeGeneration.has_value())
@@ -232,6 +233,7 @@ std::size_t UniverseBoundPathCache::RefreshSemanticInvalidation()
             dependencySnapshots_.erase(edge);
             dirtyCorridors_.erase(edge);
             it = products_.erase(it);
+            ++contentRevision_;
             ++invalidated;
             continue;
         }
@@ -409,6 +411,11 @@ std::size_t UniverseBoundPathCache::DirtyCount() const noexcept
     return dirtyCorridors_.size();
 }
 
+u64 UniverseBoundPathCache::ContentRevision() const noexcept
+{
+    return contentRevision_;
+}
+
 void UniverseBoundPathCache::MarkDirty(const scene::ObjectId edge) noexcept
 {
     if (edge)
@@ -416,6 +423,7 @@ void UniverseBoundPathCache::MarkDirty(const scene::ObjectId edge) noexcept
         dirtyCorridors_.insert(edge);
         rebuildErrors_.erase(edge);
         dirtyTokens_[edge] = ++nextDirtyToken_;
+        ++contentRevision_;
         // Never destroy a std::async future here: background results are
         // packaged tasks, so dropping an invalidated result cannot join.
         pendingCorridors_.erase(edge);
@@ -437,11 +445,14 @@ bool UniverseBoundPathCache::Erase(
     rebuildErrors_.erase(edge);
     corridorAuthoredSignatures_.erase(edge);
     dependencySnapshots_.erase(edge);
-    return products_.erase(edge) != 0U;
+    const bool erased = products_.erase(edge) != 0U;
+    if (erased) ++contentRevision_;
+    return erased;
 }
 
 void UniverseBoundPathCache::Clear() noexcept
 {
+    ++contentRevision_;
     products_.clear();
     pendingCorridors_.clear();
     dirtyTokens_.clear();
