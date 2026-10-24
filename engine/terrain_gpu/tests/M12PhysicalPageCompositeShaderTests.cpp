@@ -1,6 +1,7 @@
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/terrain_gpu/GpuPhysicalPageComposite.hpp>
 #include <orbit/terrain_gpu/GpuFieldGenerator.hpp>
+#include <orbit/terrain_gpu/GpuRegionDelta.hpp>
 
 #include "../src/PhysicalPageCompositeCompute.hpp"
 
@@ -36,5 +37,6 @@ int main()
         << "Orbit M12 physical-page composite shader compiled successfully.\n";
     orbit::terrain_gpu::GpuPhysicalPageComposite::PrewarmShaders(compiler);
     orbit::terrain_gpu::GpuFieldGenerator::PrewarmShaders(compiler);
+    orbit::terrain_gpu::GpuRegionDelta::PrewarmShaders(compiler);
     return EXIT_SUCCESS;
 }
