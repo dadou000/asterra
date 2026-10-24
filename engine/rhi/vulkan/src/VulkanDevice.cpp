@@ -784,6 +784,17 @@ void VulkanDevice::InitializePipelineCache() noexcept
             static_cast<void>(vkCreatePipelineCache(
                 nativeDevice_, &createInfo, nullptr, &pipelineCache_));
         }
+        // Give the slow compilation worker its own cache instance, seeded
+        // from the same disk blob. Render-thread creation never locks behind
+        // vkCreate*Pipelines on the worker; caches merge at shutdown.
+        if (vkCreatePipelineCache(nativeDevice_, &createInfo, nullptr,
+                &pipelineWorkerCache_) != VK_SUCCESS)
+        {
+            createInfo.initialDataSize = 0U;
+            createInfo.pInitialData = nullptr;
+            static_cast<void>(vkCreatePipelineCache(
+                nativeDevice_, &createInfo, nullptr, &pipelineWorkerCache_));
+        }
         log::Info(pipelineCache_ != VK_NULL_HANDLE
             ? "Vulkan persistent pipeline cache initialized."
             : "Vulkan pipeline cache unavailable; using uncached creation.");
@@ -798,9 +809,21 @@ void VulkanDevice::InitializePipelineCache() noexcept
 
 void VulkanDevice::SavePipelineCache() noexcept
 {
-    if (pipelineCache_ == VK_NULL_HANDLE) return;
+    if (pipelineCache_ == VK_NULL_HANDLE &&
+        pipelineWorkerCache_ == VK_NULL_HANDLE) return;
     {
         std::scoped_lock lock(pipelineCacheMutex_);
+        if (pipelineCache_ != VK_NULL_HANDLE &&
+            pipelineWorkerCache_ != VK_NULL_HANDLE)
+        {
+            static_cast<void>(vkMergePipelineCaches(
+                nativeDevice_, pipelineCache_, 1U, &pipelineWorkerCache_));
+        }
+        if (pipelineCache_ == VK_NULL_HANDLE)
+        {
+            pipelineCache_ = pipelineWorkerCache_;
+            pipelineWorkerCache_ = VK_NULL_HANDLE;
+        }
         try
         {
             if (!pipelineCachePath_.empty())
@@ -838,6 +861,11 @@ void VulkanDevice::SavePipelineCache() noexcept
         catch (...) {}
         vkDestroyPipelineCache(nativeDevice_, pipelineCache_, nullptr);
         pipelineCache_ = VK_NULL_HANDLE;
+        if (pipelineWorkerCache_ != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineCache(nativeDevice_, pipelineWorkerCache_, nullptr);
+            pipelineWorkerCache_ = VK_NULL_HANDLE;
+        }
     }
 }
 
