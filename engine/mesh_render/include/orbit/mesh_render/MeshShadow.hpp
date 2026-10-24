@@ -12,6 +12,7 @@
 
 #include <array>
 #include <memory>
+#include <future>
 #include <optional>
 #include <span>
 #include <vector>
@@ -116,6 +117,13 @@ public:
         rhi::Texture& depthAtlas);
 
 private:
+    struct CompiledShaders
+    {
+        shader::Binary vertex;
+        shader::Binary pixel;
+    };
+    [[nodiscard]] bool PipelineReady();
+    std::future<CompiledShaders> pendingShaders_;
     struct View
     {
         std::array<f32, 3> center{};
@@ -190,6 +198,8 @@ public:
         u32 temporalIndex = 0U);
 
 private:
+    [[nodiscard]] bool PipelineReady();
+    std::future<shader::Binary> pendingShader_;
     rhi::Device& device_;
     std::unique_ptr<rhi::DeferredComputePipeline> pipeline_;
     rhi::FrameBufferPool parameterUploads_;
