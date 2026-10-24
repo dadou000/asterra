@@ -22,6 +22,14 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 namespace orbit::jobs
 {
 namespace detail
@@ -493,6 +501,14 @@ private:
     {
         core::SetCurrentThreadName(
             std::format("Orbit.{}.{}", name_, workerIndex));
+
+#if defined(_WIN32)
+        // CPU-heavy procedural work must yield to the render/UI thread under
+        // scheduler contention, even if other pools are currently busy.
+        if (name_ == "BackgroundCpu")
+            static_cast<void>(::SetThreadPriority(
+                ::GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL));
+#endif
 
         while (true)
         {
