@@ -1,4 +1,6 @@
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <orbit/terrain_gpu/GpuPhysicalPageComposite.hpp>
+#include <orbit/terrain_gpu/GpuFieldGenerator.hpp>
 
 #include "../src/PhysicalPageCompositeCompute.hpp"
 
@@ -32,5 +34,7 @@ int main()
 
     std::cout
         << "Orbit M12 physical-page composite shader compiled successfully.\n";
+    orbit::terrain_gpu::GpuPhysicalPageComposite::PrewarmShaders(compiler);
+    orbit::terrain_gpu::GpuFieldGenerator::PrewarmShaders(compiler);
     return EXIT_SUCCESS;
 }
