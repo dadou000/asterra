@@ -11,6 +11,7 @@
 
 #include <array>
 #include <memory>
+#include <future>
 #include <span>
 #include <vector>
 
@@ -96,6 +97,14 @@ public:
         u32 height);
 
 private:
+    struct CompiledShaders
+    {
+        shader::Binary compute;
+        shader::Binary vertex;
+        shader::Binary pixel;
+    };
+    [[nodiscard]] bool PipelinesRequested();
+    std::future<CompiledShaders> pendingShaders_;
     rhi::Device& device_;
     std::unique_ptr<rhi::DeferredComputePipeline> lightPipeline_;
     std::unique_ptr<rhi::DeferredGraphicsPipeline> compositePipeline_;
