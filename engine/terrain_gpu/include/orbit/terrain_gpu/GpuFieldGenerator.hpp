@@ -10,6 +10,8 @@
 #include <orbit/world/Planet.hpp>
 
 #include <memory>
+#include <future>
+#include <vector>
 
 namespace orbit::terrain_gpu
 {
@@ -97,6 +99,10 @@ public:
     // Precompiles CPU DXC code off the frame thread; no Vulkan device used.
     static void PrewarmShaders(const shader::Compiler& compiler);
 
+    // Returns true only after the driver compute pipeline has published.
+    // Never waits for cold VkCreateComputePipelines on the calling thread.
+    [[nodiscard]] bool Ready() const;
+
     GpuFieldGenerator(const GpuFieldGenerator&) = delete;
     GpuFieldGenerator& operator=(const GpuFieldGenerator&) = delete;
 
@@ -116,7 +122,10 @@ public:
 
 private:
     world::PlanetDefinition planet_;
-    std::unique_ptr<rhi::ComputePipeline> pipeline_;
+    rhi::Device* device_{nullptr};
+    std::vector<u8> computeBytecode_;
+    mutable std::unique_ptr<rhi::ComputePipeline> pipeline_;
+    mutable std::future<std::unique_ptr<rhi::ComputePipeline>> pendingPipeline_;
     std::unique_ptr<rhi::Buffer> paramsBuffer_;
     std::unique_ptr<rhi::Buffer> platesBuffer_;
     std::unique_ptr<rhi::Buffer> hotspotsBuffer_;
