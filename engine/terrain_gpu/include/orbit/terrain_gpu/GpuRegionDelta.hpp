@@ -9,6 +9,8 @@
 #include <orbit/world/Planet.hpp>
 
 #include <memory>
+#include <future>
+#include <vector>
 
 namespace orbit::terrain_gpu
 {
@@ -62,6 +64,9 @@ public:
         const shader::Compiler& shaderCompiler);
     ~GpuRegionDelta();
 
+    static void PrewarmShaders(const shader::Compiler& compiler);
+    [[nodiscard]] bool Ready() const;
+
     GpuRegionDelta(const GpuRegionDelta&) = delete;
     GpuRegionDelta& operator=(const GpuRegionDelta&) = delete;
 
@@ -80,6 +85,9 @@ public:
         rhi::Buffer& samples) const;
 
 private:
-    std::unique_ptr<rhi::ComputePipeline> pipeline_;
+    rhi::Device* device_{nullptr};
+    std::vector<u8> shaderBytecode_;
+    mutable std::future<std::unique_ptr<rhi::ComputePipeline>> pendingPipeline_;
+    mutable std::unique_ptr<rhi::ComputePipeline> pipeline_;
 };
 } // namespace orbit::terrain_gpu

@@ -7,6 +7,10 @@
 #include <orbit/lighting/ProxySurface.hpp>
 #include <orbit/lighting/SurfaceBuffer.hpp>
 #include <orbit/mesh_import/MeshAsset.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <chrono>
+#include <utility>
 
 #include <algorithm>
 #include <bit>
@@ -18,7 +22,6 @@ namespace orbit::mesh_render
 {
 namespace
 {
-constexpr u64 kRecordRetireTicks = 24U;
 
 // Shared by both stages. Per-draw data lives in a structured buffer
 // (kMeshDrawRecordVectors float4s per draw) because the instance transform
@@ -193,20 +196,40 @@ std::array<f32, 12> MakeInstanceRows(
 
 MeshSurfaceRenderer::MeshSurfaceRenderer(
     rhi::Device& device,
-    const shader::Compiler& compiler)
-    : device_(device)
+    const shader::Compiler&)
+    : device_(device), recordUploads_(device)
 {
-    const auto vs = compiler.Compile({
+}
+
+bool MeshSurfaceRenderer::PipelineReady()
+{
+    if (pipeline_) return pipeline_->Poll() != nullptr;
+    if (!pendingShaders_.valid())
+    {
+        auto admitted = jobs::TrySubmitBackgroundCpu([]() -> CompiledShaders {
+            const shader::dxc::DxcShaderCompiler compiler;
+    auto vs = compiler.Compile({
         .source = Compose(kVertexShader),
         .entryPoint = "main",
         .stage = shader::Stage::Vertex,
         .debug = false});
-    const auto ps = compiler.Compile({
+    auto ps = compiler.Compile({
         .source = Compose(kPixelShader),
         .entryPoint = "main",
         .stage = shader::Stage::Pixel,
         .debug = false});
 
+            return {std::move(vs), std::move(ps)};
+        }, jobs::JobPriority::High);
+        if (admitted) pendingShaders_ = std::move(*admitted);
+    }
+    if (!pendingShaders_.valid() ||
+        pendingShaders_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        return false;
+    auto compiled = pendingShaders_.get();
+    const auto& vs = compiled.vertex;
+    const auto& ps = compiled.pixel;
     static constexpr std::array<rhi::VertexAttribute, 4> attributes{{
         {0U, rhi::VertexFormat::Float3,
          offsetof(mesh_import::MeshVertex, position)},
@@ -217,7 +240,9 @@ MeshSurfaceRenderer::MeshSurfaceRenderer(
         {3U, rhi::VertexFormat::Float2,
          offsetof(mesh_import::MeshVertex, uv)}}};
 
-    pipeline_ = device.CreateGraphicsPipeline({
+
+    pipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(device_,
+        rhi::GraphicsPipelineDesc{
         .vertexShader = {.data = vs.bytecode.data(), .size = vs.bytecode.size()},
         .pixelShader = {.data = ps.bytecode.data(), .size = ps.bytecode.size()},
         .vertexAttributes = attributes,
@@ -240,6 +265,7 @@ MeshSurfaceRenderer::MeshSurfaceRenderer(
             rhi::TextureFormat::RGBA16_Float,
             rhi::TextureFormat::RGBA16_Float},
         .colorAttachmentCount = 4U});
+    return pipeline_->Poll() != nullptr;
 }
 
 void MeshSurfaceRenderer::Draw(
@@ -256,8 +282,6 @@ void MeshSurfaceRenderer::Draw(
     const lighting::LightingView& view,
     const SdfExtraGeometry* sdfExtra)
 {
-    ++tick_;
-
     // Uploads and retirement happen outside any render pass.
     library.Pump(commands);
 
@@ -267,14 +291,7 @@ void MeshSurfaceRenderer::Draw(
             commands, instances, view.cameraPositionInFrameMeters, sdfExtra);
     }
 
-    std::erase_if(
-        records_,
-        [this](const RetiredRecords& records)
-        {
-            return tick_ >= records.retireAtTick;
-        });
-
-    if (pipeline_ == nullptr || width == 0U || height == 0U)
+    if (!PipelineReady() || width == 0U || height == 0U)
     {
         return;
     }
@@ -293,13 +310,9 @@ void MeshSurfaceRenderer::Draw(
         return;
     }
 
-    auto buffer = device_.CreateBuffer({
-        .sizeBytes = records.size() * sizeof(f32),
-        .usage = rhi::BufferUsage::Structured,
-        .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::ShaderResource});
-    std::memcpy(buffer->Map(), records.data(), records.size() * sizeof(f32));
-    buffer->Unmap();
+    auto& buffer = recordUploads_.Acquire(records.size() * sizeof(f32));
+    std::memcpy(buffer.Map(), records.data(), records.size() * sizeof(f32));
+    buffer.Unmap();
 
     const auto proxyConstants = lighting::PackProxySurfaceConstants(
         view, width, height, math::Double3{}, {});
@@ -323,7 +336,7 @@ void MeshSurfaceRenderer::Draw(
         .top = 0,
         .right = static_cast<i32>(width),
         .bottom = static_cast<i32>(height)});
-    commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsPipeline(*pipeline_->Poll());
 
     for (const detail::DrawCall& draw : draws)
     {
@@ -339,7 +352,7 @@ void MeshSurfaceRenderer::Draw(
         const auto& material = model.Materials()[draw.part->material];
 
         commands.SetGraphicsConstants(constants);
-        commands.SetGraphicsBuffer(0U, *buffer);
+        commands.SetGraphicsBuffer(0U, buffer);
         for (u32 slot = 0U; slot < kMeshTextureSlots; ++slot)
         {
             rhi::Texture* texture = model.Texture(material.texture[slot]);
@@ -356,6 +369,6 @@ void MeshSurfaceRenderer::Draw(
         commands.DrawIndexed(draw.part->indexCount, draw.part->firstIndex, 0);
     }
 
-    records_.push_back({std::move(buffer), tick_ + kRecordRetireTicks});
+
 }
 } // namespace orbit::mesh_render

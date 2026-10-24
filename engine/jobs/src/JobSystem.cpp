@@ -22,6 +22,16 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace orbit::jobs
 {
 namespace detail
@@ -59,6 +69,11 @@ constexpr std::array<JobPriority, 3> kPriorityOrder{
     JobPriority::Normal,
     JobPriority::Low
 };
+
+// The editor and render thread must never steal arbitrary procedural work
+// when an API calls Wait() during frame preparation. Only worker threads
+// may help process nested job groups to avoid pool starvation.
+thread_local bool gOrbitJobWorker = false;
 } // namespace
 
 JobGroup::JobGroup()
@@ -227,7 +242,7 @@ public:
 
         while (group->remaining.load(std::memory_order_acquire) != 0)
         {
-            if (TryExecuteOne(kExternalThread))
+            if (gOrbitJobWorker && TryExecuteOne(kExternalThread))
             {
                 continue;
             }
@@ -260,7 +275,7 @@ public:
     {
         while (outstandingJobs_.load(std::memory_order_acquire) != 0)
         {
-            if (TryExecuteOne(kExternalThread))
+            if (gOrbitJobWorker && TryExecuteOne(kExternalThread))
             {
                 continue;
             }
@@ -491,8 +506,17 @@ private:
 
     void WorkerLoop(const u32 workerIndex)
     {
+        gOrbitJobWorker = true;
         core::SetCurrentThreadName(
             std::format("Orbit.{}.{}", name_, workerIndex));
+
+#if defined(_WIN32)
+        // CPU-heavy procedural work must yield to the render/UI thread under
+        // scheduler contention, even if other pools are currently busy.
+        if (name_ == "BackgroundCpu")
+            static_cast<void>(::SetThreadPriority(
+                ::GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL));
+#endif
 
         while (true)
         {
@@ -594,5 +618,65 @@ u32 JobSystem::WorkerCount() const noexcept
 JobSystemTelemetry JobSystem::Telemetry() const noexcept
 {
     return impl_->Telemetry();
+}
+namespace
+{
+std::atomic<u64> gBackgroundCpuOutstanding{0U};
+std::atomic<u64> gBackgroundCpuRejected{0U};
+
+[[nodiscard]] u64 BackgroundCpuCapacity() noexcept
+{
+    // Avoid querying/allocating environment strings at frame frequency.
+    static const u64 limit = [] {
+        const u64 workers = std::max<u64>(
+            PoolWorkerCount("ORBIT_BACKGROUND_CPU_WORKERS", 4U), 1U);
+        return std::max<u64>(workers * 8U, 32U);
+    }();
+    return limit;
+}
+}
+
+bool TryReserveBackgroundCpu(const JobPriority priority) noexcept
+{
+    // No application locks or waits: a full queue simply defers an update.
+    // Critical/normal work can take reserved headroom above low priority.
+    const u64 fullCapacity = BackgroundCpuCapacity();
+    const u64 cap = priority == JobPriority::Low
+        ? fullCapacity / 2U
+        : priority == JobPriority::Normal
+            ? (fullCapacity * 3U) / 4U
+            : fullCapacity;
+    u64 count = gBackgroundCpuOutstanding.load(std::memory_order_relaxed);
+    while (count < cap)
+    {
+        if (gBackgroundCpuOutstanding.compare_exchange_weak(
+                count, count + 1U, std::memory_order_acq_rel,
+                std::memory_order_relaxed))
+            return true;
+    }
+    gBackgroundCpuRejected.fetch_add(1U, std::memory_order_relaxed);
+    return false;
+}
+
+void ReleaseBackgroundCpu() noexcept
+{
+    gBackgroundCpuOutstanding.fetch_sub(1U, std::memory_order_acq_rel);
+}
+
+BackgroundCpuAdmissionTelemetry BackgroundCpuAdmission() noexcept
+{
+    return {
+        .outstanding = gBackgroundCpuOutstanding.load(std::memory_order_acquire),
+        .rejected = gBackgroundCpuRejected.load(std::memory_order_relaxed),
+        .capacity = BackgroundCpuCapacity()
+    };
+}
+
+JobSystem& BackgroundCpuPool()
+{
+    static JobSystem pool(
+        PoolWorkerCount("ORBIT_BACKGROUND_CPU_WORKERS", 4U),
+        "BackgroundCpu");
+    return pool;
 }
 } // namespace orbit::jobs

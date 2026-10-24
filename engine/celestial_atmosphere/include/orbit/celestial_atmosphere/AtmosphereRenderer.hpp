@@ -5,8 +5,10 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
+#include <orbit/rhi/DeferredPipeline.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 
+#include <future>
 #include <memory>
 
 namespace orbit::celestial_atmosphere
@@ -54,6 +56,10 @@ public:
         const shader::Compiler& compiler);
     ~AtmosphereRenderer();
 
+    // Test before adding render-graph scratch/copyback passes: if the driver
+    // is compiling, a copyback from unwritten scratch would corrupt color.
+    [[nodiscard]] bool Ready();
+
     AtmosphereRenderer(const AtmosphereRenderer&) = delete;
     AtmosphereRenderer& operator=(const AtmosphereRenderer&) = delete;
 
@@ -71,7 +77,16 @@ public:
         const AtmosphereRenderView& view);
 
 private:
-    std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+    struct CompiledShaders
+    {
+        shader::Binary vertex;
+        shader::Binary pixel;
+    };
+    // DXC and Vulkan driver compilation have independent asynchronous stages.
+    // Neither stage may block Studio's command-recording thread.
+    rhi::Device* device_{nullptr};
+    std::future<CompiledShaders> pendingShaders_;
+    std::unique_ptr<rhi::DeferredGraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::Buffer> emptyTerrainShadow_;
 };
 } // namespace orbit::celestial_atmosphere

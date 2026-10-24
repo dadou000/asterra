@@ -9,7 +9,9 @@
 #include <orbit/rhi/Queue.hpp>
 #include <orbit/rhi/Swapchain.hpp>
 
+#include <future>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 namespace orbit::rhi
@@ -37,6 +39,14 @@ struct DeviceCapabilities
     bool calibratedTimestamps{false};
     u32 shaderModelMajor{0};
     u32 shaderModelMinor{0};
+};
+
+struct PipelineCompilationStats
+{
+    u64 queued{0U};
+    u64 compiling{0U};
+    u64 completed{0U};
+    u64 rejected{0U};
 };
 
 class Device
@@ -73,6 +83,37 @@ public:
 
     [[nodiscard]] virtual std::unique_ptr<ComputePipeline> CreateComputePipeline(
         const ComputePipelineDesc& desc) = 0;
+
+    // Optional driver-side pipeline compilation that never waits on the
+    // graphics-owning thread. The backend takes its own copies of bytecode
+    // and attribute arrays before returning. Nullopt means its bounded
+    // compile queue is full/unsupported; retry on a subsequent frame.
+    // The future is packaged-task-owned, never std::async joined at teardown.
+    [[nodiscard]] virtual std::optional<
+        std::future<std::unique_ptr<GraphicsPipeline>>>
+    TryCreateGraphicsPipelineAsync(const GraphicsPipelineDesc&)
+    {
+        return std::nullopt;
+    }
+
+    [[nodiscard]] virtual std::optional<
+        std::future<std::unique_ptr<ComputePipeline>>>
+    TryCreateComputePipelineAsync(const ComputePipelineDesc&)
+    {
+        return std::nullopt;
+    }
+
+    [[nodiscard]] virtual PipelineCompilationStats PipelineCompilation() noexcept
+    {
+        return {};
+    }
+
+    // GPU-completed Vulkan/VMA objects awaiting a bounded retirement pass.
+    // Supported backends override this for profiler/validation integration.
+    [[nodiscard]] virtual u64 PendingGpuRetirements() const noexcept
+    {
+        return 0U;
+    }
 
     [[nodiscard]] virtual std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -232,12 +233,22 @@ constexpr u32 kPushConstantDwords = 40;
 }
 } // namespace
 
+void GpuFieldGenerator::PrewarmShaders(const shader::Compiler& compiler)
+{
+    static_cast<void>(compiler.Compile({
+        .source = detail::kFieldGenerationComputeShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Compute,
+        .debug = false
+    }));
+}
+
 GpuFieldGenerator::GpuFieldGenerator(
     rhi::Device& device,
     const shader::Compiler& shaderCompiler,
     const world::PlanetDefinition planet,
     const terrain::AnalyticTerrainSource& source)
-    : planet_(planet)
+    : planet_(planet), device_(&device)
 {
     const shader::Binary compute = shaderCompiler.Compile({
         .source = detail::kFieldGenerationComputeShader,
@@ -253,14 +264,10 @@ GpuFieldGenerator::GpuFieldGenerator(
             "shader.");
     }
 
-    pipeline_ = device.CreateComputePipeline({
-        .computeShader = {
-            .data = compute.bytecode.data(),
-            .size = compute.bytecode.size()
-        },
-        .pushConstantDwords = kPushConstantDwords,
-        .shaderResourceBuffers = 7
-    });
+    computeBytecode_ = compute.bytecode;
+    // Driver compilation happens on VulkanDevice's own bounded worker, not
+    // inside terrain resource initialization or frame recording.
+    static_cast<void>(Ready());
 
     const terrain::AnalyticTerrainDesc& desc = source.Description();
     const auto& mountains = desc.mountains;
@@ -384,6 +391,26 @@ GpuFieldGenerator::GpuFieldGenerator(
         device, craterFloats.data(), craterFloats.size() * sizeof(f32));
 }
 
+bool GpuFieldGenerator::Ready() const
+{
+    if (pipeline_) return true;
+    if (!pendingPipeline_.valid())
+    {
+        auto admitted = device_->TryCreateComputePipelineAsync({
+            .computeShader = {computeBytecode_.data(), computeBytecode_.size()},
+            .pushConstantDwords = kPushConstantDwords,
+            .shaderResourceBuffers = 7
+        });
+        if (admitted) pendingPipeline_ = std::move(*admitted);
+    }
+    if (!pendingPipeline_.valid() ||
+        pendingPipeline_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        return false;
+    pipeline_ = pendingPipeline_.get();
+    return pipeline_ != nullptr;
+}
+
 GpuFieldGenerator::~GpuFieldGenerator() = default;
 
 void GpuFieldGenerator::Dispatch(
@@ -391,6 +418,9 @@ void GpuFieldGenerator::Dispatch(
     const GpuFieldRequest& request,
     rhi::Buffer& outputSamples) const
 {
+    if (!Ready())
+        throw std::runtime_error(
+            "Terrain compute dispatch attempted before pipeline publication.");
     const auto toFloat3 = [](const math::Double3& v) -> std::array<f32, 3>
     {
         return {

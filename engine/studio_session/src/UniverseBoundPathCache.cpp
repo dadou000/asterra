@@ -1,4 +1,8 @@
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/path_geometry/InfrastructureSectionBuilder.hpp>
+
+#include <chrono>
 
 #include <algorithm>
 #include <orbit/paths/PathNetwork.hpp>
@@ -109,7 +113,9 @@ void UniverseBoundPathCache::Store(
     corridorAuthoredSignatures_.erase(edge);
     dirtyCorridors_.erase(edge);
     rebuildErrors_.erase(edge);
-    products_[edge] = std::move(product);
+    products_[edge] = std::make_shared<const path_geometry::PathDerivedProduct>(
+        std::move(product));
+    ++contentRevision_;
     dependencySnapshots_[edge] = CaptureDependencies(edge);
 
     if (routeGeneration.has_value())
@@ -137,7 +143,17 @@ UniverseBoundPathCache::Find(
     const auto found = products_.find(edge);
     return found == products_.end()
         ? nullptr
-        : &found->second;
+        : found->second.get();
+}
+
+std::shared_ptr<const path_geometry::PathDerivedProduct>
+UniverseBoundPathCache::Snapshot(const scene::ObjectId edge) const noexcept
+{
+    if (world_ == nullptr || observedUniverseGeneration_ !=
+        world_->UniverseGeneration())
+        return {};
+    const auto found = products_.find(edge);
+    return found == products_.end() ? nullptr : found->second;
 }
 
 std::optional<u64>
@@ -211,10 +227,13 @@ std::size_t UniverseBoundPathCache::RefreshSemanticInvalidation()
         if (!world_->Objects().Find(edge).has_value())
         {
             routeGenerations_.erase(edge);
+            dirtyTokens_.erase(edge);
+            pendingCorridors_.erase(edge);
             corridorAuthoredSignatures_.erase(edge);
             dependencySnapshots_.erase(edge);
             dirtyCorridors_.erase(edge);
             it = products_.erase(it);
+            ++contentRevision_;
             ++invalidated;
             continue;
         }
@@ -235,39 +254,150 @@ std::size_t UniverseBoundPathCache::RebuildDirty(
     const RebuildResolver& resolver, const std::size_t budget)
 {
     static_cast<void>(RefreshBinding());
-    if (!resolver || budget == 0 || world_ == nullptr || !world_->HasWorld()) return 0;
+    if (!resolver || budget == 0 || world_ == nullptr || !world_->HasWorld())
+        return 0;
+
+    // Poll completed work without ever waiting for unfinished mesh generation.
+    // packaged_task futures can be discarded safely on invalidation.
+    for (auto it = pendingCorridors_.begin(); it != pendingCorridors_.end();)
+    {
+        if (it->second.result.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        {
+            ++it;
+            continue;
+        }
+        const scene::ObjectId edge = it->first;
+        auto& pending = it->second;
+        const bool current =
+            pending.bindingGeneration == bindingGeneration_ &&
+            pending.dirtyToken == dirtyTokens_[edge] &&
+            dirtyCorridors_.contains(edge) &&
+            pending.sourceDependencies == CaptureDependencies(edge);
+        if (current)
+        {
+            try
+            {
+                auto product = pending.result.get();
+                Store(std::move(product), pending.routeGeneration);
+                corridorAuthoredSignatures_[edge] = pending.authoredSignature;
+            }
+            catch (const std::exception& error)
+            {
+                rebuildErrors_[edge] = error.what();
+            }
+        }
+        it = pendingCorridors_.erase(it);
+    }
+
+    // Avoid unbounded allocation and background backlog during rapid editing.
+    constexpr u32 kMaxPendingCorridors = 8U;
+    if (pendingCorridors_.size() >= kMaxPendingCorridors ||
+        activeCorridorJobs_->load(std::memory_order_relaxed) >= kMaxPendingCorridors)
+        return 0;
+
     std::vector<scene::ObjectId> candidates;
     for (const auto edge : dirtyCorridors_)
-        if (!rebuildErrors_.contains(edge)) candidates.push_back(edge);
+        if (!rebuildErrors_.contains(edge) && !pendingCorridors_.contains(edge))
+            candidates.push_back(edge);
     std::sort(candidates.begin(), candidates.end(), [](const auto a, const auto b) {
         return a.high != b.high ? a.high < b.high : a.low < b.low;
     });
-    std::size_t processed = 0;
+
+    std::size_t scheduled = 0;
     for (const auto edge : candidates)
     {
-        if (processed >= budget) break;
-        ++processed;
+        if (scheduled >= budget ||
+            pendingCorridors_.size() >= kMaxPendingCorridors ||
+            activeCorridorJobs_->load(std::memory_order_relaxed) >= kMaxPendingCorridors)
+            break;
         try
         {
-            const auto request = resolver(edge);
+            auto request = resolver(edge);
             if (!request)
             {
                 rebuildErrors_[edge] = "No current corridor build request for edge.";
+                ++scheduled;
                 continue;
             }
-            if (request->centerline.edge != edge)
+            if (request->centerline.edge != edge &&
+                (!request->sourceRequest || request->sourceRequest->edge.id != edge))
                 throw std::invalid_argument("Rebuild request edge does not match dirty edge.");
-            static_cast<void>(StoreCorridorIfChanged(request->authoredSignature,
-                request->centerline, request->profile, request->corridor,
-                request->options, request->refinement, request->routeGeneration));
-            rebuildErrors_.erase(edge);
+
+            PendingCorridor pending{};
+            pending.authoredSignature = request->authoredSignature;
+            pending.routeGeneration = request->routeGeneration;
+            pending.bindingGeneration = bindingGeneration_;
+            pending.dirtyToken = dirtyTokens_[edge];
+            pending.sourceDependencies = CaptureDependencies(edge);
+            const auto activeJobs = activeCorridorJobs_;
+            activeJobs->fetch_add(1U, std::memory_order_relaxed);
+            try
+            {
+                auto admitted = jobs::TrySubmitBackgroundCpu(
+                    [snapshot = std::move(*request), activeJobs]() mutable {
+                        try
+                        {
+                            // Resolve all path geometry from the immutable
+                            // frame-local snapshot. No editor/world pointers
+                            // cross this job boundary.
+                            if (snapshot.sourceRequest)
+                            {
+                                std::string failure;
+                                auto builtCenterline = path_geometry::BuildPathCenterline(
+                                    *snapshot.sourceRequest, &failure);
+                                if (!builtCenterline)
+                                    throw std::runtime_error(failure.empty()
+                                        ? "Background path source sampling failed."
+                                        : failure);
+                                snapshot.centerline = std::move(*builtCenterline);
+                            }
+                            // Engineering and rail cant can involve a full
+                            // path derivation. Never run them in Studio.Tick.
+                            if (snapshot.autoPlanInfrastructure)
+                            {
+                                auto planned = path_geometry::PlanInfrastructureSection(
+                                    snapshot.centerline, snapshot.profile,
+                                    snapshot.options,
+                                    snapshot.designSpeedMetersPerSecond,
+                                    snapshot.applyAutomaticCant);
+                                snapshot.corridor = std::move(planned.section);
+                            }
+                            auto built = path_geometry::BuildCorridorDerived(
+                                snapshot.centerline, snapshot.profile,
+                                snapshot.corridor, snapshot.options,
+                                snapshot.refinement);
+                            activeJobs->fetch_sub(1U, std::memory_order_relaxed);
+                            return built;
+                        }
+                        catch (...)
+                        {
+                            activeJobs->fetch_sub(1U, std::memory_order_relaxed);
+                            throw;
+                        }
+                    }, jobs::JobPriority::Normal);
+                if (!admitted)
+                {
+                    activeJobs->fetch_sub(1U, std::memory_order_relaxed);
+                    break; // Next tick retries; do not mark this edit failed.
+                }
+                pending.result = std::move(*admitted);
+            }
+            catch (...)
+            {
+                activeJobs->fetch_sub(1U, std::memory_order_relaxed);
+                throw;
+            }
+            pendingCorridors_.emplace(edge, std::move(pending));
+            ++scheduled;
         }
         catch (const std::exception& error)
         {
             rebuildErrors_[edge] = error.what();
+            ++scheduled;
         }
     }
-    return processed;
+    return scheduled;
 }
 
 std::string UniverseBoundPathCache::RebuildError(const scene::ObjectId edge) const
@@ -281,9 +411,23 @@ std::size_t UniverseBoundPathCache::DirtyCount() const noexcept
     return dirtyCorridors_.size();
 }
 
+u64 UniverseBoundPathCache::ContentRevision() const noexcept
+{
+    return contentRevision_;
+}
+
 void UniverseBoundPathCache::MarkDirty(const scene::ObjectId edge) noexcept
 {
-    if (edge) { dirtyCorridors_.insert(edge); rebuildErrors_.erase(edge); }
+    if (edge)
+    {
+        dirtyCorridors_.insert(edge);
+        rebuildErrors_.erase(edge);
+        dirtyTokens_[edge] = ++nextDirtyToken_;
+        ++contentRevision_;
+        // Never destroy a std::async future here: background results are
+        // packaged tasks, so dropping an invalidated result cannot join.
+        pendingCorridors_.erase(edge);
+    }
 }
 
 bool UniverseBoundPathCache::IsDirty(const scene::ObjectId edge) const noexcept
@@ -294,17 +438,25 @@ bool UniverseBoundPathCache::IsDirty(const scene::ObjectId edge) const noexcept
 bool UniverseBoundPathCache::Erase(
     const scene::ObjectId edge) noexcept
 {
+    const bool wasDirty = dirtyCorridors_.contains(edge);
     routeGenerations_.erase(edge);
     dirtyCorridors_.erase(edge);
+    dirtyTokens_.erase(edge);
+    pendingCorridors_.erase(edge);
     rebuildErrors_.erase(edge);
     corridorAuthoredSignatures_.erase(edge);
     dependencySnapshots_.erase(edge);
-    return products_.erase(edge) != 0U;
+    const bool erased = products_.erase(edge) != 0U;
+    if (erased || wasDirty) ++contentRevision_;
+    return erased;
 }
 
 void UniverseBoundPathCache::Clear() noexcept
 {
+    ++contentRevision_;
     products_.clear();
+    pendingCorridors_.clear();
+    dirtyTokens_.clear();
     routeGenerations_.clear();
     corridorAuthoredSignatures_.clear();
     dependencySnapshots_.clear();
@@ -347,7 +499,7 @@ UniverseBoundPathCache::Products() const
     for (const auto& [edge, product] : products_)
     {
         static_cast<void>(edge);
-        result.push_back(&product);
+        result.push_back(product.get());
     }
 
     std::sort(

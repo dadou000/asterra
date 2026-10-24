@@ -116,25 +116,19 @@ void GpuProgress::SignalFromHost(const u64 serial) noexcept
 
 void GpuProgress::Retire(const u64 serial, std::function<void()> destroy)
 {
-    if (IsComplete(serial))
-    {
-        destroy();
-        return;
-    }
-
-    {
-        const std::lock_guard<std::mutex> lock(retireMutex_);
-        retired_.push_back({serial, std::move(destroy)});
-        retiredCount_.store(retired_.size(), std::memory_order_release);
-    }
+    // Even when the GPU serial is complete, do not run arbitrary expensive
+    // vkDestroy*/VMA work inline in the caller (often the editor thread).
+    // All regular retirement happens in budgeted collection below.
+    const std::lock_guard<std::mutex> lock(retireMutex_);
+    retired_.push_back({serial, std::move(destroy)});
+    retiredCount_.store(retired_.size(), std::memory_order_release);
 }
 
-void GpuProgress::Collect()
+void GpuProgress::Collect(const std::size_t maxReleases)
 {
-    if (retiredCount_.load(std::memory_order_acquire) == 0U)
-    {
+    if (maxReleases == 0U ||
+        retiredCount_.load(std::memory_order_acquire) == 0U)
         return;
-    }
 
     RefreshCompleted();
     const u64 completed = completed_.load(std::memory_order_acquire);
@@ -142,22 +136,31 @@ void GpuProgress::Collect()
     std::vector<Retired> ready;
     {
         const std::lock_guard<std::mutex> lock(retireMutex_);
-        const auto split = std::stable_partition(
-            retired_.begin(),
-            retired_.end(),
-            [completed](const Retired& item)
-            { return item.serial > completed; });
-        ready.assign(
-            std::make_move_iterator(split),
-            std::make_move_iterator(retired_.end()));
-        retired_.erase(split, retired_.end());
+        ready.reserve(std::min(maxReleases, retired_.size()));
+        std::size_t remaining = 0U;
+        for (std::size_t i = 0U; i < retired_.size(); ++i)
+        {
+            if (retired_[i].serial <= completed &&
+                ready.size() < maxReleases)
+            {
+                ready.push_back(std::move(retired_[i]));
+            }
+            else
+            {
+                // Compact in place; avoid repeated vector erase/memmove
+                // and preserve retirement order among deferred resources.
+                if (remaining != i)
+                    retired_[remaining] = std::move(retired_[i]);
+                ++remaining;
+            }
+        }
+        retired_.resize(remaining);
         retiredCount_.store(retired_.size(), std::memory_order_release);
     }
 
+    // Never hold the retirement mutex during Vulkan driver calls.
     for (auto& item : ready)
-    {
         item.destroy();
-    }
 }
 
 void GpuProgress::Flush()

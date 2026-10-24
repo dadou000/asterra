@@ -175,6 +175,26 @@ int main()
                 curved->samples.size() /
                 2U].
                 position.z > 0.0);
+
+        // The background-ready source requires no access to the mutable
+        // frame graph or body registry. Its samples must match exactly.
+        const auto resolved = orbit::path_geometry::BuildPathCenterline({
+            .edge = bezier,
+            .startNode = start,
+            .endNode = end,
+            .targetFrame = root,
+            .resolvedFramePointAnchors = true,
+            .curveSampleSpacingMeters = 2.0
+        });
+        ORBIT_TEST_CHECK(resolved.has_value());
+        ORBIT_TEST_CHECK(resolved->samples.size() == curved->samples.size());
+        for (std::size_t sample = 0; sample < resolved->samples.size(); ++sample)
+        {
+            ORBIT_TEST_CHECK(resolved->samples[sample].position ==
+                curved->samples[sample].position);
+            ORBIT_TEST_CHECK(resolved->samples[sample].up ==
+                curved->samples[sample].up);
+        }
     }
 
     {

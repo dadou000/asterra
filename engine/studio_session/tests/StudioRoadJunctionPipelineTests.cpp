@@ -6,6 +6,9 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <chrono>
+#include <thread>
+#include <vector>
 
 #define CHECK(x) do {if(!(x)){std::cerr<<"StudioRoadJunctionPipeline: " #x " at "<<__LINE__<<'\n';return 1;}}while(false)
 
@@ -49,12 +52,28 @@ int main()
         for(const auto edge:{e.id,w.id,n.id})
             paths.SetInfrastructureIntent(
                 edge,"rural-road",1,"terrain",60.0,true);
-        for(int i=0;i<12;++i)static_cast<void>(studio.Tick(false));
+        const auto firstPublicationDeadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < firstPublicationDeadline)
+        {
+            static_cast<void>(studio.Tick(false));
+            if (studio.PathProducts().Find(e.id) &&
+                studio.PathProducts().Find(w.id) &&
+                studio.PathProducts().Find(n.id) &&
+                studio.RoadJunctions().ActiveJunctions() == 1U) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
         CHECK(studio.PathProducts().Find(e.id)!=nullptr);
         CHECK(studio.PathProducts().Find(w.id)!=nullptr);
         CHECK(studio.PathProducts().Find(n.id)!=nullptr);
         const auto& pipeline=studio.RoadJunctions();
         CHECK(pipeline.ActiveJunctions()==1U);
+        const auto stableCacheRevision = studio.PathProducts().ContentRevision();
+        const auto stableJunctionRevision = pipeline.Revision();
+        for (int idleTick = 0; idleTick < 8; ++idleTick)
+            static_cast<void>(studio.Tick(false));
+        CHECK(studio.PathProducts().ContentRevision() == stableCacheRevision);
+        CHECK(pipeline.Revision() == stableJunctionRevision);
         CHECK(pipeline.FindPatch(centre.id)!=nullptr);
         CHECK(pipeline.FindEdge(e.id)!=nullptr);
         CHECK(pipeline.FindEdge(e.id)->product.visualMesh.indices.size()<
@@ -121,7 +140,7 @@ int main()
                 {"params",rpc::Value::Object{
                     {"action","step"},{"node",centre.id.ToString()},
                     {"steps",static_cast<i64>(1)}}
-            });
+            }});
             const auto reply=studio.DispatchRpc(rpc::Serialize(step));
             CHECK(reply.has_value());
             const auto value=rpc::ParseValue(*reply);
@@ -134,7 +153,14 @@ int main()
 
         CHECK(!pipeline.ProbeContact(centre.id,studio.PathProducts(),
             {.frame=frame,.origin={2,10,3}}).has_value());
-        for(int i=0;i<12;++i)static_cast<void>(studio.Tick(false));
+        const auto recoveryDeadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < recoveryDeadline)
+        {
+            static_cast<void>(studio.Tick(false));
+            if (pipeline.CurrentContact(centre.id, studio.PathProducts())) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
         CHECK(pipeline.CurrentContact(centre.id,studio.PathProducts())!=nullptr);
 
 
@@ -174,7 +200,7 @@ int main()
                 {"method","infrastructure.vehicle_world"},
                 {"params",rpc::Value::Object{
                     {"action","spawn"},{"node",centre.id.ToString()}}
-            });
+            }});
             const auto reply=studio.DispatchRpc(rpc::Serialize(spawn));
             CHECK(reply.has_value());
             const auto parsed=rpc::ParseValue(*reply);
@@ -193,7 +219,7 @@ int main()
                 {"params",rpc::Value::Object{
                     {"action","step"},{"node",centre.id.ToString()},
                     {"steps",static_cast<i64>(60)}}
-            });
+            }});
             const auto stepped=studio.DispatchRpc(rpc::Serialize(step));
             CHECK(stepped.has_value());
             const auto stepValue=rpc::ParseValue(*stepped);
@@ -211,13 +237,66 @@ int main()
         const auto beforeSignature=beforeContact->packetSignature;
         paths.SetNodeAnchor(east.id,paths::FramePointAnchor{
             .frame=frame,.localMeters={38,0,0}});
-        for(int i=0;i<12;++i)static_cast<void>(studio.Tick(false));
+        const auto editedRoadDeadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < editedRoadDeadline)
+        {
+            static_cast<void>(studio.Tick(false));
+            const auto* contact = studio.RoadJunctions().CurrentContact(
+                centre.id, studio.PathProducts());
+            if (contact && contact->packetSignature != beforeSignature) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
         CHECK(studio.RoadJunctions().Revision()>previous);
         CHECK(studio.RoadJunctions().FindPatch(centre.id)!=nullptr);
         const auto afterContact=studio.RoadJunctions().CurrentContact(
             centre.id,studio.PathProducts());
         CHECK(afterContact!=nullptr);
         CHECK(afterContact->packetSignature!=beforeSignature);
+
+        // Build a scene much larger than one discovery tick. The prior
+        // contact must be retired immediately, and the junction must be
+        // republished only after all 96-record discovery slices complete.
+        for (int i = 0; i < 150; ++i)
+            static_cast<void>(paths.CreateNode(network.id,
+                "Unused " + std::to_string(i),
+                paths::FramePointAnchor{.frame=frame,
+                    .localMeters={0.0, 0.0, 100.0 + i}}));
+        // A 37-item SQL page must preserve the canonical sibling order,
+        // include every node exactly once, and finish with an empty page.
+        const auto fullChildren = world.Objects().Children(network.id);
+        std::vector<scene::ObjectRecord> pagedChildren;
+        for (std::size_t offset = 0; offset < fullChildren.size(); offset += 37U)
+        {
+            auto page = world.Objects().ChildrenPage(network.id, 37U,
+                static_cast<u32>(offset));
+            CHECK(!page.empty() && page.size() <= 37U);
+            pagedChildren.insert(pagedChildren.end(),
+                page.begin(), page.end());
+        }
+        CHECK(pagedChildren == fullChildren);
+        CHECK(world.Objects().ChildrenPage(network.id, 37U,
+            static_cast<u32>(fullChildren.size())).empty());
+        const auto fullRoots = world.Objects().Roots();
+        CHECK(world.Objects().RootsPage(1U, 0U).size() == 1U);
+        CHECK(world.Objects().RootsPage(1U,
+            static_cast<u32>(fullRoots.size())).empty());
+        static_cast<void>(studio.Tick(false));
+        CHECK(studio.RoadJunctions().ActiveContactScenes()==0U);
+        CHECK(studio.RoadJunctions().CurrentContact(
+            centre.id,studio.PathProducts())==nullptr);
+        const auto discoveryDeadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < discoveryDeadline)
+        {
+            static_cast<void>(studio.Tick(false));
+            if (studio.RoadJunctions().CurrentContact(
+                    centre.id,studio.PathProducts()) != nullptr)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        CHECK(studio.RoadJunctions().CurrentContact(
+            centre.id,studio.PathProducts())!=nullptr);
         // The previous temporary vehicle remains explicit but cannot step
         // using the new geometry until re-bound (which clears old actors).
         CHECK(studio.Vehicles().Find(runtimeVehicle)!=nullptr);

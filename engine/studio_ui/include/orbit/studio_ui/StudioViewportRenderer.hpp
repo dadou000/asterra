@@ -424,6 +424,18 @@ public:
         return flatMapRenderer_.Status(viewportId);
     }
 
+    [[nodiscard]] bool HasDrawnProductionTerrain() const noexcept
+    {
+        for (const auto& [id, presentation] : terrainPresentations_)
+        {
+            static_cast<void>(id);
+            if (presentation.renderer &&
+                presentation.renderer->StreamingStats().drawCallsLastFrame > 0U)
+                return true;
+        }
+        return false;
+    }
+
     [[nodiscard]] celestial_globe::MacroGlobeWorkStats TerrainWorkStats() const noexcept
     {
         return macroGlobeRenderer_.WorkStats();
@@ -602,6 +614,12 @@ private:
         terrain_debug::TerrainDebugField field{terrain_debug::TerrainDebugField::Uplift};
         u64 seamFingerprint{0};
     };
+    struct CloudBuiltProduct
+    {
+        celestial_clouds::CloudFieldProduct field;
+        f64 meanCoverage{0.0};
+        f64 meanOpticalDepth{0.0};
+    };
     struct CloudPresentation
     {
         universe::BodyId body{};
@@ -611,7 +629,9 @@ private:
         // The next field being built off the render thread: building one takes about a second (the weather noise over six faces), and the
         // simulation clock asks for a new one every simulated second, so playing at rate 1 or more used to stall the frame each time.
         // Until it lands the previous field keeps drawing.
-        std::future<celestial_clouds::CloudFieldProduct> pending;
+        std::future<CloudBuiltProduct> pending;
+        f64 meanCoverage{0.0};
+        f64 meanOpticalDepth{0.0};
         bool hasPending{false};
         u64 pendingFingerprint{0};
         universe::BodyId pendingBody{};
@@ -673,7 +693,11 @@ private:
         u64 staticFingerprint{0};
         u64 skyFingerprint{0};
         celestial_atmosphere::AtmosphereParameters parameters{};
-        std::unique_ptr<celestial_atmosphere::AtmosphereStaticLuts> staticLuts;
+        std::shared_ptr<const celestial_atmosphere::AtmosphereStaticLuts> staticLuts;
+        std::future<celestial_atmosphere::AtmosphereStaticLuts> pendingStatic;
+        std::future<celestial_atmosphere::AtmosphereSkyView> pendingSky;
+        u64 pendingStaticFingerprint{0U}, pendingSkyFingerprint{0U};
+        universe::BodyId pendingStaticBody{}, pendingSkyBody{};
         std::unique_ptr<celestial_atmosphere::AtmosphereSkyView> skyView;
         std::unique_ptr<celestial_atmosphere::GpuAtmosphereLuts> gpu;
     };
@@ -950,8 +974,18 @@ private:
     std::map<std::string, MagnetospherePresentation, std::less<>> magnetospherePresentations_;
     std::map<std::string, StudioOceanDiagnostics, std::less<>> oceanDiagnostics_;
     std::map<std::string, StudioCloudDiagnostics, std::less<>> cloudDiagnostics_;
+    // std::async futures must not be destroyed while still running on the
+    // render thread: their destructors can join the asynchronous worker.
+    // Retired work stays owned until a zero-time readiness poll completes.
+    std::vector<std::future<CloudBuiltProduct>> retiredCloudBuilds_;
+    void RetireCloudPresentation(const std::string& viewportId);
+    void CollectRetiredCloudJobs();
     std::map<std::string, CloudPresentation, std::less<>> cloudPresentations_;
     std::map<std::string, StudioAtmosphereDiagnostics, std::less<>> atmosphereDiagnostics_;
+    std::vector<std::future<celestial_atmosphere::AtmosphereStaticLuts>> retiredAtmosphereStatic_;
+    std::vector<std::future<celestial_atmosphere::AtmosphereSkyView>> retiredAtmosphereSky_;
+    void RetireAtmospherePresentation(const std::string& viewportId);
+    void CollectRetiredAtmosphereJobs();
     std::map<std::string, AtmospherePresentation, std::less<>> atmospherePresentations_;
     // Per-view composite target for the atmosphere pass (scene is read while
     // the result is written, then copied back into the view's scene color).
@@ -999,6 +1033,11 @@ private:
     std::map<std::string, FinalGatherPresentation, std::less<>> finalGatherPresentations_;
     std::map<std::string, LuminanceHistogramPresentation, std::less<>> luminanceHistogramPresentations_;
     std::map<std::string, MacroGlobePresentation, std::less<>> macroGlobePresentations_;
+    // Immutable shader compilation can run on a worker while Studio keeps
+    // presenting the orbital/fallback view. Vulkan resources remain render-owned.
+    std::future<void> terrainShaderPrewarm_;
+    bool terrainShadersWarm_{false};
+    bool terrainShadersFailed_{false};
     std::map<std::string, TerrainPresentation, std::less<>> terrainPresentations_;
 };
 } // namespace orbit::studio_ui

@@ -1119,39 +1119,85 @@ StudioTickResult StudioSession::Tick(
     result.pathProductsInvalidated =
         pathProducts_.RefreshBinding();
     static_cast<void>(pathProducts_.RefreshSemanticInvalidation());
-    // Discover only newly authored infrastructure edges. Reuse scene revision
-    // to avoid rescanning unrelated world objects during steady-state ticks.
+    // Incremental scene discovery: a single root can contain thousands of
+    // authored roads. Keep the owner-thread SQLite/scene reads here, but cap
+    // semantic work per tick so world edits cannot freeze frame recording.
     const u64 sceneRevision = world_.Objects().Revision();
     if (infrastructureDiscoveryWorldGeneration_ != world_.Generation() ||
         infrastructureDiscoveryRevision_ != sceneRevision)
     {
         infrastructureDiscoveryWorldGeneration_ = world_.Generation();
         infrastructureDiscoveryRevision_ = sceneRevision;
-        const auto roots = world_.Objects().Roots();
-        for (const auto& root : roots)
+        infrastructureDiscoveryParents_.clear();
+        infrastructureDiscoveryChildren_.clear();
+        infrastructureDiscoveryActiveParent_.reset();
+        infrastructureDiscoveryChildOffset_ = 0U;
+        infrastructureDiscoveryRootOffset_ = 0U;
+        infrastructureDiscoveryRootsExhausted_ = false;
+        infrastructureDiscoveryChildCursor_ = 0U;
+    }
+    constexpr std::size_t kInfrastructureObjectsPerTick = 96U;
+    std::size_t discovered = 0U;
+    while (discovered < kInfrastructureObjectsPerTick)
+    {
+        if (infrastructureDiscoveryChildCursor_ >=
+            infrastructureDiscoveryChildren_.size())
         {
-            // Iterative traversal; path networks may be nested under world folders.
-            std::vector<scene::ObjectId> pending{root.id};
-            while (!pending.empty())
+            infrastructureDiscoveryChildren_.clear();
+            infrastructureDiscoveryChildCursor_ = 0U;
+            if (!infrastructureDiscoveryActiveParent_)
             {
-                const auto parent = pending.back();
-                pending.pop_back();
-                for (const auto& child : world_.Objects().Children(parent))
+                if (infrastructureDiscoveryParents_.empty() &&
+                    !infrastructureDiscoveryRootsExhausted_)
                 {
-                    if (child.type == paths::kPathEdgeType)
-                    {
-                        const auto edge = pathNetwork_.Service().FindEdge(child.id);
-                        if (edge && !edge->infrastructureCatalogId.empty() &&
-                            pathProducts_.Find(edge->id) == nullptr &&
-                            !pathProducts_.IsDirty(edge->id))
-                            pathProducts_.MarkDirty(edge->id);
-                    }
-                    else if (child.type != paths::kPathNodeType)
-                    {
-                        pending.push_back(child.id);
-                    }
+                    auto roots = world_.Objects().RootsPage(
+                        static_cast<u32>(kInfrastructureObjectsPerTick),
+                        infrastructureDiscoveryRootOffset_);
+                    infrastructureDiscoveryRootOffset_ +=
+                        static_cast<u32>(roots.size());
+                    if (roots.size() < kInfrastructureObjectsPerTick)
+                        infrastructureDiscoveryRootsExhausted_ = true;
+                    discovered += roots.size();
+                    for (const auto& root : roots)
+                        infrastructureDiscoveryParents_.push_back(root.id);
+                    if (discovered >= kInfrastructureObjectsPerTick)
+                        break;
                 }
+                if (infrastructureDiscoveryParents_.empty()) break;
+                infrastructureDiscoveryActiveParent_ =
+                    infrastructureDiscoveryParents_.back();
+                infrastructureDiscoveryParents_.pop_back();
+                infrastructureDiscoveryChildOffset_ = 0U;
             }
+            ++discovered; // Every SQLite query consumes some frame budget.
+            auto page = world_.Objects().ChildrenPage(
+                *infrastructureDiscoveryActiveParent_,
+                static_cast<u32>(kInfrastructureObjectsPerTick),
+                infrastructureDiscoveryChildOffset_);
+            infrastructureDiscoveryChildOffset_ +=
+                static_cast<u32>(page.size());
+            if (page.empty())
+            {
+                infrastructureDiscoveryActiveParent_.reset();
+                continue;
+            }
+            infrastructureDiscoveryChildren_ = std::move(page);
+            continue;
+        }
+        const auto& child = infrastructureDiscoveryChildren_[
+            infrastructureDiscoveryChildCursor_++];
+        ++discovered;
+        if (child.type == paths::kPathEdgeType)
+        {
+            const auto edge = pathNetwork_.Service().FindEdge(child.id);
+            if (edge && !edge->infrastructureCatalogId.empty() &&
+                pathProducts_.Find(edge->id) == nullptr &&
+                !pathProducts_.IsDirty(edge->id))
+                pathProducts_.MarkDirty(edge->id);
+        }
+        else if (child.type != paths::kPathNodeType)
+        {
+            infrastructureDiscoveryParents_.push_back(child.id);
         }
     }
     // Bounded initial production resolver for authored *frame-local* road/rail
@@ -1195,27 +1241,44 @@ StudioTickResult StudioSession::Tick(
             source.startNode = *a;
             source.endNode = *b;
             source.targetFrame = fa->frame;
-            source.frames = &world_.Universe().Frames();
-            source.bodies = &world_.Universe().Bodies();
+            source.resolvedFramePointAnchors = true;
             source.atTime = clock_.Time();
             source.sourceRevision = world_.Objects().Revision();
-            const auto centerline = path_geometry::BuildPathCenterline(source);
-            if (!centerline) return std::nullopt;
+            // Snapshot the body's reference shape while owning the universe.
+            // A worker must never scan the live frame/body registry.
+            const auto& bodies = world_.Universe().Bodies();
+            for (const auto system : bodies.Systems())
+            {
+                if (source.resolvedBodyShape) break;
+                for (const auto bodyId : bodies.Bodies(system))
+                {
+                    const auto* body = bodies.FindBody(bodyId);
+                    if (body != nullptr && body->frame == fa->frame)
+                    {
+                        source.resolvedBodyShape = body->shape;
+                        break;
+                    }
+                }
+            }
             // Domain recipe, not another hand-authored Studio-specific
             // triangle set. Curvature and design speed can generate bounded
             // railway cant in the same station frame as the swept railhead.
-            const auto planned = path_geometry::PlanInfrastructureSection(
-                *centerline, profile, {},
-                edge->designSpeedKmh > 0.0 ?
-                    edge->designSpeedKmh / 3.6 :
-                    (isRail?85.0:roadPreset->designSpeedKmh)/3.6,
-                edge->easeTurns);
+            // Planning/engineering/cant and final mesh production now run
+            // together on a bounded CPU worker. Only authoritative source
+            // resolution and immutable input capture occur on this thread.
             UniverseBoundPathCache::RebuildRequest request{};
             request.authoredSignature = world_.Objects().Revision();
             if (request.authoredSignature == 0U) request.authoredSignature = 1U;
-            request.centerline = *centerline;
+            // Defer adaptive Bézier tessellation to the CPU job too.
+            request.centerline.edge = edge->id;
+            request.centerline.frame = fa->frame;
+            request.sourceRequest = std::move(source);
             request.profile = std::move(profile);
-            request.corridor = planned.section;
+            request.autoPlanInfrastructure = true;
+            request.designSpeedMetersPerSecond = edge->designSpeedKmh > 0.0
+                ? edge->designSpeedKmh / 3.6
+                : (isRail ? 85.0 : roadPreset->designSpeedKmh) / 3.6;
+            request.applyAutomaticCant = edge->easeTurns;
             return request;
         }, 2U));
     // Stage one complete immutable road junction generation after all

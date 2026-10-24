@@ -8,6 +8,10 @@
 #include <format>
 #include <stdexcept>
 #include <vector>
+#include <fstream>
+#include <filesystem>
+#include <system_error>
+#include <mutex>
 
 namespace orbit::rhi::vulkan
 {
@@ -708,6 +712,228 @@ struct ValidationFeatureRequest
 }
 } // namespace
 
+// Cache content and path are tied to the Vulkan implementation and device.
+// Vulkan performs the definitive header check as well; we reject obviously
+// incompatible or corrupted files before invoking the driver.
+void VulkanDevice::InitializePipelineCache() noexcept
+{
+    try
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+        std::array<wchar_t, 32768> home{};
+        const DWORD chars = GetEnvironmentVariableW(
+            L"LOCALAPPDATA", home.data(), static_cast<DWORD>(home.size()));
+        const auto base = chars > 0U && chars < home.size()
+            ? std::filesystem::path(home.data())
+            : std::filesystem::temp_directory_path();
+        const auto directory = base / "Orbit" / "PipelineCache";
+        std::error_code fsError;
+        std::filesystem::create_directories(directory, fsError);
+        if (!fsError)
+        {
+            pipelineCachePath_ = directory / std::format(
+                "v1_{:08x}_{:08x}_{:08x}.bin",
+                props.vendorID, props.deviceID, props.driverVersion);
+        }
+
+        constexpr std::size_t kMaxCacheBytes = 64U * 1024U * 1024U;
+        std::vector<u8> saved;
+        if (!pipelineCachePath_.empty())
+        {
+            std::ifstream file(pipelineCachePath_, std::ios::binary | std::ios::ate);
+            if (file)
+            {
+                const auto end = file.tellg();
+                if (end > 0 && end <= static_cast<std::streamoff>(kMaxCacheBytes))
+                {
+                    saved.resize(static_cast<std::size_t>(end));
+                    file.seekg(0);
+                    file.read(reinterpret_cast<char*>(saved.data()),
+                        static_cast<std::streamsize>(saved.size()));
+                    if (!file || saved.size() < sizeof(VkPipelineCacheHeaderVersionOne))
+                        saved.clear();
+                    else
+                    {
+                        VkPipelineCacheHeaderVersionOne header{};
+                        std::memcpy(&header, saved.data(), sizeof(header));
+                        if (header.headerSize < sizeof(header) ||
+                            header.headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE ||
+                            header.vendorID != props.vendorID ||
+                            header.deviceID != props.deviceID ||
+                            std::memcmp(header.pipelineCacheUUID,
+                                props.pipelineCacheUUID, VK_UUID_SIZE) != 0)
+                            saved.clear();
+                    }
+                }
+            }
+        }
+
+        VkPipelineCacheCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+        createInfo.initialDataSize = saved.size();
+        createInfo.pInitialData = saved.empty() ? nullptr : saved.data();
+        if (vkCreatePipelineCache(nativeDevice_, &createInfo, nullptr,
+                &pipelineCache_) != VK_SUCCESS)
+        {
+            // Device remains usable if a cached blob is rejected. Recreate
+            // an empty cache and avoid replaying the bad data next launch.
+            createInfo.initialDataSize = 0U;
+            createInfo.pInitialData = nullptr;
+            pipelineCache_ = VK_NULL_HANDLE;
+            static_cast<void>(vkCreatePipelineCache(
+                nativeDevice_, &createInfo, nullptr, &pipelineCache_));
+        }
+        // Give the slow compilation worker its own cache instance, seeded
+        // from the same disk blob. Render-thread creation never locks behind
+        // vkCreate*Pipelines on the worker; caches merge at shutdown.
+        if (vkCreatePipelineCache(nativeDevice_, &createInfo, nullptr,
+                &pipelineWorkerCache_) != VK_SUCCESS)
+        {
+            createInfo.initialDataSize = 0U;
+            createInfo.pInitialData = nullptr;
+            static_cast<void>(vkCreatePipelineCache(
+                nativeDevice_, &createInfo, nullptr, &pipelineWorkerCache_));
+        }
+        log::Info(pipelineCache_ != VK_NULL_HANDLE
+            ? "Vulkan persistent pipeline cache initialized."
+            : "Vulkan pipeline cache unavailable; using uncached creation.");
+    }
+    catch (...)
+    {
+        // A corrupted filesystem or missing cache directory may not prevent
+        // rendering. VK_NULL_HANDLE remains a valid pipeline cache argument.
+        pipelineCachePath_.clear();
+    }
+}
+
+void VulkanDevice::SavePipelineCache() noexcept
+{
+    if (pipelineCache_ == VK_NULL_HANDLE &&
+        pipelineWorkerCache_ == VK_NULL_HANDLE) return;
+    {
+        std::scoped_lock lock(pipelineCacheMutex_);
+        if (pipelineCache_ != VK_NULL_HANDLE &&
+            pipelineWorkerCache_ != VK_NULL_HANDLE)
+        {
+            static_cast<void>(vkMergePipelineCaches(
+                nativeDevice_, pipelineCache_, 1U, &pipelineWorkerCache_));
+        }
+        if (pipelineCache_ == VK_NULL_HANDLE)
+        {
+            pipelineCache_ = pipelineWorkerCache_;
+            pipelineWorkerCache_ = VK_NULL_HANDLE;
+        }
+        try
+        {
+            if (!pipelineCachePath_.empty())
+            {
+                std::size_t size = 0U;
+                if (vkGetPipelineCacheData(nativeDevice_, pipelineCache_,
+                        &size, nullptr) == VK_SUCCESS &&
+                    size >= sizeof(VkPipelineCacheHeaderVersionOne) &&
+                    size <= 64U * 1024U * 1024U)
+                {
+                    std::vector<u8> data(size);
+                    if (vkGetPipelineCacheData(nativeDevice_, pipelineCache_,
+                            &size, data.data()) == VK_SUCCESS)
+                    {
+                        const auto temp = pipelineCachePath_.wstring() + L".tmp";
+                        std::ofstream output(std::filesystem::path(temp),
+                            std::ios::binary | std::ios::trunc);
+                        if (output)
+                        {
+                            output.write(reinterpret_cast<const char*>(data.data()),
+                                static_cast<std::streamsize>(size));
+                            output.flush();
+                            if (output.good())
+                            {
+                                output.close();
+                                static_cast<void>(MoveFileExW(temp.c_str(),
+                                    pipelineCachePath_.c_str(),
+                                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch (...) {}
+        vkDestroyPipelineCache(nativeDevice_, pipelineCache_, nullptr);
+        pipelineCache_ = VK_NULL_HANDLE;
+        if (pipelineWorkerCache_ != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineCache(nativeDevice_, pipelineWorkerCache_, nullptr);
+            pipelineWorkerCache_ = VK_NULL_HANDLE;
+        }
+    }
+}
+
+bool VulkanDevice::TryQueuePipelineCompile(std::function<void()> work)
+{
+    std::scoped_lock lock(pipelineQueueMutex_);
+    if (pipelineQueueStopping_ || !pipelineCompileThread_.joinable() ||
+        pipelineQueue_.size() + pipelineCompilesInProgress_ >=
+            kMaxOutstandingPipelineCompiles)
+    {
+        ++pipelineCompilesRejected_;
+        return false;
+    }
+    pipelineQueue_.push_back(std::move(work));
+    pipelineQueueCv_.notify_one();
+    return true;
+}
+
+void VulkanDevice::PipelineCompileLoop() noexcept
+{
+    // Cold Vulkan driver compilations are allowed to spend substantial CPU
+    // time, but they must not preempt the event/render thread.
+    static_cast<void>(SetThreadPriority(
+        GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL));
+    static_cast<void>(SetThreadDescription(
+        GetCurrentThread(), L"Orbit.VulkanPipeline"));
+    while (true)
+    {
+        std::function<void()> work;
+        {
+            std::unique_lock lock(pipelineQueueMutex_);
+            pipelineQueueCv_.wait(lock, [this] {
+                return pipelineQueueStopping_ || !pipelineQueue_.empty();
+            });
+            if (pipelineQueue_.empty() && pipelineQueueStopping_)
+                return;
+            work = std::move(pipelineQueue_.front());
+            pipelineQueue_.pop_front();
+            ++pipelineCompilesInProgress_;
+        }
+        try { work(); }
+        catch (...) { /* Packaged tasks own their exceptions. */ }
+        {
+            std::scoped_lock lock(pipelineQueueMutex_);
+            --pipelineCompilesInProgress_;
+            ++pipelineCompilesCompleted_;
+        }
+    }
+}
+
+u64 VulkanDevice::PendingGpuRetirements() const noexcept
+{
+    return progress_ != nullptr
+        ? static_cast<u64>(progress_->PendingRetirementCount())
+        : 0U;
+}
+
+PipelineCompilationStats VulkanDevice::PipelineCompilation() noexcept
+{
+    std::scoped_lock lock(pipelineQueueMutex_);
+    return {
+        .queued = static_cast<u64>(pipelineQueue_.size()),
+        .compiling = static_cast<u64>(pipelineCompilesInProgress_),
+        .completed = pipelineCompilesCompleted_,
+        .rejected = pipelineCompilesRejected_
+    };
+}
+
 VulkanDevice::VulkanDevice(
     const VkInstance instance,
     const VkPhysicalDevice physicalDevice,
@@ -751,6 +977,18 @@ VulkanDevice::VulkanDevice(
         throw std::runtime_error(
             "Orbit failed to create the default Vulkan sampler.");
     }
+    InitializePipelineCache();
+    try
+    {
+        pipelineCompileThread_ = std::thread([this] {
+            PipelineCompileLoop();
+        });
+    }
+    catch (const std::system_error& error)
+    {
+        log::Warning(std::string("Cold Vulkan pipeline worker unavailable: ") +
+            error.what());
+    }
 }
 
 RenderDocCapture* VulkanDevice::GetRenderDocCapture() const noexcept
@@ -770,10 +1008,21 @@ VkSampler VulkanDevice::DefaultSampler() const noexcept
 
 VulkanDevice::~VulkanDevice()
 {
+    // Drain pipeline driver calls before invalidating VkDevice or persisting
+    // the cache. This join occurs only at device teardown, never per frame.
+    {
+        std::scoped_lock lock(pipelineQueueMutex_);
+        pipelineQueueStopping_ = true;
+    }
+    pipelineQueueCv_.notify_all();
+    if (pipelineCompileThread_.joinable())
+        pipelineCompileThread_.join();
+
     if (nativeDevice_ != VK_NULL_HANDLE)
     {
         vkDeviceWaitIdle(nativeDevice_);
     }
+    SavePipelineCache();
 
     // Deferred destroys call into the allocator and device, so they run
     // (and the progress timeline goes) before either is torn down.

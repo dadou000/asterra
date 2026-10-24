@@ -1,5 +1,6 @@
 #include "StudioWorkspaceRpc.hpp"
 #include "StudioApplication.hpp"
+#include "StudioGpuSubmitWorker.hpp"
 #include <orbit/build/BuildService.hpp>
 #include <orbit/commands/CommandRegistry.hpp>
 #include <orbit/commands/CommandService.hpp>
@@ -242,6 +243,9 @@ int orbit::editor_app::StudioApplication::Run(
     char** argv)
 {
     orbit::core::SetCurrentThreadName("Orbit.Main");
+    // The current renderer still shares this thread with Studio updates.
+    // Keep it responsive when procedural pools are saturated.
+    orbit::core::SetForegroundThreadPriority();
 
     // Always-on micro-profiler: per-thread scope rings plus a hitch/stall
     // watchdog on this (the frame-driving) thread. See docs/ORBIT_PROFILER.md.
@@ -2603,6 +2607,16 @@ int orbit::editor_app::StudioApplication::Run(
             frame.commands = device.CreateCommandList(*frame.allocator);
         }
         orbit::u32 nextFrameSlot = 0U;
+        // Opt-in until the trusted Windows/Vulkan smoke and validation gate
+        // passes. The worker owns only Submit/Present/Signal; live Studio and
+        // ImGui state, command recording and resource creation remain here.
+        const bool threadedGpuSubmit =
+            orbit::platform::EnvironmentVariable(
+                "ORBIT_THREADED_GPU_SUBMIT") == "1";
+        orbit::editor_app::StudioGpuSubmitWorker gpuSubmit(threadedGpuSubmit);
+        orbit::log::Info(threadedGpuSubmit
+            ? "Studio asynchronous GPU submission enabled."
+            : "Studio GPU submission remains on the foreground thread.");
         orbit::u32 previousRadianceUpdateCount = 64U;
 
         using Clock =
@@ -2643,6 +2657,7 @@ int orbit::editor_app::StudioApplication::Run(
         bool terrainUiSmokeValidated = false;
         orbit::u32 terrainUiSmokeAttempts = 0U;
         orbit::u32 terrainUiSmokeRenderedFrames = 0U;
+        const auto terrainUiSmokeStarted = Clock::now();
         const std::filesystem::path
             terrainUiSmokeCapture =
                 terrainUiSmokeRoot /
@@ -2676,8 +2691,23 @@ int orbit::editor_app::StudioApplication::Run(
         bool fullscreenKeyWasDown = false;
         auto fullscreenLastFrame = Clock::now();
 
+        // Construct the shared background CPU pool before measuring frames.
+        // Thread creation must not become an on-demand viewport hitch.
+        static_cast<void>(orbit::jobs::BackgroundCpuPool());
+
         while (window.PumpEvents())
         {
+            // The worker may still own the last recorded command packet,
+            // swapchain presentation state and its render-graph resources.
+            // Before touching any of them again, require nonblocking receipt
+            // of the previous submission acknowledgment. Window/RPC messages
+            // continue to be pumped on each skipped render iteration.
+            std::optional<orbit::editor_app::SubmissionResult> submittedPacket;
+            if (!gpuSubmit.Poll(&submittedPacket))
+            {
+                window.WaitForActivity(1U);
+                continue;
+            }
             {
                 const auto paceNow = Clock::now();
                 const orbit::u64 rpcRequests = rpcHost.RequestCount();
@@ -2788,12 +2818,24 @@ int orbit::editor_app::StudioApplication::Run(
                 lastIterationStart = Clock::now();
             }
 
-            // Frame timing starts after the idle-pacing wait so an intentional
-            // sleep is never reported as a hitch.
-            orbit::profiler::BeginFrame();
-            const auto loopStarted = Clock::now();
+            // Do not let an outstanding GPU frame turn the editor thread into
+            // an unbounded vkWaitSemaphores waiter. Keep displaying the last
+            // completed swapchain image and pump OS/RPC events on the next
+            // iteration. GPU backpressure must drop frames, not freeze input.
             const orbit::u32 lightingFrameSlot = nextFrameSlot;
             auto& frame = inFlightFrames[lightingFrameSlot];
+            if (frame.fenceValue != 0U &&
+                fence->CompletedValue() < frame.fenceValue)
+            {
+                window.WaitForActivity(1U);
+                continue;
+            }
+
+            // Frame timing starts after pacing and GPU availability checks;
+            // neither intentional sleep nor incomplete GPU work count as a
+            // completed CPU frame.
+            orbit::profiler::BeginFrame();
+            const auto loopStarted = Clock::now();
             if (frame.fenceValue != 0U)
             {
                 const auto fenceWaitStarted = Clock::now();
@@ -2850,6 +2892,18 @@ int orbit::editor_app::StudioApplication::Run(
             }
 
             static_cast<void>(runtime.ResizeSwapchainToWindow());
+
+            // FIFO presentation can exhaust available swapchain images even
+            // when this frame slot's GPU timeline has completed. Poll the
+            // acquire semaphore/fence with zero timeout before recording.
+            // If unavailable, keep showing the last frame and service input
+            // on the next iteration instead of waiting inside Vulkan.
+            if (!swapchain.TryAcquireImage())
+            {
+                orbit::profiler::CancelFrame();
+                window.WaitForActivity(1U);
+                continue;
+            }
 
             if (const auto wanted =
                     viewportCapture.WantedViewSize();
@@ -4149,22 +4203,32 @@ int orbit::editor_app::StudioApplication::Run(
                     "studio.primary");
 
             const auto submitPresentStarted = Clock::now();
-            graphicsQueue.Submit(
-                *commands);
-
-            swapchain.Present(true);
-
-            submittedFence =
-                nextFence++;
-
-            graphicsQueue.Signal(
-                *fence,
-                submittedFence);
+            submittedFence = nextFence++;
+            // Immutable descriptor: only the GPU-submission worker derefs
+            // these handles until the main thread acknowledges completion.
+            // No worker reads mutable StudioSession or UI state.
+            gpuSubmit.Dispatch({
+                .execute = [&graphicsQueue, &swapchain, &fence,
+                            commands, fenceValue = submittedFence] {
+                    graphicsQueue.Submit(*commands);
+                    swapchain.Present(true);
+                    graphicsQueue.Signal(*fence, fenceValue);
+                },
+                .fenceValue = submittedFence,
+                .frameSlot = lightingFrameSlot
+            });
             frame.fenceValue = submittedFence;
+            // In asynchronous mode this tracks driver time on the preceding
+            // acknowledged submission, rather than misleadingly reporting
+            // the negligible cost of putting a packet into a queue.
             cpuFrameTelemetry.Record(
                 CpuFrameTelemetry::SubmitPresent,
-                std::chrono::duration<double, std::milli>(
-                    Clock::now() - submitPresentStarted).count());
+                gpuSubmit.Enabled() && submittedPacket.has_value()
+                    ? submittedPacket->workerMilliseconds
+                    : (gpuSubmit.Enabled()
+                        ? 0.0
+                        : std::chrono::duration<double, std::milli>(
+                            Clock::now() - submitPresentStarted).count()));
             cpuFrameTelemetry.Record(
                 CpuFrameTelemetry::WholeLoop,
                 std::chrono::duration<double, std::milli>(
@@ -4181,8 +4245,16 @@ int orbit::editor_app::StudioApplication::Run(
             {
                 ++terrainUiSmokeRenderedFrames;
 
-                if (terrainUiSmokeRenderedFrames >=
-                    2U)
+                // The first few frames may legitimately show the orbital
+                // fallback while driver pipelines compile asynchronously.
+                // Test actual terrain draws, not merely frame submissions.
+                if (!studioViewportRenderer.HasDrawnProductionTerrain() &&
+                    Clock::now() - terrainUiSmokeStarted > std::chrono::seconds(90))
+                    throw std::runtime_error(
+                        "Terrain UI smoke: asynchronous Vulkan pipelines never became drawable.");
+
+                if (terrainUiSmokeRenderedFrames >= 2U &&
+                    studioViewportRenderer.HasDrawnProductionTerrain())
                 {
                     fence->Wait(
                         submittedFence);
@@ -4330,6 +4402,9 @@ int orbit::editor_app::StudioApplication::Run(
             }
         }
 
+        // Ensure no submit/present worker still holds queue, swapchain,
+        // command allocator, or borrowed fence resources at teardown.
+        gpuSubmit.Drain();
         if (submittedFence != 0)
         {
             fence->Wait(

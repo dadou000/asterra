@@ -18,6 +18,8 @@ target_include_directories(OrbitMeshRender
 target_link_libraries(OrbitMeshRender
     PUBLIC
         Orbit::Core
+        Orbit::Jobs
+        Orbit::ShaderDxc
         Orbit::Lighting
         Orbit::Math
         Orbit::MeshImport
@@ -94,4 +96,11 @@ if(BUILD_TESTING)
         NAME Orbit.EmissiveLights
         COMMAND OrbitEmissiveLightsTests
     )
+
+    # Renderer objects can spawn worker-owned DXC compilers. Tests linked to
+    # those objects still need dxcompiler.dll even when no GPU is created.
+    orbit_copy_dxc_runtime(OrbitReflectionBvhTests)
+    orbit_copy_dxc_runtime(OrbitMeshRenderTests)
+    orbit_copy_dxc_runtime(OrbitGlassSurfaceTests)
+    orbit_copy_dxc_runtime(OrbitEmissiveLightsTests)
 endif()

@@ -6,6 +6,7 @@
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/editor_session/EditorWorldSession.hpp>
+#include <future>
 #include <map>
 #include <optional>
 #include <string>
@@ -60,6 +61,45 @@ public:
     [[nodiscard]] u64 Revision() const noexcept {return revision_;}
     [[nodiscard]] std::size_t ActiveJunctions() const noexcept;
 private:
+    struct PreparedJunction
+    {
+        frames::FrameId frame{};
+        path_geometry::RoadJunctionPublicationResult candidate;
+        path_geometry::RoadContactSceneBuild cooked;
+        std::vector<path_geometry::PathDerivedProduct> renderPatches;
+    };
+    struct PreparedBatch
+    {
+        std::vector<PreparedJunction> junctions;
+        std::string error;
+    };
+    struct PendingBuild
+    {
+        std::future<PreparedBatch> future;
+        u64 fingerprint{0U};
+        u64 worldGeneration{0U};
+    };
+    // Task futures are packaged by Orbit::Jobs, not std::async: erasing an
+    // obsolete pending build cannot synchronously join the render thread.
+    std::optional<PendingBuild> pendingBuild_;
+    struct DiscoveredEdge
+    {
+        scene::ObjectId id{}, start{}, end{};
+        bool rail{false};
+    };
+    // Invalidation-aware, bounded main-thread capture. The worker receives
+    // an immutable copy only after the scene traversal has completed.
+    std::vector<DiscoveredEdge> discoveredEdges_;
+    std::vector<scene::ObjectId> discoveryParents_;
+    std::vector<scene::ObjectRecord> discoveryChildren_;
+    std::optional<scene::ObjectId> discoveryActiveParent_;
+    u32 discoveryChildOffset_{0U};
+    u32 discoveryRootOffset_{0U};
+    bool discoveryRootsExhausted_{false};
+    std::size_t discoveryNextChild_{0U};
+    std::size_t discoveryScanned_{0U};
+    u64 discoveryFingerprint_{0U};
+    bool discoveryInProgress_{false};
     std::map<frames::FrameId,path_geometry::RoadJunctionScenePublisher> frames_;
     std::map<frames::FrameId,path_geometry::RoadContactSceneOwner> contactScenes_;
     [[nodiscard]] bool PacketCurrent(

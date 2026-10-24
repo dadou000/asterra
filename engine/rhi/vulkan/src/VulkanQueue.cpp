@@ -193,6 +193,10 @@ void VulkanQueue::Submit(CommandList& commandList)
         if (progress_ != nullptr)
         {
             // Never leave a waiter hanging on a serial that will not signal.
+            // A prior queue submission may own a smaller serial. Host
+            // signaling this larger value before that GPU submission ends
+            // would incorrectly retire its live buffers/command pools.
+            static_cast<void>(vkQueueWaitIdle(nativeQueue_));
             progress_->SignalFromHost(serial);
         }
         throw std::runtime_error(

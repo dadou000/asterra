@@ -15,7 +15,14 @@
 #include "VulkanGpuProgress.hpp"
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <future>
+#include <thread>
 #include <memory>
+#include <mutex>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <utility>
@@ -73,12 +80,13 @@ struct BufferBarrierInfo
 // after creation so the very first per-frame Transition(Present ->
 // RenderTarget) call's claimed prior layout is actually true. See
 // VulkanResources.cpp.
-void TransitionNewImageBlocking(
+void ScheduleInitialImageTransition(
     VkDevice device,
     u32 graphicsFamilyIndex,
     VkImage image,
     VkImageAspectFlags aspectMask,
-    ResourceState targetState);
+    ResourceState targetState,
+    GpuProgress* progress);
 
 [[nodiscard]] VkFormat ToNativeVertexFormat(VertexFormat format);
 [[nodiscard]] VkFormat ToNativeTextureFormat(TextureFormat format);
@@ -288,7 +296,7 @@ public:
     // acquired (including a layout-transition barrier) is a validation
     // error, so it cannot be pre-warmed into its claimed initial state
     // the way a regular CreateTexture() result is (see
-    // TransitionNewImageBlocking). VulkanCommandList::Transition
+    // ScheduleInitialImageTransition). VulkanCommandList::Transition
     // consults this to treat such an image's *true* first-ever
     // transition as coming from UNDEFINED regardless of what
     // ResourceState the caller claims as "before".
@@ -683,6 +691,7 @@ public:
     VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
 
     void Present(bool verticalSync) override;
+    [[nodiscard]] bool TryAcquireImage() override;
     void Resize(u32 width, u32 height) override;
 
     [[nodiscard]] u32 Width() const noexcept override;
@@ -774,6 +783,13 @@ public:
     [[nodiscard]] std::unique_ptr<ComputePipeline> CreateComputePipeline(
         const ComputePipelineDesc& desc) override;
 
+    [[nodiscard]] std::optional<std::future<std::unique_ptr<GraphicsPipeline>>>
+    TryCreateGraphicsPipelineAsync(const GraphicsPipelineDesc& desc) override;
+    [[nodiscard]] std::optional<std::future<std::unique_ptr<ComputePipeline>>>
+    TryCreateComputePipelineAsync(const ComputePipelineDesc& desc) override;
+    [[nodiscard]] PipelineCompilationStats PipelineCompilation() noexcept override;
+    [[nodiscard]] u64 PendingGpuRetirements() const noexcept override;
+
     [[nodiscard]] std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
         const SwapchainDesc& desc) override;
@@ -818,5 +834,32 @@ private:
     std::unique_ptr<RenderDocCapture> renderDoc_;
     VkSampler defaultSampler_{VK_NULL_HANDLE};
     std::unique_ptr<GpuProgress> progress_;
+
+    // Vulkan pipeline caches require explicit external synchronization when
+    // multiple threads compile pipelines or the cache is serialized.
+    VkPipelineCache pipelineCache_{VK_NULL_HANDLE};
+    // A separate cache prevents a cold worker vkCreate*Pipelines call from
+    // locking render-thread pipeline creation for seconds. Merge at shutdown.
+    VkPipelineCache pipelineWorkerCache_{VK_NULL_HANDLE};
+    std::mutex pipelineCacheMutex_;
+    std::filesystem::path pipelineCachePath_;
+    void InitializePipelineCache() noexcept;
+    void SavePipelineCache() noexcept;
+
+    // The Vulkan device owns its cold-pipeline worker. During device teardown
+    // queued tasks are drained and the thread is joined BEFORE any VkDevice
+    // or VkPipelineCache is destroyed. Only compiled VkPipeline objects cross
+    // from this worker to the graphics thread via futures.
+    void PipelineCompileLoop() noexcept;
+    [[nodiscard]] bool TryQueuePipelineCompile(std::function<void()> work);
+    std::thread pipelineCompileThread_;
+    std::mutex pipelineQueueMutex_;
+    std::condition_variable pipelineQueueCv_;
+    std::deque<std::function<void()>> pipelineQueue_;
+    bool pipelineQueueStopping_{false};
+    static constexpr std::size_t kMaxOutstandingPipelineCompiles = 6U;
+    std::size_t pipelineCompilesInProgress_{0U};
+    u64 pipelineCompilesCompleted_{0U};
+    u64 pipelineCompilesRejected_{0U};
 };
 } // namespace orbit::rhi::vulkan::detail

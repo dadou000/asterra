@@ -1,5 +1,7 @@
 #include <orbit/terrain_bake/TerrainBakeService.hpp>
 
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/core/ThreadName.hpp>
 #include <orbit/terrain_bake/PlanetBakeFile.hpp>
 #include <orbit/terrain_impacts/ImpactField.hpp>
 
@@ -49,10 +51,11 @@ template<typename SampleTexel>
             std::memory_order_relaxed);
     }
 
-    const u32 reportedWorkers = std::thread::hardware_concurrency();
     const u64 sampleCount = static_cast<u64>(6U) * stride * stride;
+    // This solver launches an independent nested worker group. Reserving
+    // CPU capacity prevents one expensive bake from occupying all cores.
     const u32 availableWorkers = std::clamp(
-        reportedWorkers == 0U ? 2U : reportedWorkers,
+        jobs::PoolWorkerCount("ORBIT_GEOLOGY_BAKE_WORKERS", 4U, 1U),
         1U, kMaximumParallelGeologyWorkers);
     const u32 workerCount = sampleCount < kMinimumParallelGeologySamples
         ? 1U
@@ -66,6 +69,8 @@ template<typename SampleTexel>
 
     const auto runWorker = [&](const u32 workerIndex)
     {
+        // The bake's nested threads must not preempt the active render loop.
+        core::SetBackgroundThreadPriority();
         terrain_impacts::ImpactQueryScratch scratch;
         try
         {
@@ -942,26 +947,16 @@ void TerrainBakeService::Observe(
     }
     RefreshRiverHash(entry);
 
-    if (first)
+    if (!entry.diskLoadResolved && !entry.pendingDiskLoad.valid())
     {
-        // Pick up a bake saved by an earlier session. One for an older recipe
-        // is still installed: it keeps the terrain stable until the rebake
-        // finishes.
-        std::string loadError;
-        if (auto loaded = LoadPlanetBake(BakePath(planet), &loadError);
-            loaded.has_value() && loaded->tectonics != nullptr)
-        {
-            entry.active = loaded->tectonics;
-            entry.activeRivers = loaded->rivers;
-            entry.activeGeology = loaded->geology;
-            RefreshRiverHash(entry);
-            completed_.push_back({
-                .planet = planet,
-                .tectonics = entry.active,
-                .rivers = entry.activeRivers,
-                .geology = entry.activeGeology,
-                .matchesRecipe = !NeedsBake(entry)});
-        }
+        // First-visit persisted bake files can be hundreds of megabytes.
+        // File I/O and validation must never occur in StudioSession::Tick.
+        const auto path = BakePath(planet);
+        auto admission = jobs::TrySubmitBackgroundCpu(
+            [path] { return LoadPlanetBake(path); }, jobs::JobPriority::Normal);
+        if (admission)
+            entry.pendingDiskLoad = std::move(*admission);
+        // On overload, Observe retries next tick without blocking.
     }
 }
 
@@ -998,6 +993,8 @@ void TerrainBakeService::Launch(
     entry.worker = std::thread(
         [this, target, control, definition, desc, previousGeologyDesc, path, resolution, settings, existing, existingGeology, geologyBackend]()
         {
+            core::SetCurrentThreadName("Orbit.PlanetBake");
+            core::SetBackgroundThreadPriority();
             const auto started = std::chrono::steady_clock::now();
             BakeProducts products;
             std::string error;
@@ -1042,6 +1039,36 @@ void TerrainBakeService::Tick(const f64 deltaSeconds)
         Entry& entry = *slot;
         const world::PlanetId planet = ids_.at(key);
 
+        if (!entry.diskLoadResolved)
+        {
+            if (!entry.pendingDiskLoad.valid() ||
+                entry.pendingDiskLoad.wait_for(std::chrono::seconds(0)) !=
+                    std::future_status::ready)
+                continue;
+            try
+            {
+                auto loaded = entry.pendingDiskLoad.get();
+                if (loaded && loaded->tectonics)
+                {
+                    entry.active = std::move(loaded->tectonics);
+                    entry.activeRivers = std::move(loaded->rivers);
+                    entry.activeGeology = std::move(loaded->geology);
+                    RefreshRiverHash(entry);
+                    completed_.push_back({
+                        .planet = planet,
+                        .tectonics = entry.active,
+                        .rivers = entry.activeRivers,
+                        .geology = entry.activeGeology,
+                        .matchesRecipe = !NeedsBake(entry)});
+                }
+            }
+            catch (const std::exception& error)
+            {
+                entry.error = std::string("Failed to read persisted terrain bake: ") + error.what();
+            }
+            entry.diskLoadResolved = true;
+        }
+
         if (entry.baking && entry.workerDone)
         {
             lock.unlock();
@@ -1053,6 +1080,20 @@ void TerrainBakeService::Tick(const f64 deltaSeconds)
 
             entry.baking = false;
             entry.lastBakeSeconds = entry.workerSeconds;
+            if (entry.restartRequested)
+            {
+                // A newer explicit request superseded this worker. It has
+                // already finished and been joined, so Launch cannot block
+                // while replacing it. Do not publish the older product.
+                entry.restartRequested = false;
+                entry.result.reset();
+                entry.resultRivers.reset();
+                entry.resultGeology.reset();
+                lock.unlock();
+                Launch(entry, planet, entry.settings.resolution);
+                lock.lock();
+                continue;
+            }
             if (entry.result != nullptr)
             {
                 // Validated by construction (finite layers, matching sizes);
@@ -1141,12 +1182,53 @@ bool TerrainBakeService::StartBake(
     {
         return false;
     }
+    // Explicit bake supersedes any still-loading persisted product.
+    // Packaged-task futures can be discarded without waiting for disk I/O.
+    entry->pendingDiskLoad = {};
+    entry->diskLoadResolved = true;
     entry->settings.resolution = options.resolution;
     entry->failedHash = 0;
     entry->staleSeconds = 0.0;
 
+    if (entry->baking)
+    {
+        // Never synchronously StopWorker/join from an editor or RPC command.
+        // Cancel the old work and replace it after it actually finishes.
+        entry->restartRequested = true;
+        if (entry->control)
+            entry->control->cancel.store(true, std::memory_order_relaxed);
+        return true;
+    }
     lock.unlock();
     Launch(*entry, planet, options.resolution);
+    return true;
+}
+
+void TerrainBakeService::RequestCancelAll() noexcept
+{
+    // Only the owning Studio thread changes the entries map/control owners;
+    // bake workers observe the atomic cancel flags. No joins or waiting.
+    for (auto& [key, entry] : entries_)
+    {
+        static_cast<void>(key);
+        entry->restartRequested = false;
+        if (entry->control)
+            entry->control->cancel.store(true, std::memory_order_relaxed);
+    }
+}
+
+bool TerrainBakeService::WorkersQuiescent() const noexcept
+{
+    // A bake may be publishing its final result under the service lock.
+    // Never wait for that lock on the Studio frame thread.
+    std::unique_lock lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) return false;
+    for (const auto& [key, entry] : entries_)
+    {
+        static_cast<void>(key);
+        if (entry->worker.joinable() && !entry->workerDone)
+            return false;
+    }
     return true;
 }
 
@@ -1157,6 +1239,7 @@ void TerrainBakeService::Cancel(const world::PlanetId planet)
     if (entry != nullptr && entry->control != nullptr && entry->baking)
     {
         entry->control->cancel.store(true, std::memory_order_relaxed);
+        entry->restartRequested = false;
         // A cancelled bake must not simply restart: remember it as failed for
         // this recipe until the recipe changes or the user bakes again.
         entry->failedHash = entry->currentHash;

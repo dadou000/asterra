@@ -56,9 +56,17 @@ StudioViewportRenderer::Compose(
     lighting::LightingTimestampRecorder* const lightingTimestamps,
     const StudioComposeCpuTimingRecorder& cpuTimingRecorder)
 {
+    // Reap only completed async work; never destroy a live std::async future
+    // on the frame path because its destructor can join the worker thread.
+    CollectRetiredCloudJobs();
+    CollectRetiredAtmosphereJobs();
     hybridReflectionRenderer_.BeginFrame(frameIndex, framesInFlight_);
     meshSdfScene_.BeginReflectionFrame(frameIndex, framesInFlight_);
     glassSurfaceRenderer_.BeginFrame(frameIndex, framesInFlight_);
+    emissiveLightRenderer_.BeginFrame(frameIndex, framesInFlight_);
+    meshSurfaceRenderer_.BeginFrame(frameIndex, framesInFlight_);
+    meshShadowMapRenderer_.BeginFrame(frameIndex, framesInFlight_);
+    meshSunShadowRenderer_.BeginFrame(frameIndex, framesInFlight_);
     cloudRenderer_.BeginFrame(frameIndex, framesInFlight_);
 
     const auto overlays =

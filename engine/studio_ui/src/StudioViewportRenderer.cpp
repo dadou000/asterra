@@ -1,3 +1,4 @@
+#include <orbit/jobs/JobSystem.hpp>
 #include "StudioViewportInternals.hpp"
 #include "StudioViewportPrimitives.hpp"
 
@@ -58,6 +59,64 @@ constexpr f64 kNodeJitterMeters = 125.0;
     return enabled;
 }
 } // namespace
+
+void StudioViewportRenderer::CollectRetiredCloudJobs()
+{
+    for (auto it = retiredCloudBuilds_.begin(); it != retiredCloudBuilds_.end();)
+    {
+        if (it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            it = retiredCloudBuilds_.erase(it);
+        else
+            ++it;
+    }
+}
+
+void StudioViewportRenderer::RetireCloudPresentation(const std::string& viewportId)
+{
+    const auto found = cloudPresentations_.find(viewportId);
+    if (found == cloudPresentations_.end()) return;
+    if (found->second.pending.valid())
+    {
+        celestialScheduler_.Abandon(CelestialWorkKeyFor(viewportId,
+            found->second.pendingBody, celestial_scheduler::WorkKind::CloudField),
+            found->second.pendingFingerprint);
+        retiredCloudBuilds_.push_back(std::move(found->second.pending));
+    }
+    cloudPresentations_.erase(found);
+}
+
+void StudioViewportRenderer::CollectRetiredAtmosphereJobs()
+{
+    for (auto it = retiredAtmosphereStatic_.begin(); it != retiredAtmosphereStatic_.end();)
+        if (it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            it = retiredAtmosphereStatic_.erase(it);
+        else ++it;
+    for (auto it = retiredAtmosphereSky_.begin(); it != retiredAtmosphereSky_.end();)
+        if (it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            it = retiredAtmosphereSky_.erase(it);
+        else ++it;
+}
+
+void StudioViewportRenderer::RetireAtmospherePresentation(const std::string& viewportId)
+{
+    const auto found = atmospherePresentations_.find(viewportId);
+    if (found == atmospherePresentations_.end()) return;
+    if (found->second.pendingStatic.valid())
+    {
+        celestialScheduler_.Abandon(CelestialWorkKeyFor(viewportId,
+            found->second.pendingStaticBody, celestial_scheduler::WorkKind::AtmosphereLut),
+            found->second.pendingStaticFingerprint);
+        retiredAtmosphereStatic_.push_back(std::move(found->second.pendingStatic));
+    }
+    if (found->second.pendingSky.valid())
+    {
+        celestialScheduler_.Abandon(CelestialWorkKeyFor(viewportId,
+            found->second.pendingSkyBody, celestial_scheduler::WorkKind::AtmosphereSky),
+            found->second.pendingSkyFingerprint);
+        retiredAtmosphereSky_.push_back(std::move(found->second.pendingSky));
+    }
+    atmospherePresentations_.erase(found);
+}
 
 bool StudioViewportRenderer::EnsureUnifiedCloudRenderer()
 {
@@ -1867,7 +1926,7 @@ StudioViewportRenderer::ComposeBase(
             if (requiresClimate &&
                 cloudClimateSource == nullptr)
             {
-                cloudPresentations_.erase(
+                RetireCloudPresentation(
                     info.id);
                 cloudDiagnostics_.erase(
                     info.id);
@@ -1914,10 +1973,25 @@ StudioViewportRenderer::ComposeBase(
                     cloudPresentation.hasPending = false;
                     try
                     {
-                        cloudPresentation.field = std::make_unique<celestial_clouds::CloudFieldProduct>(cloudPresentation.pending.get());
-                        cloudPresentation.gpu = std::make_unique<celestial_clouds::GpuCloudFieldProduct>(*device_, *cloudPresentation.field);
-                        cloudPresentation.body = cloudPresentation.pendingBody;
-                        cloudPresentation.fingerprint = cloudPresentation.pendingFingerprint;
+                        auto built = cloudPresentation.pending.get();
+                        // Do not waste GPU upload time on a replaced body or
+                        // an obsolete time bucket. Stage GPU objects first,
+                        // retaining the previous presentation if upload fails.
+                        // Time can advance while a cloud worker is running.
+                        // Accept a previous time bucket for the same body,
+                        // then request its newer revision asynchronously;
+                        // otherwise live weather may never draw at all.
+                        if (cloudPresentation.pendingBody == logicalTarget->target->body)
+                        {
+                            auto newField = std::make_unique<celestial_clouds::CloudFieldProduct>(std::move(built.field));
+                            auto newGpu = std::make_unique<celestial_clouds::GpuCloudFieldProduct>(*device_, *newField);
+                            cloudPresentation.field = std::move(newField);
+                            cloudPresentation.gpu = std::move(newGpu);
+                            cloudPresentation.body = cloudPresentation.pendingBody;
+                            cloudPresentation.fingerprint = cloudPresentation.pendingFingerprint;
+                            cloudPresentation.meanCoverage = built.meanCoverage;
+                            cloudPresentation.meanOpticalDepth = built.meanOpticalDepth;
+                        }
                     }
                     catch (const std::exception& exception)
                     {
@@ -1942,6 +2016,7 @@ StudioViewportRenderer::ComposeBase(
 
                 if (cloudNeedsBuild &&
                     !cloudPresentation.hasPending &&
+                    retiredCloudBuilds_.size() < 24U &&
                     acquireCelestialGrant(
                         info.id,
                         logicalTarget->
@@ -1955,59 +2030,47 @@ StudioViewportRenderer::ComposeBase(
                         70,
                         true))
                 {
-                  if (cloudPresentation.field != nullptr &&
-                      cloudPresentation.body == logicalTarget->target->body)
+                  // Both first-use and refresh builds belong on workers. The
+                  // previous GPU field remains visible; a cold field starts
+                  // without holding up the viewport for ~1 second.
                   {
-                    // The same body with a newer time: build it on another thread. The task keeps the terrain source alive (concurrent
-                    // Sample calls are part of TerrainSource's contract: the streaming workers do the same).
                     std::shared_ptr<const terrain::TerrainSource> climateHold =
                         macroGlobeSurface != nullptr ? macroGlobeSurface->terrain : nullptr;
-                    cloudPresentation.pending = std::async(
-                        std::launch::async,
+                    auto admitted = jobs::TrySubmitBackgroundCpu(
                         [climateHold, referenceRadius, parameters = cloudParameters, atTime, cloudConfig]() {
-                            return celestial_clouds::BuildCloudField(climateHold.get(), nullptr, referenceRadius, parameters, atTime, cloudConfig);
-                        });
-                    cloudPresentation.hasPending = true;
-                    cloudPresentation.pendingFingerprint = cloudFingerprint;
-                    cloudPresentation.pendingBody = logicalTarget->target->body;
-                  }
-                  else
-                  {
-                    cloudPresentation.field =
-                        std::make_unique<
-                            celestial_clouds::
-                                CloudFieldProduct>(
-                                    celestial_clouds::
-                                        BuildCloudField(
-                                            cloudClimateSource,
-                                            nullptr,
-                                            referenceRadius,
-                                            cloudParameters,
-                                            atTime,
-                                            cloudConfig));
-
-                    cloudPresentation.gpu =
-                        std::make_unique<
-                            celestial_clouds::
-                                GpuCloudFieldProduct>(
-                                    *device_,
-                                    *cloudPresentation.
-                                        field);
-
-                    cloudPresentation.body =
-                        logicalTarget->
-                            target->body;
-                    cloudPresentation.fingerprint =
-                        cloudFingerprint;
-
-                    static_cast<void>(
-                        completeCelestialGrant(
-                            info.id,
-                            logicalTarget->
-                                target->body,
-                            celestial_scheduler::
-                                WorkKind::CloudField,
-                            cloudFingerprint));
+                            CloudBuiltProduct product{};
+                            product.field = celestial_clouds::BuildCloudField(
+                                climateHold.get(), nullptr, referenceRadius, parameters, atTime, cloudConfig);
+                            f64 coverage = 0.0;
+                            f64 optical = 0.0;
+                            u64 samples = 0U;
+                            for (const auto& layer : product.field.layers)
+                                for (const auto& texel : layer.texels)
+                                {
+                                    coverage += texel.coverage;
+                                    optical += texel.opticalDepth;
+                                    ++samples;
+                                }
+                            if (samples > 0U)
+                            {
+                                product.meanCoverage = coverage / static_cast<f64>(samples);
+                                product.meanOpticalDepth = optical / static_cast<f64>(samples);
+                            }
+                            return product;
+                        }, jobs::JobPriority::Normal);
+                    if (admitted)
+                    {
+                        cloudPresentation.pending = std::move(*admitted);
+                        cloudPresentation.hasPending = true;
+                        cloudPresentation.pendingFingerprint = cloudFingerprint;
+                        cloudPresentation.pendingBody = logicalTarget->target->body;
+                    }
+                    else
+                    {
+                        celestialScheduler_.Abandon(CelestialWorkKeyFor(info.id,
+                            logicalTarget->target->body, celestial_scheduler::WorkKind::CloudField),
+                            cloudFingerprint);
+                    }
                   }
                 }
 
@@ -2022,24 +2085,6 @@ StudioViewportRenderer::ComposeBase(
 
                 if (cloudCurrent)
                 {
-                    f64 coverageSum = 0.0;
-                    f64 opticalSum = 0.0;
-                    u64 sampleCount = 0U;
-
-                    for (const auto& layer :
-                         cloudPresentation.field->layers)
-                    {
-                        for (const auto& texel :
-                             layer.texels)
-                        {
-                            coverageSum +=
-                                texel.coverage;
-                            opticalSum +=
-                                texel.opticalDepth;
-                            ++sampleCount;
-                        }
-                    }
-
                     cloudDiagnostics_.insert_or_assign(
                         info.id,
                         StudioCloudDiagnostics{
@@ -2062,18 +2107,8 @@ StudioViewportRenderer::ComposeBase(
                                     cloudPresentation.
                                         field->
                                         layers.size()),
-                            .meanCoverage =
-                                sampleCount > 0U
-                                    ? coverageSum /
-                                          static_cast<f64>(
-                                              sampleCount)
-                                    : 0.0,
-                            .meanOpticalDepth =
-                                sampleCount > 0U
-                                    ? opticalSum /
-                                          static_cast<f64>(
-                                              sampleCount)
-                                    : 0.0,
+                            .meanCoverage = cloudPresentation.meanCoverage,
+                            .meanOpticalDepth = cloudPresentation.meanOpticalDepth,
                             .gpuResident =
                                 cloudPresentation.gpu !=
                                 nullptr
@@ -2091,7 +2126,7 @@ StudioViewportRenderer::ComposeBase(
                 // authority; Studio waits for the selected source object's
                 // coverage adapter rather than silently substituting
                 // procedural weather.
-                cloudPresentations_.erase(
+                RetireCloudPresentation(
                     info.id);
                 cloudDiagnostics_.erase(
                     info.id);
@@ -2099,7 +2134,7 @@ StudioViewportRenderer::ComposeBase(
         }
         else
         {
-            cloudPresentations_.erase(
+            RetireCloudPresentation(
                 info.id);
             cloudDiagnostics_.erase(
                 info.id);
@@ -2604,59 +2639,70 @@ StudioViewportRenderer::ComposeBase(
                             parameters,
                         atmosphereConfig);
 
-            const bool staticChanged =
-                presentation.staticLuts ==
-                    nullptr ||
-                presentation.body !=
-                    logicalTarget->
-                        target->body ||
-                presentation.staticFingerprint !=
-                    staticFingerprint;
-
-            if (staticChanged &&
-                acquireCelestialGrant(
-                    info.id,
-                    logicalTarget->
-                        target->body,
-                    celestial_scheduler::
-                        WorkKind::AtmosphereLut,
-                    staticFingerprint,
-                    celestial_scheduler::
-                        WorkBackend::Gpu,
-                    4U,
-                    90,
-                    true))
+            // Poll only: no CPU LUT computation or waiting on Studio's frame.
+            if (presentation.pendingStatic.valid() &&
+                presentation.pendingStatic.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
             {
-                presentation.staticLuts =
-                    std::make_unique<
-                        celestial_atmosphere::
-                            AtmosphereStaticLuts>(
-                                celestial_atmosphere::
-                                    BuildStaticLuts(
-                                        resolvedAtmosphere->
-                                            parameters,
-                                        atmosphereConfig));
+                try
+                {
+                    auto built = presentation.pendingStatic.get();
+                    if (presentation.pendingStaticBody == logicalTarget->target->body &&
+                        presentation.pendingStaticFingerprint == staticFingerprint)
+                    {
+                        presentation.staticLuts =
+                            std::make_shared<const celestial_atmosphere::AtmosphereStaticLuts>(std::move(built));
+                        presentation.body = presentation.pendingStaticBody;
+                        presentation.staticFingerprint = presentation.pendingStaticFingerprint;
+                        presentation.parameters = resolvedAtmosphere->parameters;
+                        if (presentation.pendingSky.valid())
+                        {
+                            celestialScheduler_.Abandon(CelestialWorkKeyFor(info.id,
+                                presentation.pendingSkyBody, celestial_scheduler::WorkKind::AtmosphereSky),
+                                presentation.pendingSkyFingerprint);
+                            retiredAtmosphereSky_.push_back(std::move(presentation.pendingSky));
+                        }
+                        presentation.skyView.reset();
+                        presentation.gpu.reset();
+                        presentation.skyFingerprint = 0U;
+                    }
+                }
+                catch (const std::exception& error)
+                {
+                    log::Warning(std::string("Atmosphere LUT build failed: ") + error.what());
+                }
+                static_cast<void>(completeCelestialGrant(
+                    info.id, presentation.pendingStaticBody,
+                    celestial_scheduler::WorkKind::AtmosphereLut,
+                    presentation.pendingStaticFingerprint));
+            }
 
-                presentation.body =
-                    logicalTarget->
-                        target->body;
-                presentation.staticFingerprint =
-                    staticFingerprint;
-                presentation.parameters =
-                    resolvedAtmosphere->
-                        parameters;
-                presentation.skyView.reset();
-                presentation.gpu.reset();
-                presentation.skyFingerprint = 0U;
+            const bool staticChanged =
+                presentation.staticLuts == nullptr ||
+                presentation.body != logicalTarget->target->body ||
+                presentation.staticFingerprint != staticFingerprint;
 
-                static_cast<void>(
-                    completeCelestialGrant(
-                        info.id,
-                        logicalTarget->
-                            target->body,
-                        celestial_scheduler::
-                            WorkKind::AtmosphereLut,
-                        staticFingerprint));
+            if (staticChanged && !presentation.pendingStatic.valid() &&
+                retiredAtmosphereStatic_.size() < 24U &&
+                acquireCelestialGrant(info.id, logicalTarget->target->body,
+                    celestial_scheduler::WorkKind::AtmosphereLut,
+                    staticFingerprint, celestial_scheduler::WorkBackend::Cpu,
+                    4U, 90, true))
+            {
+                const auto params = resolvedAtmosphere->parameters;
+                auto admitted = jobs::TrySubmitBackgroundCpu(
+                    [params, atmosphereConfig] {
+                        return celestial_atmosphere::BuildStaticLuts(params, atmosphereConfig);
+                    }, jobs::JobPriority::High);
+                if (admitted)
+                {
+                    presentation.pendingStatic = std::move(*admitted);
+                    presentation.pendingStaticFingerprint = staticFingerprint;
+                    presentation.pendingStaticBody = logicalTarget->target->body;
+                }
+                else
+                    celestialScheduler_.Abandon(CelestialWorkKeyFor(info.id,
+                        logicalTarget->target->body, celestial_scheduler::WorkKind::AtmosphereLut),
+                        staticFingerprint);
             }
 
             const bool atmosphereCurrent =
@@ -2731,71 +2777,62 @@ StudioViewportRenderer::ComposeBase(
                         skyInput,
                         atmosphereConfig);
 
-            const bool skyNeedsBuild =
-                presentation.skyView ==
-                    nullptr ||
-                presentation.skyFingerprint !=
-                    skyFingerprint;
-
-            if (skyNeedsBuild &&
-                acquireCelestialGrant(
-                    info.id,
-                    logicalTarget->
-                        target->body,
-                    celestial_scheduler::
-                        WorkKind::AtmosphereSky,
-                    skyFingerprint,
-                    celestial_scheduler::
-                        WorkBackend::Gpu,
-                    2U,
-                    95,
-                    true))
+            if (presentation.pendingSky.valid() &&
+                presentation.pendingSky.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
             {
-                presentation.skyView =
-                    std::make_unique<
-                        celestial_atmosphere::
-                            AtmosphereSkyView>(
-                                celestial_atmosphere::
-                                    BuildSkyView(
-                                        resolvedAtmosphere->
-                                            parameters,
-                                        *presentation.
-                                            staticLuts,
-                                        skyInput,
-                                        atmosphereConfig));
-
-                presentation.skyFingerprint =
-                    skyFingerprint;
-
-                if (presentation.gpu ==
-                    nullptr)
+                try
                 {
-                    presentation.gpu =
-                        std::make_unique<
-                            celestial_atmosphere::
-                                GpuAtmosphereLuts>(
-                                    *device_,
-                                    *presentation.
-                                        staticLuts,
-                                    *presentation.
-                                        skyView);
+                    auto built = presentation.pendingSky.get();
+                    if (presentation.pendingSkyBody == logicalTarget->target->body &&
+                        presentation.pendingSkyFingerprint == skyFingerprint)
+                    {
+                        presentation.skyView =
+                            std::make_unique<celestial_atmosphere::AtmosphereSkyView>(std::move(built));
+                        presentation.skyFingerprint = skyFingerprint;
+                        if (presentation.gpu == nullptr)
+                            presentation.gpu = std::make_unique<celestial_atmosphere::GpuAtmosphereLuts>(
+                                *device_, *presentation.staticLuts, *presentation.skyView);
+                        else
+                            presentation.gpu->ReplaceSkyView(*presentation.skyView);
+                    }
+                }
+                catch (const std::exception& error)
+                {
+                    log::Warning(std::string("Atmosphere sky-view build failed: ") + error.what());
+                }
+                static_cast<void>(completeCelestialGrant(
+                    info.id, presentation.pendingSkyBody,
+                    celestial_scheduler::WorkKind::AtmosphereSky,
+                    presentation.pendingSkyFingerprint));
+            }
+
+            const bool skyNeedsBuild =
+                presentation.skyView == nullptr ||
+                presentation.skyFingerprint != skyFingerprint;
+
+            if (skyNeedsBuild && !presentation.pendingSky.valid() &&
+                retiredAtmosphereSky_.size() < 24U &&
+                acquireCelestialGrant(info.id, logicalTarget->target->body,
+                    celestial_scheduler::WorkKind::AtmosphereSky,
+                    skyFingerprint, celestial_scheduler::WorkBackend::Cpu,
+                    2U, 95, true))
+            {
+                const auto params = resolvedAtmosphere->parameters;
+                const auto luts = presentation.staticLuts;
+                auto admitted = jobs::TrySubmitBackgroundCpu(
+                    [params, luts, skyInput, atmosphereConfig] {
+                        return celestial_atmosphere::BuildSkyView(params, *luts, skyInput, atmosphereConfig);
+                    }, jobs::JobPriority::High);
+                if (admitted)
+                {
+                    presentation.pendingSky = std::move(*admitted);
+                    presentation.pendingSkyFingerprint = skyFingerprint;
+                    presentation.pendingSkyBody = logicalTarget->target->body;
                 }
                 else
-                {
-                    presentation.gpu->
-                        ReplaceSkyView(
-                            *presentation.
-                                skyView);
-                }
-
-                static_cast<void>(
-                    completeCelestialGrant(
-                        info.id,
-                        logicalTarget->
-                            target->body,
-                        celestial_scheduler::
-                            WorkKind::AtmosphereSky,
-                        skyFingerprint));
+                    celestialScheduler_.Abandon(CelestialWorkKeyFor(info.id,
+                        logicalTarget->target->body, celestial_scheduler::WorkKind::AtmosphereSky),
+                        skyFingerprint);
             }
 
             const bool skyCurrent =
@@ -2868,8 +2905,7 @@ StudioViewportRenderer::ComposeBase(
         }
         else
         {
-            atmospherePresentations_.erase(
-                info.id);
+            RetireAtmospherePresentation(info.id);
             atmosphereDiagnostics_.erase(
                 info.id);
         }
@@ -2879,8 +2915,9 @@ StudioViewportRenderer::ComposeBase(
                     info.id);
             atmosphereFound !=
                     atmospherePresentations_.end() &&
-                atmosphereFound->second.gpu !=
-                    nullptr)
+                atmosphereFound->second.gpu != nullptr &&
+                logicalTarget->target.has_value() &&
+                atmosphereFound->second.body == logicalTarget->target->body)
         {
             auto* atmosphereGpu =
                 atmosphereFound->

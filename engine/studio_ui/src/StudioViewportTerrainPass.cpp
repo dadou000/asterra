@@ -1,4 +1,9 @@
 #include "StudioViewportInternals.hpp"
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/terrain_gpu/GpuRegionDelta.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <orbit/core/Log.hpp>
+#include <chrono>
 
 namespace orbit::studio_ui
 {
@@ -23,6 +28,43 @@ void StudioViewportRenderer::ComposeTerrainPass(StudioScenePassContext& context)
     {
         throw std::logic_error(
             "Studio production-terrain presentation lost its device, compiler or runtime binding.");
+    }
+
+    // GPU pipelines still have render-thread affinity, but DXC compilation
+    // is independent CPU work. Start all immutable terrain shader requests on
+    // the bounded worker pool before constructing any terrain renderer.
+    if (!terrainShadersWarm_)
+    {
+        if (terrainShadersFailed_) return;
+        if (!terrainShaderPrewarm_.valid())
+        {
+            // Own an independent compiler inside the task. Studio's caller-
+            // owned compiler may be destroyed before an abandoned job runs.
+            auto admitted = jobs::TrySubmitBackgroundCpu([] {
+                const shader::dxc::DxcShaderCompiler compiler;
+                terrain_gpu::GpuFieldGenerator::PrewarmShaders(compiler);
+                terrain_gpu::GpuPhysicalPageComposite::PrewarmShaders(compiler);
+                terrain_gpu::GpuRegionDelta::PrewarmShaders(compiler);
+                terrain_render::TerrainPreviewRenderer::PrewarmShaders(compiler);
+            }, jobs::JobPriority::High);
+            if (!admitted)
+                return; // Wait for capacity, never block frame composition.
+            terrainShaderPrewarm_ = std::move(*admitted);
+        }
+        if (terrainShaderPrewarm_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+            return; // Continue displaying the existing orbital representation.
+        try
+        {
+            terrainShaderPrewarm_.get();
+            terrainShadersWarm_ = true;
+        }
+        catch (const std::exception& exception)
+        {
+            terrainShadersFailed_ = true;
+            log::Error(std::string("Terrain shader prewarm failed: ") + exception.what());
+            return;
+        }
     }
 
     const auto& source =

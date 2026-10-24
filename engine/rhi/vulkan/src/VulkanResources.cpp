@@ -59,13 +59,15 @@ namespace
 } // namespace
 
 // See the declaration in VulkanObjects.hpp for why this exists.
-void TransitionNewImageBlocking(
+void ScheduleInitialImageTransition(
     const VkDevice device,
     const u32 graphicsFamilyIndex,
     const VkImage image,
     const VkImageAspectFlags aspectMask,
-    const ResourceState targetState)
+    const ResourceState targetState,
+    GpuProgress* const progress)
 {
+    ORBIT_PROFILE_SCOPE("vk.image_layout_submit_deferred");
     VkQueue queue = VK_NULL_HANDLE;
     vkGetDeviceQueue(device, graphicsFamilyIndex, 0, &queue);
 
@@ -91,12 +93,21 @@ void TransitionNewImageBlocking(
     allocateInfo.commandBufferCount = 1;
 
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-    vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer);
+    if (vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer) !=
+        VK_SUCCESS)
+    {
+        vkDestroyCommandPool(device, pool, nullptr);
+        throw std::runtime_error("Orbit could not allocate image init commands.");
+    }
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+    if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS)
+    {
+        vkDestroyCommandPool(device, pool, nullptr);
+        throw std::runtime_error("Orbit could not begin image init commands.");
+    }
 
     const bool isDepth =
         (aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0;
@@ -124,7 +135,11 @@ void TransitionNewImageBlocking(
     dependencyInfo.pImageMemoryBarriers = &barrier;
 
     vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
-    vkEndCommandBuffer(commandBuffer);
+    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
+    {
+        vkDestroyCommandPool(device, pool, nullptr);
+        throw std::runtime_error("Orbit could not finish image init commands.");
+    }
 
     VkCommandBufferSubmitInfo commandBufferInfo{};
     commandBufferInfo.sType =
@@ -136,9 +151,63 @@ void TransitionNewImageBlocking(
     submitInfo.commandBufferInfoCount = 1;
     submitInfo.pCommandBufferInfos = &commandBufferInfo;
 
-    vkQueueSubmit2(queue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(queue);
+    // Assign an exact serial to this initialization submission. Retirement
+    // must not depend on a later frame being produced: windows can minimize,
+    // rendering can pause, or the viewport may close after this submit.
+    u64 initialLayoutSerial = 0U;
+    VkSemaphoreSubmitInfo completionSignal{};
+    if (progress != nullptr)
+    {
+        initialLayoutSerial = progress->BeginSubmit();
+        completionSignal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        completionSignal.semaphore = progress->Timeline();
+        completionSignal.value = initialLayoutSerial;
+        completionSignal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        submitInfo.signalSemaphoreInfoCount = 1U;
+        submitInfo.pSignalSemaphoreInfos = &completionSignal;
+    }
 
+    // This command is submitted on the SAME graphics queue as ordinary
+    // frame commands. Queue order and the barrier dependency establish the
+    // initial layout before later uses, without an on-frame GPU idle wait.
+    if (vkQueueSubmit2(queue, 1U, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS)
+    {
+        // This is an exceptional GPU submission failure. Drain any earlier
+        // queue work before unblocking timeline waiters by host signal.
+        if (progress != nullptr)
+        {
+            static_cast<void>(vkQueueWaitIdle(queue));
+            progress->SignalFromHost(initialLayoutSerial);
+        }
+        vkDestroyCommandPool(device, pool, nullptr);
+        throw std::runtime_error("Orbit could not enqueue initial image layout.");
+    }
+
+    // This submission signals its own timeline serial after completion.
+    // Retire the command pool precisely against that serial, without relying
+    // on a subsequent frame or a whole-queue wait.
+    if (progress != nullptr)
+    {
+        try
+        {
+            progress->Retire(initialLayoutSerial, [device, pool] {
+                vkDestroyCommandPool(device, pool, nullptr);
+            });
+            return;
+        }
+        catch (...)
+        {
+            // Allocation failure in deferred-retirement bookkeeping must
+            // not lead to destruction of a command pool still on the GPU.
+            static_cast<void>(vkQueueWaitIdle(queue));
+            vkDestroyCommandPool(device, pool, nullptr);
+            throw;
+        }
+    }
+
+    // Progress is always present on the normal Vulkan device. Retain the
+    // synchronous fallback for hypothetical minimal/test-only devices.
+    static_cast<void>(vkQueueWaitIdle(queue));
     vkDestroyCommandPool(device, pool, nullptr);
 }
 
@@ -370,7 +439,7 @@ VulkanTexture::VulkanTexture(
       mipLevels_(mipLevels),
       sampler_(sampler),
       // Regular (ownsImage=true) textures are already pre-warmed into
-      // their real initial layout by TransitionNewImageBlocking
+      // their real initial layout by ScheduleInitialImageTransition
       // before this constructor runs; a swapchain-provided
       // (ownsImage=false) image starts truly UNDEFINED and unacquired
       // -- see EverUsed()'s declaration in VulkanObjects.hpp.
@@ -718,6 +787,7 @@ VulkanDevice::CreateAabbAccelerationStructure(
         VK_NULL_HANDLE;
     VkAccelerationStructureKHR topLevel =
         VK_NULL_HANDLE;
+    bool submittedAsBuild = false;
 
     const auto cleanup =
         [&]()
@@ -1172,6 +1242,25 @@ VulkanDevice::CreateAabbAccelerationStructure(
             &topBuild,
             topRanges);
 
+        // Shader ray queries in later graphics/compute submissions must see
+        // the completed TLAS. Queue-order alone is not a memory dependency.
+        VkMemoryBarrier2 readyForShader{};
+        readyForShader.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        readyForShader.srcStageMask =
+            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        readyForShader.srcAccessMask =
+            VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        readyForShader.dstStageMask =
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        readyForShader.dstAccessMask =
+            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        VkDependencyInfo shaderDependency{};
+        shaderDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        shaderDependency.memoryBarrierCount = 1U;
+        shaderDependency.pMemoryBarriers = &readyForShader;
+        vkCmdPipelineBarrier2(command, &shaderDependency);
+
         vkEndCommandBuffer(command);
 
         VkCommandBufferSubmitInfo submitCommand{};
@@ -1188,32 +1277,73 @@ VulkanDevice::CreateAabbAccelerationStructure(
         submit.pCommandBufferInfos =
             &submitCommand;
 
+        u64 asBuildSerial = 0U;
+        VkSemaphoreSubmitInfo asCompletion{};
+        if (progress_ != nullptr)
+        {
+            asBuildSerial = progress_->BeginSubmit();
+            asCompletion.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            asCompletion.semaphore = progress_->Timeline();
+            asCompletion.value = asBuildSerial;
+            asCompletion.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            submit.signalSemaphoreInfoCount = 1U;
+            submit.pSignalSemaphoreInfos = &asCompletion;
+        }
+
         if (vkQueueSubmit2(
                 queue,
                 1U,
                 &submit,
                 VK_NULL_HANDLE) != VK_SUCCESS)
         {
-            vkDestroyCommandPool(
-                nativeDevice_,
-                pool,
-                nullptr);
+            if (progress_ != nullptr)
+            {
+                // Exceptional submit failure: drain earlier work before
+                // advancing the timeline on the host.
+                static_cast<void>(vkQueueWaitIdle(queue));
+                progress_->SignalFromHost(asBuildSerial);
+            }
+            vkDestroyCommandPool(nativeDevice_, pool, nullptr);
             throw std::runtime_error(
                 "Orbit failed to submit proxy AS build commands.");
         }
+        submittedAsBuild = true;
 
-        vkQueueWaitIdle(queue);
-
-        vkDestroyCommandPool(
-            nativeDevice_,
-            pool,
-            nullptr);
-
-        vmaDestroyBuffer(
-            allocator_,
-            scratchBuffer.buffer,
-            scratchBuffer.allocation);
-        scratchBuffer = {};
+        // Temporary AS build scratch and command memory must survive GPU
+        // execution, not the CPU function call. The build submission signals
+        // its own serial even if there is never a subsequent graphics frame.
+        // No vkQueueWaitIdle on the normal frame/resource path.
+        bool retired = false;
+        if (progress_ != nullptr)
+        {
+            try
+            {
+                const auto scratch = scratchBuffer;
+                progress_->Retire(asBuildSerial,
+                    [device = nativeDevice_, allocator = allocator_,
+                     pool, scratch] {
+                        vkDestroyCommandPool(device, pool, nullptr);
+                        vmaDestroyBuffer(allocator, scratch.buffer,
+                            scratch.allocation);
+                    });
+                retired = true;
+                scratchBuffer = {};
+            }
+            catch (...)
+            {
+                // Low-memory allocation failures in the retire list are
+                // exceptional: prefer a synchronous safe cleanup over a GPU
+                // use-after-free of command pools or scratch memory.
+            }
+        }
+        if (!retired)
+        {
+            static_cast<void>(vkQueueWaitIdle(queue));
+            vkDestroyCommandPool(nativeDevice_, pool, nullptr);
+            vmaDestroyBuffer(allocator_, scratchBuffer.buffer,
+                scratchBuffer.allocation);
+            scratchBuffer = {};
+        }
 
         return std::make_unique<
             VulkanAccelerationStructure>(
@@ -1235,6 +1365,15 @@ VulkanDevice::CreateAabbAccelerationStructure(
     }
     catch (...)
     {
+        // Only the exceptional failure path may synchronize the queue.
+        // Never reclaim buffers/AS objects while a successfully submitted
+        // GPU build could still reference them.
+        if (submittedAsBuild)
+        {
+            VkQueue queue = VK_NULL_HANDLE;
+            vkGetDeviceQueue(nativeDevice_, graphicsFamilyIndex_, 0U, &queue);
+            static_cast<void>(vkQueueWaitIdle(queue));
+        }
         cleanup();
         throw;
     }
@@ -1417,12 +1556,27 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
         }
     }
 
-    TransitionNewImageBlocking(
-        nativeDevice_,
-        graphicsFamilyIndex_,
-        nativeImage,
-        aspectMask,
-        desc.initialState);
+    try
+    {
+        ScheduleInitialImageTransition(
+            nativeDevice_,
+            graphicsFamilyIndex_,
+            nativeImage,
+            aspectMask,
+            desc.initialState,
+            progress_.get());
+    }
+    catch (...)
+    {
+        // A failed init submit leaves no GPU command holding these handles;
+        // if retire bookkeeping failed after a successful submit, the helper
+        // already waited for the queue before propagating the exception.
+        if (sampler != VK_NULL_HANDLE)
+            vkDestroySampler(nativeDevice_, sampler, nullptr);
+        vkDestroyImageView(nativeDevice_, imageView, nullptr);
+        vmaDestroyImage(allocator_, nativeImage, allocation);
+        throw;
+    }
 
     return std::make_unique<VulkanTexture>(
         nativeDevice_,

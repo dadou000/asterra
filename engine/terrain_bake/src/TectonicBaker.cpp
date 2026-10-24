@@ -1,5 +1,7 @@
 #include <orbit/terrain_bake/TectonicBaker.hpp>
 
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/core/ThreadName.hpp>
 #include <algorithm>
 #include <stdexcept>
 #include <thread>
@@ -43,7 +45,9 @@ std::shared_ptr<const terrain::BakedTectonicRasters> BakeTectonics(
     u32 workers = options.workerThreads;
     if (workers == 0U)
     {
-        workers = std::max(1U, std::thread::hardware_concurrency());
+        // Default to a CPU share, not every logical core: rendering and
+        // physics retain headroom while a global bake is running.
+        workers = jobs::PoolWorkerCount("ORBIT_TECTONIC_BAKE_WORKERS", 4U, 1U);
     }
 
     // Plate ownership by noise-metric growth over the raster: the structure
@@ -121,7 +125,10 @@ std::shared_ptr<const terrain::BakedTectonicRasters> BakeTectonics(
     threads.reserve(workers > 0U ? workers - 1U : 0U);
     for (u32 i = 1U; i < workers; ++i)
     {
-        threads.emplace_back(work);
+        threads.emplace_back([&] {
+            core::SetBackgroundThreadPriority();
+            work();
+        });
     }
     work();
     for (auto& thread : threads)

@@ -1,6 +1,10 @@
 #include <orbit/celestial_atmosphere/AtmosphereRenderer.hpp>
 #include <orbit/lighting/TerrainSunShadow.hpp>
 #include <orbit/lighting/SunVisibilityShader.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <chrono>
+#include <utility>
 #include <string>
 
 #include <algorithm>
@@ -475,9 +479,22 @@ float4 main(VSOutput input) : SV_Target0
 
 AtmosphereRenderer::AtmosphereRenderer(
     rhi::Device& device,
-    const shader::Compiler& compiler)
+    const shader::Compiler&)
+    : device_(&device)
 {
-    const auto vertex =
+    emptyTerrainShadow_ = lighting::CreateEmptyTerrainSunShadowBuffer(device);
+}
+
+bool AtmosphereRenderer::Ready()
+{
+    if (pipeline_) return pipeline_->Poll() != nullptr;
+    if (!pendingShaders_.valid())
+    {
+        auto admitted = jobs::TrySubmitBackgroundCpu([]() -> CompiledShaders {
+            // The worker owns the DXC instance. No borrowed Studio compiler
+            // or mutable viewport state can outlive the render graph.
+            const shader::dxc::DxcShaderCompiler compiler;
+    auto vertex =
         compiler.Compile({
             .source = kVertexShader,
             .entryPoint = "main",
@@ -517,7 +534,7 @@ float EllipsoidSunVisibility(float3 p, float3 axes,
     return StellarDiscFraction(clearance, spread);
 }
 )");
-    const auto pixel =
+    auto pixel =
         compiler.Compile({
             .source = pixelSource,
             .entryPoint = "main",
@@ -525,9 +542,19 @@ float EllipsoidSunVisibility(float3 p, float3 axes,
             .debug = false
         });
 
-    emptyTerrainShadow_ = lighting::CreateEmptyTerrainSunShadowBuffer(device);
-    pipeline_ =
-        device.CreateGraphicsPipeline({
+            return {std::move(vertex), std::move(pixel)};
+        }, jobs::JobPriority::High);
+        if (admitted) pendingShaders_ = std::move(*admitted);
+    }
+    if (!pendingShaders_.valid() ||
+        pendingShaders_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        return false;
+    auto compiled = pendingShaders_.get();
+    const auto& vertex = compiled.vertex;
+    const auto& pixel = compiled.pixel;
+    pipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(
+        *device_, rhi::GraphicsPipelineDesc{
             .vertexShader = {
                 .data = vertex.bytecode.data(),
                 .size = vertex.bytecode.size()
@@ -552,6 +579,7 @@ float EllipsoidSunVisibility(float3 p, float3 axes,
             },
             .colorAttachmentCount = 1U
         });
+    return pipeline_->Poll() != nullptr;
 }
 
 AtmosphereRenderer::~AtmosphereRenderer() = default;
@@ -567,9 +595,10 @@ void AtmosphereRenderer::Draw(
     const AtmosphereParameters& p,
     const AtmosphereRenderView& view)
 {
-    if (width == 0U || height == 0U)
+    if (width == 0U || height == 0U ||
+        pipeline_ == nullptr || pipeline_->Poll() == nullptr)
     {
-        return;
+        return; // Retain prior composite while Vulkan compiles in the background.
     }
 
     const auto f =
@@ -651,7 +680,7 @@ void AtmosphereRenderer::Draw(
         .bottom = static_cast<i32>(height)
     });
 
-    commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsPipeline(*pipeline_->Poll());
     commands.SetGraphicsConstants(constants);
     commands.SetGraphicsTexture(0, sceneColor);
     commands.SetGraphicsTexture(1, depth);

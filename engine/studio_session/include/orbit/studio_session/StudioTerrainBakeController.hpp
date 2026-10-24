@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace orbit::studio_session
 {
@@ -36,7 +37,8 @@ public:
     // Returns true when a bake was installed and the composition rebuilt.
     [[nodiscard]] bool Tick();
 
-    // Drops the service (and cancels any bake) when the world closes.
+    // Cancels in-flight bakes on world close, retiring their services without
+    // joining a running worker on the Studio frame thread.
     void Clear();
 
     [[nodiscard]] std::optional<terrain_bake::BakeStatus> Status(
@@ -57,7 +59,12 @@ private:
     [[nodiscard]] std::optional<world::PlanetId> PlanetFor(
         scene::ObjectId terrainObject) const;
 
+    void ReapRetiredServices();
+
     editor_session::EditorWorldSession& world_;
+    // Old-world bake workers are cancelled but not joined on a frame.
+    // Services stay alive until the workers report completion.
+    std::vector<std::unique_ptr<terrain_bake::TerrainBakeService>> retiredServices_;
     std::unique_ptr<terrain_bake::TerrainBakeService> service_;
     std::filesystem::path root_;
     std::shared_ptr<const terrain_bake::GeologyBakeBackend> geologyBakeBackend_;

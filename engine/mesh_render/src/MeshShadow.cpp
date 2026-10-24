@@ -1,4 +1,8 @@
 #include <orbit/mesh_render/MeshShadow.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <chrono>
+#include <utility>
 
 #include "MeshDrawRecords.hpp"
 
@@ -12,7 +16,6 @@ namespace orbit::mesh_render
 {
 namespace
 {
-constexpr u64 kRecordRetireTicks = 24U;
 constexpr u32 kShadowPushDwords = 16U;
 constexpr u32 kResolvePushDwords = 29U;
 
@@ -852,27 +855,49 @@ std::array<f32, 3> MeshLocalUp(
 
 MeshShadowMapRenderer::MeshShadowMapRenderer(
     rhi::Device& device,
-    const shader::Compiler& compiler)
-    : device_(device)
+    const shader::Compiler&)
+    : device_(device), recordUploads_(device)
 {
-    const auto vs = compiler.Compile({
+}
+
+bool MeshShadowMapRenderer::PipelineReady()
+{
+    if (pipeline_) return pipeline_->Poll() != nullptr;
+    if (!pendingShaders_.valid())
+    {
+        auto submitted = jobs::TrySubmitBackgroundCpu([]() -> CompiledShaders {
+            const shader::dxc::DxcShaderCompiler compiler;
+    auto vs = compiler.Compile({
         .source = kShadowVertexShader,
         .entryPoint = "main",
         .stage = shader::Stage::Vertex,
         .debug = false});
-    const auto ps = compiler.Compile({
+    auto ps = compiler.Compile({
         .source = kShadowPixelShader,
         .entryPoint = "main",
         .stage = shader::Stage::Pixel,
         .debug = false});
 
+            return {std::move(vs), std::move(ps)};
+        }, jobs::JobPriority::High);
+        if (submitted) pendingShaders_ = std::move(*submitted);
+    }
+    if (!pendingShaders_.valid() ||
+        pendingShaders_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        return false;
+    auto compiled = pendingShaders_.get();
+    const auto& vs = compiled.vertex;
+    const auto& ps = compiled.pixel;
     static constexpr std::array<rhi::VertexAttribute, 2> attributes{{
         {0U, rhi::VertexFormat::Float3,
          offsetof(mesh_import::MeshVertex, position)},
         {3U, rhi::VertexFormat::Float2,
          offsetof(mesh_import::MeshVertex, uv)}}};
 
-    pipeline_ = device.CreateGraphicsPipeline({
+
+    pipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(device_,
+        rhi::GraphicsPipelineDesc{
         .vertexShader = {.data = vs.bytecode.data(), .size = vs.bytecode.size()},
         .pixelShader = {.data = ps.bytecode.data(), .size = ps.bytecode.size()},
         .vertexAttributes = attributes,
@@ -893,6 +918,7 @@ MeshShadowMapRenderer::MeshShadowMapRenderer(
             rhi::TextureFormat::RGBA8_UNorm,
             rhi::TextureFormat::RGBA8_UNorm},
         .colorAttachmentCount = 1U});
+    return pipeline_->Poll() != nullptr;
 }
 
 void MeshShadowMapRenderer::DrawViews(
@@ -905,16 +931,12 @@ void MeshShadowMapRenderer::DrawViews(
     const u32 width,
     const u32 height)
 {
-    ++tick_;
-    std::erase_if(
-        records_,
-        [this](const RetiredRecords& records)
-        {
-            return tick_ >= records.retireAtTick;
-        });
-
-    if (pipeline_ == nullptr)
+    // The shadow map must be a well-defined fully-lit fallback during cold
+    // driver compilation. Do not sample uninitialized shadow atlas pixels.
+    if (!PipelineReady())
     {
+        commands.ClearColorTarget(colorMap, {1.0e9F, 1.0e9F, 1.0e9F, 1.0e9F});
+        commands.ClearDepthTarget(depthMap, 1.0F);
         return;
     }
 
@@ -933,20 +955,16 @@ void MeshShadowMapRenderer::DrawViews(
         return;
     }
 
-    auto buffer = device_.CreateBuffer({
-        .sizeBytes = records.size() * sizeof(f32),
-        .usage = rhi::BufferUsage::Structured,
-        .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::ShaderResource});
-    std::memcpy(buffer->Map(), records.data(), records.size() * sizeof(f32));
-    buffer->Unmap();
+    auto& buffer = recordUploads_.Acquire(records.size() * sizeof(f32));
+    std::memcpy(buffer.Map(), records.data(), records.size() * sizeof(f32));
+    buffer.Unmap();
 
     commands.SetScissor({
         .left = 0,
         .top = 0,
         .right = static_cast<i32>(width),
         .bottom = static_cast<i32>(height)});
-    commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsPipeline(*pipeline_->Poll());
 
     for (const View& view : views)
     {
@@ -978,7 +996,7 @@ void MeshShadowMapRenderer::DrawViews(
                     MeshTextureRole::BaseColor)]);
 
             commands.SetGraphicsConstants(constants);
-            commands.SetGraphicsBuffer(0U, *buffer);
+            commands.SetGraphicsBuffer(0U, buffer);
             // Opaque parts never read the texture; any bound texture will do.
             commands.SetGraphicsTexture(
                 0U,
@@ -994,7 +1012,7 @@ void MeshShadowMapRenderer::DrawViews(
         }
     }
 
-    records_.push_back({std::move(buffer), tick_ + kRecordRetireTicks});
+
 }
 
 void MeshShadowMapRenderer::Draw(
@@ -1049,16 +1067,35 @@ void MeshShadowMapRenderer::DrawSky(
 
 MeshSunShadowRenderer::MeshSunShadowRenderer(
     rhi::Device& device,
-    const shader::Compiler& compiler)
-    : device_(device)
+    const shader::Compiler&)
+    : device_(device), parameterUploads_(device)
 {
-    const auto compute = compiler.Compile({
+}
+
+bool MeshSunShadowRenderer::PipelineReady()
+{
+    if (pipeline_) return pipeline_->Poll() != nullptr;
+    if (!pendingShader_.valid())
+    {
+        auto submitted = jobs::TrySubmitBackgroundCpu([]() -> shader::Binary {
+            const shader::dxc::DxcShaderCompiler compiler;
+    auto compute = compiler.Compile({
         .source = kResolveShader,
         .entryPoint = "main",
         .stage = shader::Stage::Compute,
         .debug = false});
 
-    pipeline_ = device.CreateComputePipeline({
+            return std::move(compute);
+        }, jobs::JobPriority::High);
+        if (submitted) pendingShader_ = std::move(*submitted);
+    }
+    if (!pendingShader_.valid() ||
+        pendingShader_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        return false;
+    auto compute = pendingShader_.get();
+    pipeline_ = std::make_unique<rhi::DeferredComputePipeline>(device_,
+        rhi::ComputePipelineDesc{
         .computeShader = {
             .data = compute.bytecode.data(),
             .size = compute.bytecode.size()},
@@ -1066,6 +1103,7 @@ MeshSunShadowRenderer::MeshSunShadowRenderer(
         .shaderResourceBuffers = 1U,
         .storageTextures = 1U,
         .sampledTextures = 5U});
+    return pipeline_->Poll() != nullptr;
 }
 
 void MeshSunShadowRenderer::Draw(
@@ -1084,18 +1122,10 @@ void MeshSunShadowRenderer::Draw(
     const bool initialize,
     const u32 temporalIndex)
 {
-    if (pipeline_ == nullptr || width == 0U || height == 0U)
+    if (!PipelineReady() || width == 0U || height == 0U)
     {
         return;
     }
-
-    ++tick_;
-    std::erase_if(
-        parameters_,
-        [this](const RetiredBuffer& retired)
-        {
-            return tick_ >= retired.retireAtTick;
-        });
 
     const bool skyEnabled =
         sky.irradiance.x > 0.0F || sky.irradiance.y > 0.0F ||
@@ -1104,13 +1134,9 @@ void MeshSunShadowRenderer::Draw(
         sky.irradiance.x, sky.irradiance.y, sky.irradiance.z,
         skyEnabled ? 1.0F : 0.0F,
         sky.localUp[0], sky.localUp[1], sky.localUp[2], 0.0F};
-    auto buffer = device_.CreateBuffer({
-        .sizeBytes = sizeof(parameters),
-        .usage = rhi::BufferUsage::Structured,
-        .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::ShaderResource});
-    std::memcpy(buffer->Map(), parameters.data(), sizeof(parameters));
-    buffer->Unmap();
+    auto& buffer = parameterUploads_.Acquire(sizeof(parameters));
+    std::memcpy(buffer.Map(), parameters.data(), sizeof(parameters));
+    buffer.Unmap();
 
     const f32 aspect = static_cast<f32>(width) / static_cast<f32>(height);
     const f32 nearPlane = std::max(view.nearPlaneMeters, 1.0e-5F);
@@ -1138,9 +1164,9 @@ void MeshSunShadowRenderer::Draw(
         AsBits(frame.center[2]), AsBits(frame.sunTanHalfAngle),
         temporalIndex};
 
-    commands.SetComputePipeline(*pipeline_);
+    commands.SetComputePipeline(*pipeline_->Poll());
     commands.SetComputeConstants(constants);
-    commands.SetComputeBuffer(0U, *buffer);
+    commands.SetComputeBuffer(0U, buffer);
     commands.SetComputeStorageTexture(0U, target);
     commands.SetComputeTexture(0U, surfaceNormalMetallic);
     commands.SetComputeTexture(1U, surfaceEmissionClass);
@@ -1150,6 +1176,6 @@ void MeshSunShadowRenderer::Draw(
     // One thread per 2x2 quad, 16x16 quads (32x32 pixels) per group.
     commands.Dispatch((width + 31U) / 32U, (height + 31U) / 32U, 1U);
 
-    parameters_.push_back({std::move(buffer), tick_ + kRecordRetireTicks});
+
 }
 } // namespace orbit::mesh_render

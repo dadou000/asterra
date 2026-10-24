@@ -2,10 +2,15 @@
 
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/path_geometry/PathDerived.hpp>
+#include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_geometry/CorridorSweep.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 
+#include <atomic>
 #include <functional>
+#include <future>
+#include <memory>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -56,6 +61,11 @@ public:
     [[nodiscard]] const path_geometry::PathDerivedProduct*
     Find(scene::ObjectId edge) const noexcept;
 
+    // Worker-safe immutable ownership of a published corridor. Retiring an
+    // old universe cannot free a mesh still being read by junction workers.
+    [[nodiscard]] std::shared_ptr<const path_geometry::PathDerivedProduct>
+    Snapshot(scene::ObjectId edge) const noexcept;
+
     [[nodiscard]] std::optional<u64>
     RouteGeneration(scene::ObjectId edge) const noexcept;
 
@@ -70,21 +80,32 @@ public:
     {
         u64 authoredSignature{0};
         path_geometry::PathCenterline centerline;
+        std::optional<path_geometry::PathSourceRequest> sourceRequest;
         paths::PathProfile profile;
         path_geometry::CorridorSweep corridor;
+        // When true, worker derives the actual road/rail cross section,
+        // engineering report and cant from immutable path/profile inputs.
+        bool autoPlanInfrastructure{false};
+        f64 designSpeedMetersPerSecond{0.0};
+        bool applyAutomaticCant{true};
         path_geometry::PathBuildOptions options{};
         path_geometry::CorridorRefinementOptions refinement{};
         std::optional<u64> routeGeneration;
     };
     using RebuildResolver =
         std::function<std::optional<RebuildRequest>(scene::ObjectId)>;
-    // Resolver must snapshot current authoritative inputs, not reuse stale meshes.
-    // Processes at most budget dirty edges in stable ID order. Failed edges
-    // stay dirty with a diagnostic; they are not retried until explicitly requested.
+    // Resolver snapshots only authoritative inputs on the caller thread.
+    // CPU-heavy BuildCorridorDerived runs on the shared background pool;
+    // completed results publish here only if the binding, invalidation token
+    // and captured dependencies still match. The previous geometry remains
+    // visible while an edit is rebuilding. Budget limits launches per tick.
     [[nodiscard]] std::size_t RebuildDirty(
         const RebuildResolver& resolver, std::size_t budget = 2);
     [[nodiscard]] std::string RebuildError(scene::ObjectId edge) const;
     [[nodiscard]] std::size_t DirtyCount() const noexcept;
+    // Cheap owner-thread invalidation stamp for render/junction consumers.
+    // Changes whenever visible products, dirty state or cache binding changes.
+    [[nodiscard]] u64 ContentRevision() const noexcept;
     [[nodiscard]] bool Erase(scene::ObjectId edge) noexcept;
     void Clear() noexcept;
 
@@ -104,12 +125,29 @@ private:
         [[nodiscard]] bool operator==(const DependencySnapshot&) const = default;
     };
     [[nodiscard]] DependencySnapshot CaptureDependencies(scene::ObjectId edge) const;
+    struct PendingCorridor
+    {
+        std::future<path_geometry::PathDerivedProduct> result;
+        DependencySnapshot sourceDependencies;
+        u64 authoredSignature{0};
+        u64 bindingGeneration{0};
+        u64 dirtyToken{0};
+        std::optional<u64> routeGeneration;
+    };
+    std::unordered_map<scene::ObjectId, PendingCorridor> pendingCorridors_;
+    std::unordered_map<scene::ObjectId, u64> dirtyTokens_;
+    u64 nextDirtyToken_{0};
+    // Account also for discarded jobs that still occupy background workers.
+    // Shared ownership keeps admission bookkeeping alive across cache resets.
+    std::shared_ptr<std::atomic<u32>> activeCorridorJobs_{
+        std::make_shared<std::atomic<u32>>(0U)};
     std::unordered_map<scene::ObjectId, DependencySnapshot> dependencySnapshots_;
     u64 observedSceneRevision_{~u64{0}};
+    u64 contentRevision_{1U};
     editor_session::EditorWorldSession* world_{nullptr};
     std::unordered_map<
         scene::ObjectId,
-        path_geometry::PathDerivedProduct>
+        std::shared_ptr<const path_geometry::PathDerivedProduct>>
         products_;
     std::unordered_map<scene::ObjectId, u64>
         routeGenerations_;

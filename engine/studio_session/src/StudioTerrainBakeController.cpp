@@ -13,10 +13,28 @@ StudioTerrainBakeController::StudioTerrainBakeController(
 
 StudioTerrainBakeController::~StudioTerrainBakeController() = default;
 
+void StudioTerrainBakeController::ReapRetiredServices()
+{
+    // Do not join an unfinished worker on the editor frame. A service is
+    // destroyed only once all its workers have completed or were never run.
+    for (auto it = retiredServices_.begin(); it != retiredServices_.end();)
+    {
+        if ((*it)->WorkersQuiescent())
+            it = retiredServices_.erase(it);
+        else
+            ++it;
+    }
+}
+
 void StudioTerrainBakeController::Clear()
 {
-    service_.reset();
+    if (service_)
+    {
+        service_->RequestCancelAll();
+        retiredServices_.push_back(std::move(service_));
+    }
     root_.clear();
+    ReapRetiredServices();
 }
 
 std::optional<world::PlanetId> StudioTerrainBakeController::PlanetFor(
@@ -43,6 +61,7 @@ std::optional<world::PlanetId> StudioTerrainBakeController::PlanetFor(
 
 bool StudioTerrainBakeController::Tick()
 {
+    ReapRetiredServices();
     if (!world_.HasWorld())
     {
         Clear();
@@ -52,6 +71,11 @@ bool StudioTerrainBakeController::Tick()
     const std::filesystem::path root = world_.Project().RootDirectory();
     if (service_ == nullptr || root != root_)
     {
+        if (service_)
+        {
+            service_->RequestCancelAll();
+            retiredServices_.push_back(std::move(service_));
+        }
         service_ = std::make_unique<terrain_bake::TerrainBakeService>(
             root / "Bakes");
         service_->SetGeologyBakeBackend(geologyBakeBackend_);
@@ -66,9 +90,9 @@ bool StudioTerrainBakeController::Tick()
               std::chrono::duration<f64>(now - lastTick_).count(), 0.0, 0.25);
     lastTick_ = now;
 
-    // Observe every terrain body's current recipe. A planet seen for the first
-    // time with no bake on disk is baked here, on the calling thread, so no
-    // terrain page is ever generated from the plate model.
+    // Never bake terrain on Studio's frame thread. A first-time planet keeps
+    // its analytic/previous representation while the bake is constructed on
+    // the service worker, then receives an atomic finished publication.
     for (const universe::BodyId body : world_.Surfaces().TerrainBodies())
     {
         const auto* services = world_.Surfaces().ServicesForBody(body);
@@ -113,7 +137,9 @@ bool StudioTerrainBakeController::Tick()
             (service_->Active(recipe.planet.id) == nullptr ||
              service_->ActiveRivers(recipe.planet.id) == nullptr))
         {
-            static_cast<void>(service_->BakeNow(recipe.planet.id));
+            // First visit: request the asynchronous worker bake. BakeNow would
+            // stall Studio for the entire procedural generation.
+            static_cast<void>(service_->StartBake(recipe.planet.id));
         }
     }
 

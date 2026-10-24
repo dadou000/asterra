@@ -5,6 +5,7 @@
 #include <orbit/world/Planet.hpp>
 
 #include <array>
+#include <chrono>
 #include <bit>
 #include <cmath>
 #include <stdexcept>
@@ -24,10 +25,21 @@ bool GpuPhysicalSurfacePage::IsValid() const noexcept
                 GpuPhysicalSurfaceTexel);
 }
 
+void GpuPhysicalPageComposite::PrewarmShaders(const shader::Compiler& compiler)
+{
+    static_cast<void>(compiler.Compile({
+        .source = detail::kPhysicalPageCompositeShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Compute,
+        .debug = false
+    }));
+}
+
 GpuPhysicalPageComposite::
 GpuPhysicalPageComposite(
     rhi::Device& device,
     const shader::Compiler& compiler)
+    : device_(&device)
 {
     const auto compute =
         compiler.Compile({
@@ -46,17 +58,28 @@ GpuPhysicalPageComposite(
             "Orbit failed to compile the M12 physical-page composite shader.");
     }
 
-    pipeline_ =
-        device.CreateComputePipeline({
-            .computeShader = {
-                .data =
-                    compute.bytecode.data(),
-                .size =
-                    compute.bytecode.size()
-            },
+    shaderBytecode_ = compute.bytecode;
+    static_cast<void>(Ready());
+}
+
+bool GpuPhysicalPageComposite::Ready() const
+{
+    if (pipeline_) return true;
+    if (!pendingPipeline_.valid())
+    {
+        auto admitted = device_->TryCreateComputePipelineAsync({
+            .computeShader = {shaderBytecode_.data(), shaderBytecode_.size()},
             .pushConstantDwords = 32U,
             .shaderResourceBuffers = 2U
         });
+        if (admitted) pendingPipeline_ = std::move(*admitted);
+    }
+    if (!pendingPipeline_.valid() ||
+        pendingPipeline_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        return false;
+    pipeline_ = pendingPipeline_.get();
+    return pipeline_ != nullptr;
 }
 
 GpuPhysicalPageComposite::
@@ -70,6 +93,9 @@ void GpuPhysicalPageComposite::Dispatch(
     const f64 planetRadiusMeters,
     rhi::Buffer& outputSamples) const
 {
+    if (!Ready())
+        throw std::runtime_error(
+            "Physical page composite used before pipeline publication.");
     if (!page.IsValid() ||
         request.resolution == 0U ||
         region.width == 0U ||

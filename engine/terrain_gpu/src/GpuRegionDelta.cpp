@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <bit>
 #include <stdexcept>
 
@@ -36,9 +37,20 @@ void StoreFloat3(
 }
 } // namespace
 
+void GpuRegionDelta::PrewarmShaders(const shader::Compiler& compiler)
+{
+    static_cast<void>(compiler.Compile({
+        .source = detail::kRegionDeltaComputeShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Compute,
+        .debug = false
+    }));
+}
+
 GpuRegionDelta::GpuRegionDelta(
     rhi::Device& device,
     const shader::Compiler& shaderCompiler)
+    : device_(&device)
 {
     const shader::Binary compute = shaderCompiler.Compile({
         .source = detail::kRegionDeltaComputeShader,
@@ -54,14 +66,28 @@ GpuRegionDelta::GpuRegionDelta(
             "shader.");
     }
 
-    pipeline_ = device.CreateComputePipeline({
-        .computeShader = {
-            .data = compute.bytecode.data(),
-            .size = compute.bytecode.size()
-        },
-        .pushConstantDwords = kPushConstantDwords,
-        .shaderResourceBuffers = 2
-    });
+    shaderBytecode_ = compute.bytecode;
+    static_cast<void>(Ready());
+}
+
+bool GpuRegionDelta::Ready() const
+{
+    if (pipeline_) return true;
+    if (!pendingPipeline_.valid())
+    {
+        auto admitted = device_->TryCreateComputePipelineAsync({
+            .computeShader = {shaderBytecode_.data(), shaderBytecode_.size()},
+            .pushConstantDwords = kPushConstantDwords,
+            .shaderResourceBuffers = 2
+        });
+        if (admitted) pendingPipeline_ = std::move(*admitted);
+    }
+    if (!pendingPipeline_.valid() ||
+        pendingPipeline_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        return false;
+    pipeline_ = pendingPipeline_.get();
+    return pipeline_ != nullptr;
 }
 
 GpuRegionDelta::~GpuRegionDelta() = default;
@@ -72,6 +98,8 @@ void GpuRegionDelta::Dispatch(
     rhi::Buffer& regionDelta,
     rhi::Buffer& samples) const
 {
+    if (!Ready())
+        throw std::runtime_error("Region-delta GPU pipeline not ready.");
     std::array<u32, kPushConstantDwords> pushConstants{};
 
     StoreFloat3(pushConstants, 0, request.surfaceFrame.up);

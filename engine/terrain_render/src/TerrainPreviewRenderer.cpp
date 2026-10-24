@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstring>
 #include <deque>
+#include <future>
 #include <limits>
 #include <optional>
 #include <span>
@@ -678,6 +679,12 @@ public:
         if (targetWidth == 0 || targetHeight == 0 || waterOptics_.opacity <= 0.0F ||
             wireframe_)
             return;
+        if (!gpuFieldGenerator_.Ready() || !physicalPageComposite_.Ready()) return;
+        if (regionDeltaComposite_ != nullptr && !regionDeltaComposite_->Ready())
+            return;
+        // Water must not appear over a still-missing terrain pipeline.
+        if (!CollectTerrainPipeline(wireframe_ != config_.wireframe) ||
+            !CollectWaterPipeline()) return;
 
         const math::Mat4 mvp =
             ViewProjection(camera, targetWidth, targetHeight);
@@ -780,6 +787,11 @@ public:
                 "Orbit terrain frame index exceeds configured frames in flight.");
         if (targetWidth == 0 || targetHeight == 0)
             return;
+        // The GPU compute shader may still be compiling on the driver
+        // worker. Never generate incomplete terrain patches in this case.
+        if (!gpuFieldGenerator_.Ready() || !physicalPageComposite_.Ready() ||
+            (regionDeltaComposite_ != nullptr && !regionDeltaComposite_->Ready()))
+            return;
 
         const math::Mat4 mvp =
             ViewProjection(camera, targetWidth, targetHeight);
@@ -798,16 +810,11 @@ public:
             .right = static_cast<i32>(targetWidth),
             .bottom = static_cast<i32>(targetHeight)
         });
-        if (wireframe_ != config_.wireframe)
-        {
-            if (!alternatePipeline_)
-                alternatePipeline_ = CreateTerrainPipeline(wireframe_);
-            commandList.SetGraphicsPipeline(*alternatePipeline_);
-        }
-        else
-        {
-            commandList.SetGraphicsPipeline(*pipeline_);
-        }
+        const bool alternate = wireframe_ != config_.wireframe;
+        if (!CollectTerrainPipeline(alternate))
+            return; // Preserve sky/fallback; never wait for the Vulkan driver.
+        commandList.SetGraphicsPipeline(
+            alternate ? *alternatePipeline_ : *pipeline_);
         surfaceEffects_.Bind(commandList, frameIndex);
 
         bool groundRecordedThisFrame = false;
@@ -1015,18 +1022,21 @@ private:
             .debug = false
         });
 
-        pipeline_ = CreateTerrainPipeline(config_.wireframe);
+        // Cold Vulkan driver compilation runs on the device worker. A
+        // zero-time poll in Draw publishes the completed pipeline.
+        QueueTerrainPipeline(false);
     }
 
     // The terrain pipeline in a fill mode. The wireframe variant is built the
     // first time it is drawn, from the already compiled shaders.
-    [[nodiscard]] std::unique_ptr<rhi::GraphicsPipeline>
-    CreateTerrainPipeline(const bool wireframe)
+    [[nodiscard]] std::optional<
+        std::future<std::unique_ptr<rhi::GraphicsPipeline>>>
+    RequestTerrainPipeline(const bool wireframe)
     {
         const shader::Binary& vertexShader = terrainVertexShader_;
         const shader::Binary& pixelShader = terrainPixelShader_;
 
-        return device_.CreateGraphicsPipeline({
+        return device_.TryCreateGraphicsPipelineAsync({
             .vertexShader = {
                 .data = vertexShader.bytecode.data(),
                 .size = vertexShader.bytecode.size()
@@ -1056,11 +1066,33 @@ private:
         });
     }
 
+    void QueueTerrainPipeline(const bool alternate)
+    {
+        auto& future = alternate ? pendingAlternatePipeline_ : pendingPipeline_;
+        if (future.valid()) return;
+        auto admitted = RequestTerrainPipeline(
+            alternate ? !config_.wireframe : config_.wireframe);
+        if (admitted) future = std::move(*admitted);
+    }
+
+    [[nodiscard]] bool CollectTerrainPipeline(const bool alternate)
+    {
+        auto& pipeline = alternate ? alternatePipeline_ : pipeline_;
+        auto& future = alternate ? pendingAlternatePipeline_ : pendingPipeline_;
+        if (pipeline) return true;
+        if (!future.valid()) QueueTerrainPipeline(alternate);
+        if (!future.valid() ||
+            future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return false;
+        pipeline = future.get();
+        return pipeline != nullptr;
+    }
+
     void CreateWaterPipeline(const shader::Compiler& shaderCompiler)
     {
         const std::string waterVertexSource =
             BuildClipmapWaterVertexShader(kVertexShader);
-        const shader::Binary vertexShader = shaderCompiler.Compile({
+        waterVertexShader_ = shaderCompiler.Compile({
             .source = waterVertexSource,
             .entryPoint = "main",
             .stage = shader::Stage::Vertex,
@@ -1068,21 +1100,46 @@ private:
         });
         const std::string waterPixelSource =
             BuildClipmapWaterPixelShader(waterVertexSource);
-        const shader::Binary pixelShader = shaderCompiler.Compile({
+        waterPixelShader_ = shaderCompiler.Compile({
             .source = waterPixelSource,
             .entryPoint = "main",
             .stage = shader::Stage::Pixel,
             .debug = false
         });
 
-        waterPipeline_ = device_.CreateGraphicsPipeline({
+        QueueWaterPipeline();
+    }
+    void QueueWaterPipeline()
+    {
+        if (waterPipeline_ || pendingWaterPipeline_.valid()) return;
+        auto admitted = RequestWaterPipeline();
+        if (admitted) pendingWaterPipeline_ = std::move(*admitted);
+    }
+
+    [[nodiscard]] bool CollectWaterPipeline()
+    {
+        if (waterPipeline_) return true;
+        QueueWaterPipeline();
+        if (!pendingWaterPipeline_.valid() ||
+            pendingWaterPipeline_.wait_for(std::chrono::seconds(0)) !=
+                std::future_status::ready)
+            return false;
+        waterPipeline_ = pendingWaterPipeline_.get();
+        return waterPipeline_ != nullptr;
+    }
+
+    [[nodiscard]] std::optional<
+        std::future<std::unique_ptr<rhi::GraphicsPipeline>>>
+    RequestWaterPipeline()
+    {
+        return device_.TryCreateGraphicsPipelineAsync({
             .vertexShader = {
-                .data = vertexShader.bytecode.data(),
-                .size = vertexShader.bytecode.size()
+                .data = waterVertexShader_.bytecode.data(),
+                .size = waterVertexShader_.bytecode.size()
             },
             .pixelShader = {
-                .data = pixelShader.bytecode.data(),
-                .size = pixelShader.bytecode.size()
+                .data = waterPixelShader_.bytecode.data(),
+                .size = waterPixelShader_.bytecode.size()
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0,
@@ -1105,6 +1162,7 @@ private:
             .colorAttachmentCount = 1U
         });
     }
+
 
     // Frame the Studio camera vectors are expressed in: the live observer's
     // transported frame. It advances with the live observer even while the
@@ -1665,6 +1723,9 @@ private:
     TerrainPreviewConfig config_;
     SurfaceEffectGpuBinding surfaceEffects_;
     std::unique_ptr<rhi::GraphicsPipeline> waterPipeline_;
+    std::future<std::unique_ptr<rhi::GraphicsPipeline>> pendingWaterPipeline_;
+    shader::Binary waterVertexShader_;
+    shader::Binary waterPixelShader_;
     TerrainWaterOptics waterOptics_{};
     std::vector<std::unique_ptr<rhi::Buffer>> waterOpticsBuffers_;
     terrain_view::ClipmapConfig baseClipmapConfig_{};
@@ -1673,6 +1734,8 @@ private:
     terrain_stream::ToroidalResidency residency_;
     std::vector<LevelGpuState> levels_;
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+    std::future<std::unique_ptr<rhi::GraphicsPipeline>> pendingPipeline_;
+    std::future<std::unique_ptr<rhi::GraphicsPipeline>> pendingAlternatePipeline_;
     // The other fill mode, built the first time it is drawn.
     std::unique_ptr<rhi::GraphicsPipeline> alternatePipeline_;
     shader::Binary terrainVertexShader_;
@@ -1735,6 +1798,38 @@ private:
     std::chrono::steady_clock::time_point lastRebaseTime_{};
     std::vector<u32> patchVertexCounts_;
 };
+
+void TerrainPreviewRenderer::PrewarmShaders(const shader::Compiler& compiler)
+{
+    static_cast<void>(compiler.Compile({
+        .source = kVertexShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Vertex,
+        .debug = false
+    }));
+    const std::string pixelSource = BuildSurfaceEffectPixelShader(
+        BuildClipmapBedPixelShader(kPixelShader));
+    static_cast<void>(compiler.Compile({
+        .source = pixelSource,
+        .entryPoint = "main",
+        .stage = shader::Stage::Pixel,
+        .debug = false
+    }));
+    const std::string waterVertex = BuildClipmapWaterVertexShader(kVertexShader);
+    static_cast<void>(compiler.Compile({
+        .source = waterVertex,
+        .entryPoint = "main",
+        .stage = shader::Stage::Vertex,
+        .debug = false
+    }));
+    const std::string waterPixel = BuildClipmapWaterPixelShader(waterVertex);
+    static_cast<void>(compiler.Compile({
+        .source = waterPixel,
+        .entryPoint = "main",
+        .stage = shader::Stage::Pixel,
+        .debug = false
+    }));
+}
 
 TerrainPreviewRenderer::TerrainPreviewRenderer(
     rhi::Device& device,

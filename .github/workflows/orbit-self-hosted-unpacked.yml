@@ -54,10 +54,10 @@ jobs:
         run: call build_orbit.bat unpacked nopause
 
       - name: Build targeted CPU test executables
-        run: cmake --build build --config Release --target OrbitTerrainSunShadowTests OrbitCelestialAtmosphereTests --parallel 2
+        run: cmake --build build --config Release --target OrbitJobSystemTelemetryTests OrbitUniverseBoundPathCacheTests OrbitStudioRoadJunctionPipelineTests OrbitTerrainSunShadowTests OrbitCelestialAtmosphereTests OrbitTerrainSurfaceShaderTests OrbitTerrainGpuPhysicalPageCompositeShaderTests OrbitTerrainBakeTests OrbitPathSourceTests OrbitRhiDeferredPipelineTests OrbitMeshRenderTests OrbitGlassSurfaceTests OrbitEmissiveLightsTests OrbitReflectionShaderTests OrbitStudioGpuSubmitWorkerTests --parallel 2
 
       - name: Run targeted CPU tests
-        run: ctest --test-dir build -C Release -R "Orbit\.(TerrainSunShadow|CelestialAtmosphere)$" --output-on-failure
+        run: ctest --test-dir build -C Release -R "Orbit\.(JobSystemTelemetry|UniverseBoundPathCache|StudioRoadJunctionPipeline|TerrainSunShadow|CelestialAtmosphere|TerrainSurfaceShader|TerrainGpuPhysicalPageCompositeShader|TerrainBake|PathSource|RhiDeferredPipeline|MeshRender|GlassSurface|EmissiveLights|ReflectionShaders|StudioGpuSubmitWorker)$" --output-on-failure
 
       - name: Verify unpacked executable
         run: |
@@ -65,6 +65,21 @@ jobs:
           if not exist "build\apps\editor\Release\dxcompiler.dll" exit /b 1
           echo Unpacked Studio: %CD%\build\apps\editor\Release\OrbitStudio.exe
 
-      - name: Optional real-device Vulkan UI smoke
+      - name: Optional real-device Vulkan cold-pipeline and threaded-submit smoke
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.gpu_smoke }}
+        env:
+          ORBIT_THREADED_GPU_SUBMIT: '1'
+        run: call tools\validation\run_terrain_ui_smoke.bat release nobuild nopause
+
+      - name: Verify Vulkan driver cache persisted
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.gpu_smoke }}
+        run: |
+          if not exist "%LOCALAPPDATA%\Orbit\PipelineCache" exit /b 1
+          dir /b "%LOCALAPPDATA%\Orbit\PipelineCache\*.bin" >nul 2>nul
+          if errorlevel 1 exit /b 1
+
+      - name: Optional warm-cache Vulkan UI smoke with threaded submit
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.gpu_smoke }}
+        env:
+          ORBIT_THREADED_GPU_SUBMIT: '1'
         run: call tools\validation\run_terrain_ui_smoke.bat release nobuild nopause

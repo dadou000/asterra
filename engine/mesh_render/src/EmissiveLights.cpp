@@ -1,6 +1,10 @@
 #include <orbit/mesh_render/EmissiveLights.hpp>
 
 #include <orbit/lighting/SdfTraceShader.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <chrono>
+#include <utility>
 
 #include <algorithm>
 #include <bit>
@@ -14,7 +18,6 @@ namespace orbit::mesh_render
 {
 namespace
 {
-constexpr u64 kBufferRetireTicks = 24U;
 
 // Buffers: 0 = lights (element 0 = count, then two float4 per light: position
 // + equivalent radius, radiance + bounding radius), 1..4 = the distance field.
@@ -266,32 +269,61 @@ std::array<EmissiveLight, kMaxEmissiveLights> SelectEmissiveLights(
 
 EmissiveLightRenderer::EmissiveLightRenderer(
     rhi::Device& device,
-    const shader::Compiler& compiler)
-    : device_(device)
+    const shader::Compiler&)
+    : device_(device), lightUploads_(device)
 {
-    const auto cs = compiler.Compile({
-        .source = LightSource(),
-        .entryPoint = "main",
-        .stage = shader::Stage::Compute,
-        .debug = false});
-    lightPipeline_ = device.CreateComputePipeline({
+    dummySdf_ = device.CreateBuffer({
+        .sizeBytes = 64U,
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::UnorderedAccess});
+    std::memset(dummySdf_->Map(), 0, static_cast<std::size_t>(dummySdf_->SizeBytes()));
+    dummySdf_->Unmap();
+}
+
+bool EmissiveLightRenderer::PipelinesRequested()
+{
+    if (lightPipeline_ && compositePipeline_) return true;
+    if (!pendingShaders_.valid())
+    {
+        auto accepted = jobs::TrySubmitBackgroundCpu([]() -> CompiledShaders {
+            const shader::dxc::DxcShaderCompiler compiler;
+            auto cs = compiler.Compile({
+                .source = LightSource(),
+                .entryPoint = "main",
+                .stage = shader::Stage::Compute,
+                .debug = false});
+            auto vs = compiler.Compile({
+                .source = kCompositeVs,
+                .entryPoint = "main",
+                .stage = shader::Stage::Vertex,
+                .debug = false});
+            auto ps = compiler.Compile({
+                .source = kCompositePs,
+                .entryPoint = "main",
+                .stage = shader::Stage::Pixel,
+                .debug = false});
+            return {std::move(cs), std::move(vs), std::move(ps)};
+        }, jobs::JobPriority::High);
+        if (accepted) pendingShaders_ = std::move(*accepted);
+    }
+    if (!pendingShaders_.valid() ||
+        pendingShaders_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        return false;
+    auto compiled = pendingShaders_.get();
+    const auto& cs = compiled.compute;
+    const auto& vs = compiled.vertex;
+    const auto& ps = compiled.pixel;
+    lightPipeline_ = std::make_unique<rhi::DeferredComputePipeline>(device_,
+        rhi::ComputePipelineDesc{
         .computeShader = {.data = cs.bytecode.data(), .size = cs.bytecode.size()},
         .pushConstantDwords = 28U,
         .shaderResourceBuffers = 5U,
         .storageTextures = 1U,
         .sampledTextures = 4U});
-
-    const auto vs = compiler.Compile({
-        .source = kCompositeVs,
-        .entryPoint = "main",
-        .stage = shader::Stage::Vertex,
-        .debug = false});
-    const auto ps = compiler.Compile({
-        .source = kCompositePs,
-        .entryPoint = "main",
-        .stage = shader::Stage::Pixel,
-        .debug = false});
-    compositePipeline_ = device.CreateGraphicsPipeline({
+    compositePipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(device_,
+        rhi::GraphicsPipelineDesc{
         .vertexShader = {.data = vs.bytecode.data(), .size = vs.bytecode.size()},
         .pixelShader = {.data = ps.bytecode.data(), .size = ps.bytecode.size()},
         .shaderResourceBuffers = 0U,
@@ -304,14 +336,7 @@ EmissiveLightRenderer::EmissiveLightRenderer(
         .depthWrite = false,
         .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
         .colorAttachmentCount = 1U});
-
-    dummySdf_ = device.CreateBuffer({
-        .sizeBytes = 64U,
-        .usage = rhi::BufferUsage::Structured,
-        .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::UnorderedAccess});
-    std::memset(dummySdf_->Map(), 0, static_cast<std::size_t>(dummySdf_->SizeBytes()));
-    dummySdf_->Unmap();
+    return true;
 }
 
 void EmissiveLightRenderer::Light(
@@ -327,15 +352,8 @@ void EmissiveLightRenderer::Light(
     const lighting::LightingView& view,
     const lighting::SdfGatherInput* const sdf)
 {
-    ++tick_;
-    std::erase_if(
-        lightBuffers_,
-        [this](const RetiredBuffer& buffer)
-        {
-            return tick_ >= buffer.retireAtTick;
-        });
-
-    if (lightPipeline_ == nullptr || width == 0U || height == 0U)
+    if (!PipelinesRequested() || lightPipeline_->Poll() == nullptr ||
+        width == 0U || height == 0U)
     {
         return;
     }
@@ -358,13 +376,9 @@ void EmissiveLightRenderer::Light(
         out[6] = selected[i].radiance[2];
         out[7] = selected[i].boundingRadius;
     }
-    auto buffer = device_.CreateBuffer({
-        .sizeBytes = floats.size() * sizeof(f32),
-        .usage = rhi::BufferUsage::Structured,
-        .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::ShaderResource});
-    std::memcpy(buffer->Map(), floats.data(), floats.size() * sizeof(f32));
-    buffer->Unmap();
+    auto& buffer = lightUploads_.Acquire(floats.size() * sizeof(f32));
+    std::memcpy(buffer.Map(), floats.data(), floats.size() * sizeof(f32));
+    buffer.Unmap();
 
     const bool sdfAvailable =
         sdf != nullptr && sdf->distance != nullptr && sdf->albedo != nullptr &&
@@ -393,9 +407,9 @@ void EmissiveLightRenderer::Light(
         bits(sdfAvailable ? 1.0F : 0.0F),
         0U, 0U, 0U, 0U};
 
-    commands.SetComputePipeline(*lightPipeline_);
+    commands.SetComputePipeline(*lightPipeline_->Poll());
     commands.SetComputeConstants(constants);
-    commands.SetComputeBuffer(0U, *buffer);
+    commands.SetComputeBuffer(0U, buffer);
     commands.SetComputeBuffer(1U, sdfAvailable ? *sdf->distance : *dummySdf_);
     commands.SetComputeBuffer(2U, sdfAvailable ? *sdf->albedo : *dummySdf_);
     commands.SetComputeBuffer(3U, sdfAvailable ? *sdf->normal : *dummySdf_);
@@ -407,7 +421,7 @@ void EmissiveLightRenderer::Light(
     commands.SetComputeTexture(3U, depth);
     commands.Dispatch((width + 7U) / 8U, (height + 7U) / 8U, 1U);
 
-    lightBuffers_.push_back({std::move(buffer), tick_ + kBufferRetireTicks});
+
 }
 
 void EmissiveLightRenderer::Composite(
@@ -417,7 +431,9 @@ void EmissiveLightRenderer::Composite(
     const u32 width,
     const u32 height)
 {
-    if (compositePipeline_ == nullptr || width == 0U || height == 0U)
+    if (!PipelinesRequested() || compositePipeline_->Poll() == nullptr ||
+        lightPipeline_->Poll() == nullptr ||
+        width == 0U || height == 0U)
     {
         return;
     }
@@ -434,7 +450,7 @@ void EmissiveLightRenderer::Composite(
         .top = 0,
         .right = static_cast<i32>(width),
         .bottom = static_cast<i32>(height)});
-    commands.SetGraphicsPipeline(*compositePipeline_);
+    commands.SetGraphicsPipeline(*compositePipeline_->Poll());
     commands.SetGraphicsTexture(0U, lighting);
     commands.Draw(3U);
 }

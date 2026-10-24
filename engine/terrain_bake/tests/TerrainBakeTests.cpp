@@ -429,9 +429,12 @@ bool ServiceBakesRebakesAndKeepsTheRunningBakeOnFailure()
         auto edited = desc;
         edited.global.tectonic.plateCount = 9;
         service.Observe(planet.id, planet, edited, {.resolution = 32, .autoRebake = true});
+        ok &= Check(Pump(service, [&] {
+            return service.Status(planet.id).state == terrain_bake::BakeState::Ready;
+        }), "saved bake file loads asynchronously");
         const auto completed = service.TakeCompleted();
         ok &= Check(completed.size() == 1 && completed[0].matchesRecipe,
-            "a saved bake for the current recipe loads at once");
+            "a saved bake activates without recomputing terrain");
         ok &= Check(service.Status(planet.id).state == terrain_bake::BakeState::Ready,
             "and is ready without baking");
     }
@@ -440,12 +443,37 @@ bool ServiceBakesRebakesAndKeepsTheRunningBakeOnFailure()
     {
         terrain_bake::TerrainBakeService service(TempDirectory("cancel"));
         service.Observe(planet.id, planet, desc, {.resolution = 1024, .autoRebake = true});
-        service.Tick(1.0);
-        ok &= Check(service.Status(planet.id).state == terrain_bake::BakeState::Baking, "a large bake runs in the background");
+        ok &= Check(Pump(service, [&] {
+            return service.Status(planet.id).state == terrain_bake::BakeState::Baking;
+        }), "a large bake runs after checking for a saved bake");
+        ok &= Check(!service.WorkersQuiescent(),
+            "active world bake must not be retired while worker runs");
         service.Cancel(planet.id);
+        service.RequestCancelAll(); // cooperative shutdown without a blocking join
         ok &= Check(Pump(service, [&] { return service.Status(planet.id).state == terrain_bake::BakeState::Failed; }),
             "a cancelled bake stops");
         ok &= Check(service.Active(planet.id) == nullptr, "and installs nothing");
+        ok &= Check(service.WorkersQuiescent(),
+            "cancelled bake can be retired after worker completion");
+    }
+    // Rapid explicit re-bakes must defer a replacement rather than joining
+    // the active worker in the caller's Tick/RPC path.
+    {
+        terrain_bake::TerrainBakeService service(TempDirectory("restart"));
+        service.Observe(planet.id, planet, desc,
+            {.resolution = 256, .autoRebake = false});
+        ok &= Check(service.StartBake(planet.id, 256U),
+            "first explicit bake must launch");
+        ok &= Check(service.StartBake(planet.id, 32U),
+            "second explicit bake must be accepted while first runs");
+        ok &= Check(Pump(service, [&] {
+            const auto status = service.Status(planet.id);
+            return status.state == terrain_bake::BakeState::Ready &&
+                status.activeResolution == 32U;
+        }), "deferred bake must publish the newest requested resolution");
+        ok &= Check(service.Active(planet.id) != nullptr &&
+            service.Active(planet.id)->Resolution() == 32U,
+            "superseded bake must not be published");
     }
     return ok;
 }

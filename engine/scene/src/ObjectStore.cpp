@@ -2,6 +2,7 @@
 
 #include <SQLiteCpp/SQLiteCpp.h>
 
+#include <algorithm>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -256,6 +257,50 @@ ObjectStore::Children(
     }
 
     impl_->childrenCache.emplace(cacheKey, result);
+    return result;
+}
+
+std::vector<ObjectRecord>
+ObjectStore::ChildrenPage(
+    const ObjectId parent,
+    const u32 limit,
+    const u32 offset) const
+{
+    if (limit == 0U) return {};
+    std::lock_guard cacheLock(impl_->cacheMutex);
+    impl_->SyncCache();
+    SQLite::Statement query(
+        impl_->database,
+        "SELECT id, parent_id, type_id, name, sort_order "
+        "FROM objects WHERE parent_id = ? "
+        "ORDER BY sort_order, name, id LIMIT ? OFFSET ?;");
+    query.bind(1, parent.ToString());
+    query.bind(2, static_cast<i64>(limit));
+    query.bind(3, static_cast<i64>(offset));
+    std::vector<ObjectRecord> result;
+    result.reserve(std::min<u32>(limit, 256U));
+    while (query.executeStep())
+        result.push_back(ReadObject(query));
+    return result;
+}
+
+std::vector<ObjectRecord>
+ObjectStore::RootsPage(const u32 limit, const u32 offset) const
+{
+    if (limit == 0U) return {};
+    std::lock_guard cacheLock(impl_->cacheMutex);
+    impl_->SyncCache();
+    SQLite::Statement query(
+        impl_->database,
+        "SELECT id, parent_id, type_id, name, sort_order "
+        "FROM objects WHERE parent_id IS NULL "
+        "ORDER BY sort_order, name, id LIMIT ? OFFSET ?;");
+    query.bind(1, static_cast<i64>(limit));
+    query.bind(2, static_cast<i64>(offset));
+    std::vector<ObjectRecord> result;
+    result.reserve(std::min<u32>(limit, 256U));
+    while (query.executeStep())
+        result.push_back(ReadObject(query));
     return result;
 }
 

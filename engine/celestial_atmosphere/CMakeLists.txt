@@ -20,6 +20,8 @@ target_link_libraries(
     OrbitCelestialAtmosphere
     PUBLIC
         Orbit::Core
+        Orbit::Jobs
+        Orbit::ShaderDxc
         Orbit::Math
         Orbit::Lighting
         Orbit::OpticalTransport

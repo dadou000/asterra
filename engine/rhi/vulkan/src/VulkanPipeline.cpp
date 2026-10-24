@@ -198,6 +198,61 @@ VkPipelineLayout VulkanGraphicsPipeline::Layout() const noexcept
     return layout_;
 }
 
+std::optional<std::future<std::unique_ptr<GraphicsPipeline>>>
+VulkanDevice::TryCreateGraphicsPipelineAsync(const GraphicsPipelineDesc& desc)
+{
+    if (desc.vertexShader.data == nullptr || desc.pixelShader.data == nullptr ||
+        desc.vertexShader.size == 0U || desc.pixelShader.size == 0U)
+        throw std::invalid_argument("Async graphics pipeline requires shader bytes.");
+
+    // Descriptors contain borrowed spans. Make deep copies before returning
+    // to the caller, otherwise the Vulkan worker may dereference freed DXC
+    // binary or attribute data after a renderer reconfiguration.
+    std::vector<u8> vertex(desc.vertexShader.data,
+        desc.vertexShader.data + desc.vertexShader.size);
+    std::vector<u8> pixel(desc.pixelShader.data,
+        desc.pixelShader.data + desc.pixelShader.size);
+    std::vector<VertexAttribute> attributes(desc.vertexAttributes.begin(),
+        desc.vertexAttributes.end());
+    auto task = std::make_shared<
+        std::packaged_task<std::unique_ptr<GraphicsPipeline>()>>(
+        [this, desc, vertex = std::move(vertex),
+         pixel = std::move(pixel), attributes = std::move(attributes)] {
+            auto source = desc;
+            source.vertexShader = {vertex.data(), vertex.size()};
+            source.pixelShader = {pixel.data(), pixel.size()};
+            source.vertexAttributes = attributes;
+            return CreateGraphicsPipeline(source);
+        });
+    auto future = task->get_future();
+    if (!TryQueuePipelineCompile([task] { (*task)(); }))
+        return std::nullopt;
+    return std::optional<std::future<std::unique_ptr<GraphicsPipeline>>>{
+        std::move(future)};
+}
+
+std::optional<std::future<std::unique_ptr<ComputePipeline>>>
+VulkanDevice::TryCreateComputePipelineAsync(const ComputePipelineDesc& desc)
+{
+    if (desc.computeShader.data == nullptr || desc.computeShader.size == 0U)
+        throw std::invalid_argument("Async compute pipeline requires shader bytes.");
+
+    std::vector<u8> bytecode(desc.computeShader.data,
+        desc.computeShader.data + desc.computeShader.size);
+    auto task = std::make_shared<
+        std::packaged_task<std::unique_ptr<ComputePipeline>()>>(
+        [this, desc, bytecode = std::move(bytecode)] {
+            auto source = desc;
+            source.computeShader = {bytecode.data(), bytecode.size()};
+            return CreateComputePipeline(source);
+        });
+    auto future = task->get_future();
+    if (!TryQueuePipelineCompile([task] { (*task)(); }))
+        return std::nullopt;
+    return std::optional<std::future<std::unique_ptr<ComputePipeline>>>{
+        std::move(future)};
+}
+
 std::unique_ptr<GraphicsPipeline> VulkanDevice::CreateGraphicsPipeline(
     const GraphicsPipelineDesc& desc)
 {
@@ -516,13 +571,26 @@ std::unique_ptr<GraphicsPipeline> VulkanDevice::CreateGraphicsPipeline(
     pipelineCreateInfo.layout = pipelineLayout;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    const VkResult result = vkCreateGraphicsPipelines(
-        nativeDevice_,
-        VK_NULL_HANDLE,
-        1,
-        &pipelineCreateInfo,
-        nullptr,
-        &pipeline);
+    // VkPipelineCache is externally synchronized. All graphics and compute
+    // creators serialize only this driver call; cache data can be reused
+    // across sessions and cache persistence at device shutdown is safe.
+    VkResult result = VK_ERROR_UNKNOWN;
+    if (std::this_thread::get_id() == pipelineCompileThread_.get_id())
+    {
+        // Only the dedicated compiler thread uses this cache. No lock can
+        // stall a render-thread pipeline construction behind cold DXC/driver
+        // pipeline optimization.
+        result = vkCreateGraphicsPipelines(
+            nativeDevice_, pipelineWorkerCache_, 1, &pipelineCreateInfo,
+            nullptr, &pipeline);
+    }
+    else
+    {
+        std::scoped_lock cacheLock(pipelineCacheMutex_);
+        result = vkCreateGraphicsPipelines(
+            nativeDevice_, pipelineCache_, 1, &pipelineCreateInfo,
+            nullptr, &pipeline);
+    }
 
     vkDestroyShaderModule(nativeDevice_, vertexModule, nullptr);
     vkDestroyShaderModule(nativeDevice_, pixelModule, nullptr);
@@ -796,13 +864,20 @@ std::unique_ptr<ComputePipeline> VulkanDevice::CreateComputePipeline(
     pipelineCreateInfo.layout = pipelineLayout;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    const VkResult result = vkCreateComputePipelines(
-        nativeDevice_,
-        VK_NULL_HANDLE,
-        1,
-        &pipelineCreateInfo,
-        nullptr,
-        &pipeline);
+    VkResult result = VK_ERROR_UNKNOWN;
+    if (std::this_thread::get_id() == pipelineCompileThread_.get_id())
+    {
+        result = vkCreateComputePipelines(
+            nativeDevice_, pipelineWorkerCache_, 1, &pipelineCreateInfo,
+            nullptr, &pipeline);
+    }
+    else
+    {
+        std::scoped_lock cacheLock(pipelineCacheMutex_);
+        result = vkCreateComputePipelines(
+            nativeDevice_, pipelineCache_, 1, &pipelineCreateInfo,
+            nullptr, &pipeline);
+    }
 
     vkDestroyShaderModule(nativeDevice_, computeModule, nullptr);
 

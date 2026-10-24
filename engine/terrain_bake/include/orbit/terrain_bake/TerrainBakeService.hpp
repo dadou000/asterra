@@ -5,12 +5,14 @@
 #include <orbit/terrain/BakedRivers.hpp>
 #include <orbit/terrain/BakedGeology.hpp>
 #include <orbit/terrain/BakedTectonics.hpp>
+#include <orbit/terrain_bake/PlanetBakeFile.hpp>
 #include <orbit/terrain_bake/RiverBaker.hpp>
 #include <orbit/terrain_bake/TectonicBaker.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <atomic>
 #include <functional>
+#include <future>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -176,6 +178,12 @@ public:
     bool StartBake(world::PlanetId planet, std::optional<u32> resolution = {});
     void Cancel(world::PlanetId planet);
 
+    // World switching must not join an expensive bake on Studio's frame.
+    // These operations cancel in-flight work and permit deferred retirement
+    // only after every worker has reported completion.
+    void RequestCancelAll() noexcept;
+    [[nodiscard]] bool WorkersQuiescent() const noexcept;
+
     // True once Observe has been called for the planet.
     [[nodiscard]] bool Knows(world::PlanetId planet) const;
 
@@ -204,6 +212,8 @@ private:
         terrain::AnalyticTerrainDesc desc{};
         terrain::AnalyticTerrainDesc geologyBaseDesc{};
         bool geologyBaseValid{false};
+        bool diskLoadResolved{false};
+        std::future<std::optional<PlanetBakeContents>> pendingDiskLoad;
         BakeSettings settings{};
         u64 currentHash{0};
         u64 currentGeologyHash{0};
@@ -217,6 +227,7 @@ private:
         std::thread worker;
         std::unique_ptr<BakeControl> control;
         bool baking{false};
+        bool restartRequested{false}; // explicit bake request coalesced during cancellation
         u64 bakingHash{0};
         u64 bakingGeologyHash{0};
         // Worker -> main thread handoff, guarded by the service mutex.

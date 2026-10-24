@@ -1,4 +1,7 @@
 #include <orbit/studio_session/StudioRoadJunctionPipeline.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+#include <chrono>
+#include <memory>
 #include <orbit/path_geometry/TransportJunctions.hpp>
 #include <orbit/path_geometry/RoadJunctionConstruction.hpp>
 #include <orbit/path_geometry/RoadCatalog.hpp>
@@ -19,6 +22,18 @@ struct FrameBatch {
 };
 }
 void StudioRoadJunctionPipeline::Clear() noexcept {
+    pendingBuild_.reset();
+    discoveredEdges_.clear();
+    discoveryParents_.clear();
+    discoveryChildren_.clear();
+    discoveryActiveParent_.reset();
+    discoveryChildOffset_ = 0U;
+    discoveryRootOffset_ = 0U;
+    discoveryRootsExhausted_ = false;
+    discoveryNextChild_ = 0U;
+    discoveryScanned_ = 0U;
+    discoveryFingerprint_ = 0U;
+    discoveryInProgress_ = false;
     frames_.clear();
     contactScenes_.clear();
     renderPatches_.clear();
@@ -174,154 +189,321 @@ void StudioRoadJunctionPipeline::Refresh(
     paths::PathNetworkService& network,
     const UniverseBoundPathCache& cache)
 {
-    if(!world.HasWorld()) {
-        if(!frames_.empty() || observedFingerprint_)Clear();
+    if (!world.HasWorld())
+    {
+        if (!frames_.empty() || observedFingerprint_ || pendingBuild_)
+            Clear();
         return;
     }
-    const auto products=cache.Products();
-    const auto generation=world.UniverseGeneration();
-    u64 fingerprint=Mix(
-        Mix(0xcbf29ce484222325ULL,world.Objects().Revision()),generation);
-    fingerprint=Mix(fingerprint,cache.BindingGeneration());
-    fingerprint=Mix(fingerprint,cache.DirtyCount());
-    for(const auto* p:products) {
-        fingerprint=Mix(fingerprint,p->edge.high);
-        fingerprint=Mix(fingerprint,p->edge.low);
-        fingerprint=Mix(fingerprint,p->buildSignature);
-        fingerprint=Mix(fingerprint,cache.IsDirty(p->edge)?1U:0U);
-    }
-    if(fingerprint==observedFingerprint_)return;
-    observedFingerprint_=fingerprint;
-    frames_.clear();
-    contactScenes_.clear();
-    renderPatches_.clear();
-    lastError_.clear();
-    ++revision_;
 
-    // Discover semantic endpoints once, not O(nodes * allEdges), and never
-    // connect paths by spatial proximity or frame coincidence.
-    std::map<scene::ObjectId,std::vector<path_geometry::JunctionApproach>> nodes;
-    std::set<scene::ObjectId> hasRail;
-    const auto& objects=world.Objects();
-    std::vector<scene::ObjectId> pending;
-    for(const auto& root:objects.Roots())pending.push_back(root.id);
-    std::size_t scanned=0U;
-    while(!pending.empty()) {
-        if(++scanned>8192U) {
-            lastError_="Road junction discovery exceeded 8192 scene objects.";
-            return;
-        }
-        const auto parent=pending.back();
-        pending.pop_back();
-        for(const auto& child:objects.Children(parent))
+    const u64 generation = world.UniverseGeneration();
+    u64 fingerprint = Mix(
+        Mix(0xcbf29ce484222325ULL, world.Objects().Revision()), generation);
+    fingerprint = Mix(fingerprint, cache.BindingGeneration());
+    fingerprint = Mix(fingerprint, cache.ContentRevision());
+
+    // Publish a fully cooked packet + contact scene only at the owner-thread
+    // boundary. A newer semantic fingerprint invalidates an obsolete result.
+    if (pendingBuild_ && pendingBuild_->future.wait_for(
+            std::chrono::seconds(0)) == std::future_status::ready)
+    {
+        const bool current = pendingBuild_->fingerprint == fingerprint &&
+            pendingBuild_->worldGeneration == generation;
+        try
         {
-            if(child.type!=paths::kPathEdgeType) {
-                if(child.type!=paths::kPathNodeType)pending.push_back(child.id);
-                continue;
+            auto completed = pendingBuild_->future.get();
+            if (current)
+            {
+                lastError_ = completed.error;
+                for (auto& prepared : completed.junctions)
+                {
+                    path_geometry::RoadContactSceneOwner contact;
+                    if (!contact.Commit(std::move(prepared.cooked)))
+                    {
+                        lastError_ = contact.LastError();
+                        continue;
+                    }
+                    path_geometry::RoadJunctionScenePublisher publisher;
+                    if (!publisher.Publish(std::move(prepared.candidate)))
+                    {
+                        lastError_ = "Junction packet publication failed.";
+                        continue;
+                    }
+                    const auto frame = prepared.frame;
+                    contactScenes_.emplace(frame, std::move(contact));
+                    frames_.emplace(frame, std::move(publisher));
+                    // Mesh construction/copying already happened on the
+                    // worker. Publication only moves complete products.
+                    for (auto& product : prepared.renderPatches)
+                        renderPatches_.emplace(product.edge, std::move(product));
+                }
+                ++revision_;
             }
-            const auto edge=network.FindEdge(child.id);
-            if(!edge || edge->infrastructureCatalogVersion!=1U ||
-               edge->constructionMode!="terrain")continue;
-            const bool road=path_geometry::FindRoadCatalog(
-                edge->infrastructureCatalogId)!=nullptr;
-            const bool rail=edge->infrastructureCatalogId=="ballasted-rail";
-            if(!road && !rail)continue;
-            if(rail) {
-                hasRail.insert(edge->startNode);
-                hasRail.insert(edge->endNode);
-                continue;
-            }
-            const auto* geom=cache.Find(child.id);
-            const auto add=[&](scene::ObjectId node,bool atStart) {
-                nodes[node].push_back({
-                    .edge=child.id,
-                    .frame=geom?geom->frame:frames::FrameId{},
-                    .mode=path_geometry::TransportMode::Road,
-                    .atStart=atStart,.bidirectional=true,.geometry=geom
-                });
-            };
-            add(edge->startNode,true);
-            add(edge->endNode,false);
         }
+        catch (const std::exception& error)
+        {
+            if (current) lastError_ = error.what();
+        }
+        pendingBuild_.reset();
     }
-    std::map<frames::FrameId,FrameBatch> batches;
-    std::size_t candidates=0;
-    for(const auto& [node,approaches]:nodes)
+
+    if (fingerprint == observedFingerprint_)
+        return;
+    // The previous completed packet is stale as soon as the semantic graph
+    // changes, not when a replacement worker eventually finishes. Invalidate
+    // once per fingerprint; then resume discovery over multiple frames.
+    if (discoveryFingerprint_ != fingerprint)
     {
-        if(approaches.size()<2 || hasRail.contains(node))continue;
-        if(++candidates>32U) {
-            frames_.clear();
-            lastError_="More than 32 junctions; spatial scheduling required.";
+        frames_.clear();
+        contactScenes_.clear();
+        renderPatches_.clear();
+        lastError_.clear();
+        ++revision_;
+        discoveredEdges_.clear();
+        discoveryParents_.clear();
+        discoveryChildren_.clear();
+        discoveryActiveParent_.reset();
+        discoveryChildOffset_ = 0U;
+        discoveryRootOffset_ = 0U;
+        discoveryRootsExhausted_ = false;
+        discoveryNextChild_ = 0U;
+        discoveryScanned_ = 0U;
+        discoveryFingerprint_ = fingerprint;
+        discoveryInProgress_ = true;
+        // Root pages are fetched on demand below, never as a bulk list.
+    }
+
+    // An obsolete worker may still be running, but do not leave its old
+    // contacts or render patches usable while it finishes. Invalidate first;
+    // then defer constructing a replacement until the prior job retires.
+    if (pendingBuild_ && pendingBuild_->future.wait_for(
+            std::chrono::seconds(0)) != std::future_status::ready)
+        return;
+
+    // Both roots and children are fetched using bounded SQLite pages.
+    // Count page queries as well as interpreted records against the frame
+    // budget so many empty parents cannot create a hidden long frame.
+    constexpr std::size_t kJunctionObjectsPerTick = 96U;
+    constexpr std::size_t kJunctionMaximumSceneObjects = 131072U;
+    std::size_t thisTick = 0U;
+    while (discoveryInProgress_ && thisTick < kJunctionObjectsPerTick)
+    {
+        if (discoveryNextChild_ >= discoveryChildren_.size())
+        {
+            discoveryChildren_.clear();
+            discoveryNextChild_ = 0U;
+            if (!discoveryActiveParent_)
+            {
+                if (discoveryParents_.empty() &&
+                    !discoveryRootsExhausted_)
+                {
+                    auto roots = world.Objects().RootsPage(
+                        static_cast<u32>(kJunctionObjectsPerTick),
+                        discoveryRootOffset_);
+                    discoveryRootOffset_ += static_cast<u32>(roots.size());
+                    if (roots.size() < kJunctionObjectsPerTick)
+                        discoveryRootsExhausted_ = true;
+                    thisTick += roots.size();
+                    for (const auto& root : roots)
+                        discoveryParents_.push_back(root.id);
+                    if (thisTick >= kJunctionObjectsPerTick)
+                        break;
+                }
+                if (discoveryParents_.empty())
+                {
+                    discoveryInProgress_ = false;
+                    break;
+                }
+                discoveryActiveParent_ = discoveryParents_.back();
+                discoveryParents_.pop_back();
+                discoveryChildOffset_ = 0U;
+            }
+            ++thisTick; // Even an empty SQL page costs CPU work.
+            auto page = world.Objects().ChildrenPage(
+                *discoveryActiveParent_,
+                static_cast<u32>(kJunctionObjectsPerTick),
+                discoveryChildOffset_);
+            discoveryChildOffset_ += static_cast<u32>(page.size());
+            if (page.empty())
+            {
+                discoveryActiveParent_.reset();
+                continue;
+            }
+            discoveryChildren_ = std::move(page);
+            continue;
+        }
+        const auto& child = discoveryChildren_[discoveryNextChild_++];
+        ++thisTick;
+        if (++discoveryScanned_ > kJunctionMaximumSceneObjects)
+        {
+            lastError_ = "Road junction discovery exceeds the scene safety limit.";
+            observedFingerprint_ = fingerprint;
+            discoveryInProgress_ = false;
+            discoveredEdges_.clear();
             return;
         }
-        bool pendingSource=false;
-        for(const auto& a:approaches)
-            if(!a.geometry || cache.IsDirty(a.edge))pendingSource=true;
-        if(pendingSource) {
-            lastError_="Road junction waiting for all incident source corridors.";
+        if (child.type != paths::kPathEdgeType)
+        {
+            if (child.type != paths::kPathNodeType)
+                discoveryParents_.push_back(child.id);
             continue;
         }
-        const auto plan=path_geometry::BuildTransportJunction(node,approaches);
-        if(!plan.Valid()) {
-            lastError_="Road junction geometry failed its topology validation.";
-            continue;
-        }
-        auto built=path_geometry::BuildRoadJunctionConstruction(plan,approaches);
-        if(!built.Ready()) {
-            lastError_=built.findings.empty()?
-                "Unsupported road junction geometry.":
-                built.findings.front().message;
-            continue;
-        }
-        batches[built.frame].junctions.push_back(std::move(built));
+        const auto edge = network.FindEdge(child.id);
+        if (!edge || edge->infrastructureCatalogVersion != 1U ||
+            edge->constructionMode != "terrain") continue;
+        const bool road = path_geometry::FindRoadCatalog(
+            edge->infrastructureCatalogId) != nullptr;
+        const bool rail = edge->infrastructureCatalogId == "ballasted-rail";
+        if (road || rail)
+            discoveredEdges_.push_back({child.id, edge->startNode,
+                edge->endNode, rail});
     }
-    for(auto& [frame,batch]:batches)
+    if (discoveryInProgress_)
+        return;
+
+    // Only once a complete revision-matched capture is ready do we copy the
+    // corridor handles into the immutable worker input. No worker accesses
+    // the editor's live scene, network or mutable cache.
+    struct BuildInput
     {
-        // All products of this frame are source candidates. Publishing them
-        // never mutates the underlying path cache.
-        for(const auto* p:products)
-            if(p->frame==frame) {
-                batch.products.push_back(p);
-                if(cache.IsDirty(p->edge))batch.dirty.push_back(p->edge);
-            }
-        auto candidate=path_geometry::AssembleRoadJunctionScene(
-            frame,generation,batch.junctions,batch.products,batch.dirty);
-        if(candidate.Ready()) {
-            // Cook/validate contact shapes in a staging generation before
-            // publishing any render packet. Both become active together.
-            auto cooked=path_geometry::PrepareRoadContactScene(
-                candidate.packet);
-            if(!cooked.Ready())
-            {
-                lastError_=cooked.error;
-                continue;
-            }
-            path_geometry::RoadContactSceneOwner contact;
-            if(!contact.Commit(std::move(cooked)))
-            {
-                lastError_=contact.LastError();
-                continue;
-            }
-            path_geometry::RoadJunctionScenePublisher publisher;
-            if(publisher.Publish(std::move(candidate)))
-            {
-                contactScenes_.emplace(frame,std::move(contact));
-                frames_.emplace(frame,std::move(publisher));
-                if(const auto* packet=frames_.at(frame).Snapshot())
-                    for(const auto& patch:packet->patches)
-                    {
-                        path_geometry::PathDerivedProduct product;
-                        product.edge=patch.node;
-                        product.frame=patch.frame;
-                        product.sourceRevision=packet->worldGeneration;
-                        product.buildSignature=packet->buildSignature;
-                        product.visualMesh=patch.mesh;
-                        renderPatches_.emplace(patch.node,std::move(product));
-                    }
-            }
-        }
-        else if(!candidate.findings.empty())
-            lastError_=candidate.findings.front().message;
+        u64 worldGeneration{0U};
+        std::vector<DiscoveredEdge> edges;
+        std::map<scene::ObjectId,
+            std::shared_ptr<const path_geometry::PathDerivedProduct>> products;
+        std::set<scene::ObjectId> dirty;
+    };
+    const auto products = cache.Products();
+    BuildInput input;
+    input.worldGeneration = generation;
+    input.edges = discoveredEdges_;
+    for (const auto* product : products)
+    {
+        auto snapshot = cache.Snapshot(product->edge);
+        if (snapshot)
+            input.products.emplace(product->edge, std::move(snapshot));
+        if (cache.IsDirty(product->edge))
+            input.dirty.insert(product->edge);
     }
+
+    // Do not launch a worker when the world has no road junction sources.
+    if (input.edges.empty())
+    {
+        pendingBuild_.reset();
+        observedFingerprint_ = fingerprint;
+        return;
+    }
+
+    auto future = jobs::TrySubmitBackgroundCpu(
+        [snapshot = std::move(input)]() mutable -> PreparedBatch
+        {
+            PreparedBatch result;
+            std::map<scene::ObjectId,
+                std::vector<path_geometry::JunctionApproach>> nodes;
+            std::set<scene::ObjectId> railNodes;
+            for (const auto& edge : snapshot.edges)
+            {
+                if (edge.rail)
+                {
+                    railNodes.insert(edge.start);
+                    railNodes.insert(edge.end);
+                    continue;
+                }
+                const auto found = snapshot.products.find(edge.id);
+                const auto* geometry = found == snapshot.products.end()
+                    ? nullptr : found->second.get();
+                nodes[edge.start].push_back({
+                    .edge = edge.id,
+                    .frame = geometry ? geometry->frame : frames::FrameId{},
+                    .mode = path_geometry::TransportMode::Road,
+                    .atStart = true, .bidirectional = true,
+                    .geometry = geometry});
+                nodes[edge.end].push_back({
+                    .edge = edge.id,
+                    .frame = geometry ? geometry->frame : frames::FrameId{},
+                    .mode = path_geometry::TransportMode::Road,
+                    .atStart = false, .bidirectional = true,
+                    .geometry = geometry});
+            }
+            std::map<frames::FrameId, FrameBatch> batches;
+            std::size_t candidates = 0U;
+            for (const auto& [node, approaches] : nodes)
+            {
+                if (approaches.size() < 2U || railNodes.contains(node))
+                    continue;
+                if (++candidates > 32U)
+                {
+                    result.error = "More than 32 junctions; spatial scheduling required.";
+                    return result;
+                }
+                bool waiting = false;
+                for (const auto& approach : approaches)
+                    if (!approach.geometry || snapshot.dirty.contains(approach.edge))
+                        waiting = true;
+                if (waiting)
+                {
+                    result.error = "Road junction waiting for source corridors.";
+                    continue;
+                }
+                const auto plan = path_geometry::BuildTransportJunction(node, approaches);
+                if (!plan.Valid())
+                {
+                    result.error = "Road junction topology validation failed.";
+                    continue;
+                }
+                auto junction = path_geometry::BuildRoadJunctionConstruction(plan, approaches);
+                if (!junction.Ready())
+                {
+                    result.error = junction.findings.empty()
+                        ? "Road junction geometry failed."
+                        : junction.findings.front().message;
+                    continue;
+                }
+                batches[junction.frame].junctions.push_back(std::move(junction));
+            }
+            for (auto& [frame, batch] : batches)
+            {
+                for (const auto& [edge, product] : snapshot.products)
+                    if (product->frame == frame)
+                    {
+                        batch.products.push_back(product.get());
+                        if (snapshot.dirty.contains(edge))
+                            batch.dirty.push_back(edge);
+                    }
+                auto candidate = path_geometry::AssembleRoadJunctionScene(
+                    frame, snapshot.worldGeneration, batch.junctions,
+                    batch.products, batch.dirty);
+                if (!candidate.Ready())
+                {
+                    if (!candidate.findings.empty())
+                        result.error = candidate.findings.front().message;
+                    continue;
+                }
+                auto cooked = path_geometry::PrepareRoadContactScene(candidate.packet);
+                if (!cooked.Ready())
+                {
+                    result.error = cooked.error;
+                    continue;
+                }
+                std::vector<path_geometry::PathDerivedProduct> patches;
+                patches.reserve(candidate.packet.patches.size());
+                for (const auto& patch : candidate.packet.patches)
+                {
+                    path_geometry::PathDerivedProduct product;
+                    product.edge = patch.node;
+                    product.frame = patch.frame;
+                    product.sourceRevision = candidate.packet.worldGeneration;
+                    product.buildSignature = candidate.packet.buildSignature;
+                    product.visualMesh = patch.mesh;
+                    patches.push_back(std::move(product));
+                }
+                result.junctions.push_back({frame, std::move(candidate),
+                    std::move(cooked), std::move(patches)});
+            }
+            return result;
+        }, jobs::JobPriority::Normal);
+    if (!future)
+        return; // Retry next tick; keep observed fingerprint unchanged.
+    observedFingerprint_ = fingerprint;
+    pendingBuild_ = PendingBuild{std::move(*future), fingerprint, generation};
 }
 } // namespace orbit::studio_session

@@ -29,6 +29,11 @@ struct PathSourceRequest
     const frames::FrameGraph* frames{nullptr};
     const universe::BodyRegistry* bodies{nullptr};
 
+    // Owner-thread-resolved frame-local authority. When set, the worker can
+    // sample Bézier geometry without touching mutable frame/body registries.
+    bool resolvedFramePointAnchors{false};
+    std::optional<universe::BodyShape> resolvedBodyShape;
+
     // Required only for EdgeMode::Routed. The routed product remains derived
     // input; it is never copied into semantic path authority.
     const path_routing::RouteResult* routed{nullptr};

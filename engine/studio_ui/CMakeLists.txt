@@ -112,6 +112,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::RenderView
         Orbit::Rpc
         Orbit::Shading
+        Orbit::ShaderDxc
         Orbit::StudioReports
         Orbit::StudioSession
         Orbit::TerrainBake

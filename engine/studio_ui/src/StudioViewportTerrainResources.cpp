@@ -1,3 +1,4 @@
+#include <orbit/jobs/JobSystem.hpp>
 #include "StudioViewportInternals.hpp"
 
 #include <orbit/terrain_water/LakeWater.hpp>
@@ -5,6 +6,10 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <chrono>
+#include <future>
+#include <orbit/core/Log.hpp>
+#include <orbit/core/ThreadName.hpp>
 
 namespace orbit::studio_ui::viewport_detail
 {
@@ -214,6 +219,28 @@ BuildPhysicalRenderPages(
 {
     StudioPhysicalRenderPages result{};
 
+    // Host texel packing (including O(cells * rivers) water evaluation) is
+    // never performed during viewport composition. Keep a small bounded set
+    // of CPU products owned across frames and consume completed results only.
+    struct PendingSurface
+    {
+        terrain_gpu::PersistentGpuTerrainCacheKey key;
+        std::shared_ptr<const studio_session::StudioTerrainPhysicalPageSnapshot> source;
+        std::future<std::vector<terrain_gpu::GpuPhysicalSurfaceTexel>> result;
+        u64 lastSeen{0U};
+    };
+    static thread_local std::vector<PendingSurface> pendingSurfaces;
+    static thread_local u64 surfaceTick = 0U;
+    ++surfaceTick;
+    for (auto it = pendingSurfaces.begin(); it != pendingSurfaces.end();)
+    {
+        if (surfaceTick - it->lastSeen > 240U &&
+            it->result.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            it = pendingSurfaces.erase(it);
+        else
+            ++it;
+    }
+
     auto* services =
         session.World().
             Surfaces().
@@ -381,6 +408,69 @@ BuildPhysicalRenderPages(
                 sizeof(terrain_gpu::GpuPhysicalSurfaceTexel);
             if (bytesForBudget > kUploadByteBudget - attemptedUploadBytes)
                 continue;
+            auto pending = std::find_if(pendingSurfaces.begin(), pendingSurfaces.end(),
+                [&key, &snapshot](const PendingSurface& item) {
+                    return item.key == key && item.source == snapshot;
+                });
+            if (pending == pendingSurfaces.end())
+            {
+                if (pendingSurfaces.size() < 12U)
+                {
+                    auto admitted = jobs::TrySubmitBackgroundCpu(
+                            [snapshot, seaLevelMeters] {
+                                // Keep the shared background worker identity.
+                                const u32 resolution = snapshot->material->Resolution();
+                                std::vector<terrain_gpu::GpuPhysicalSurfaceTexel> texels(
+                                    static_cast<std::size_t>(resolution) * resolution);
+                                for (u32 y = 0U; y < resolution; ++y)
+                                    for (u32 x = 0U; x < resolution; ++x)
+                                    {
+                                        const auto& cell = snapshot->material->At(x, y);
+                                        const f32 elevation = cell.SurfaceHeightMeters();
+                                        if (!std::isfinite(elevation))
+                                            throw std::runtime_error("Physical terrain surface contains a nonfinite elevation.");
+                                        const f32 riverDepth = RiverWaterDepthAt(
+                                            snapshot->rivers.get(), x, y, resolution,
+                                            snapshot->material->SpacingMeters(), elevation);
+                                        const f32 lakeDepth = snapshot->lakes != nullptr
+                                            ? static_cast<f32>(terrain_water::SampleLakeWater(
+                                                *snapshot->lakes,
+                                                {(static_cast<f64>(x) - static_cast<f64>(resolution - 1U) * 0.5) * snapshot->material->SpacingMeters(),
+                                                 (static_cast<f64>(y) - static_cast<f64>(resolution - 1U) * 0.5) * snapshot->material->SpacingMeters()}).depthMeters)
+                                            : 0.0F;
+                                        texels[static_cast<std::size_t>(y) * resolution + x] = {
+                                            .elevationMeters = elevation,
+                                            .standingWaterDepthMeters = std::max({
+                                                static_cast<f32>(std::max(seaLevelMeters - static_cast<f64>(elevation), 0.0)),
+                                                std::isfinite(riverDepth) ? std::max(0.0F, riverDepth) : 0.0F,
+                                                std::isfinite(lakeDepth) ? std::max(0.0F, lakeDepth) : 0.0F})
+                                        };
+                                    }
+                                return texels;
+                            }, jobs::JobPriority::Normal);
+                    if (admitted)
+                        pendingSurfaces.push_back({
+                            .key = key,
+                            .source = snapshot,
+                            .result = std::move(*admitted),
+                            .lastSeen = surfaceTick
+                        });
+                }
+                continue;
+            }
+            pending->lastSeen = surfaceTick;
+            if (pending->result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                continue;
+            std::vector<terrain_gpu::GpuPhysicalSurfaceTexel> texels;
+            try { texels = pending->result.get(); }
+            catch (const std::exception& error)
+            {
+                log::Warning(std::string("Physical surface prepare failed: ") + error.what());
+                pendingSurfaces.erase(pending);
+                continue;
+            }
+            pendingSurfaces.erase(pending);
+
             const auto uploadRevision =
                 session.
                     TerrainPhysicalPages().
@@ -413,77 +503,8 @@ BuildPhysicalRenderPages(
             else ++constructionUploads;
             try
             {
-                const u32 resolution =
-                    snapshot->material->
-                        Resolution();
-
-                std::vector<
-                    terrain_gpu::
-                        GpuPhysicalSurfaceTexel>
-                    texels(
-                        static_cast<
-                            std::size_t>(
-                                resolution) *
-                        resolution);
-
-                for (u32 y = 0U;
-                     y < resolution;
-                     ++y)
-                {
-                    for (u32 x = 0U;
-                         x < resolution;
-                         ++x)
-                    {
-                        const auto& cell =
-                            snapshot->
-                                material->
-                                At(
-                                    x,
-                                    y);
-
-                        const f32 rawElevation =
-                            cell.
-                                SurfaceHeightMeters();
-                        if (!std::isfinite(rawElevation))
-                            throw std::runtime_error(
-                                "Physical terrain surface contains a nonfinite elevation.");
-                        const f32 elevation = rawElevation;
-
-                        texels[
-                            static_cast<
-                                std::size_t>(
-                                    y) *
-                                resolution +
-                            x] = {
-                                .elevationMeters =
-                                    elevation,
-                                .standingWaterDepthMeters =
-                                    std::max({
-                                        static_cast<f32>(std::max(
-                                            seaLevelMeters - static_cast<f64>(elevation),
-                                            0.0)),
-                                        std::isfinite(RiverWaterDepthAt(
-                                            snapshot->rivers.get(), x, y, resolution,
-                                            snapshot->material->SpacingMeters(), elevation))
-                                            ? std::max(0.0F, RiverWaterDepthAt(
-                                                snapshot->rivers.get(), x, y, resolution,
-                                                snapshot->material->SpacingMeters(), elevation))
-                                            : 0.0F,
-                                        snapshot->lakes != nullptr
-                                            ? static_cast<f32>(terrain_water::SampleLakeWater(
-                                                *snapshot->lakes,
-                                                {(static_cast<f64>(x) -
-                                                  static_cast<f64>(resolution - 1U) * 0.5) *
-                                                     snapshot->material->SpacingMeters(),
-                                                 (static_cast<f64>(y) -
-                                                  static_cast<f64>(resolution - 1U) * 0.5) *
-                                                     snapshot->material->SpacingMeters()})
-                                                   .depthMeters)
-                                            : 0.0F})
-                            };
-                    }
-                }
-
+                // All texel and hydrology evaluation completed on the worker.
+                // Only bounded GPU resource publication remains here.
                 auto uniqueBuffer =
                     device.CreateBuffer({
                         .sizeBytes =

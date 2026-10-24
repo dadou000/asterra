@@ -1,6 +1,7 @@
+#include <orbit/jobs/JobSystem.hpp>
 #include <orbit/profiler/Profiler.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
-#include <orbit/core/ThreadName.hpp>
+#include <orbit/core/Log.hpp>
 #include <orbit/celestial_globe/PlanetPatchHierarchy.hpp>
 
 #include <orbit/terrain/TerrainContracts.hpp>
@@ -457,10 +458,12 @@ public:
         const f32 lodBiasStops)
     {
         ORBIT_PROFILE_SCOPE("globe.prepare");
+        ReapRetiredPatches();
         const auto registered = LookupTerrainAuthority(fallback.Fingerprint());
         if (!registered.has_value() ||
             registered->source == nullptr ||
-            registered->source->Revision() != registered->sourceRevision)
+            registered->source->Revision() != registered->sourceRevision ||
+            registered->owner == nullptr)
         {
             return false;
         }
@@ -471,6 +474,7 @@ public:
             state.authority.sourceRevision != registered->sourceRevision ||
             state.oceanEnabled != oceanEnabled)
         {
+            RetirePending(state);
             state = State{};
             state.initialized = true;
             state.authority = *registered;
@@ -709,7 +713,9 @@ private:
     // at most kPatchUploadsPerPrepare finished patches are uploaded to the GPU
     // per call, so the render thread never waits on terrain sampling.
     static constexpr std::size_t kPatchBuildsInFlight = 6U;
-    static constexpr u32 kPatchUploadsPerPrepare = 8U;
+    static constexpr std::size_t kMaximumRetiredPatchJobs = 24U;
+    static constexpr u32 kPatchUploadsPerPrepare = 2U;
+    static constexpr auto kPatchUploadCpuBudget = std::chrono::microseconds(700);
 
     struct Resident
     {
@@ -743,6 +749,31 @@ private:
         std::map<PlanetPatchId, std::future<BuiltPatch>> pending;
     };
 
+    // Obsolete workers cannot be joined from the renderer: std::async future
+    // destruction waits for unfinished tasks. Keep them alive until ready.
+    std::vector<std::future<BuiltPatch>> retiredPatchBuilds_;
+
+    void ReapRetiredPatches()
+    {
+        for (auto it = retiredPatchBuilds_.begin(); it != retiredPatchBuilds_.end();)
+        {
+            if (it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+                it = retiredPatchBuilds_.erase(it);
+            else
+                ++it;
+        }
+    }
+
+    void RetirePending(State& state)
+    {
+        for (auto& [id, task] : state.pending)
+        {
+            static_cast<void>(id);
+            retiredPatchBuilds_.push_back(std::move(task));
+        }
+        state.pending.clear();
+    }
+
     // Samples the terrain and builds the vertex/appearance data for one patch.
     // Pure CPU work with no GPU access, so it is safe on a worker thread
     // (TerrainSource::Sample is required to be thread-safe).
@@ -752,7 +783,7 @@ private:
         const PlanetPatchId id,
         const bool oceanEnabled)
     {
-        core::SetCurrentThreadName("Orbit.GlobePatch");
+        // The shared background pool already owns the worker's thread name.
         BuiltPatch built;
         built.patch = BuildPlanetPatch(
             *source,
@@ -814,43 +845,30 @@ private:
     {
         if (state.residents.contains(id) ||
             state.pending.contains(id) ||
+            retiredPatchBuilds_.size() >= kMaximumRetiredPatchJobs ||
             state.authority.source == nullptr ||
+            state.authority.owner == nullptr ||
             device_ == nullptr)
         {
             return;
         }
 
-        if (state.authority.owner == nullptr)
-        {
-            // No shared ownership: the source is only guaranteed alive for
-            // this call, so build on the calling thread.
-            if (state.syncBuildsThisPrepare >= 2U)
+        // Prepare requires shared ownership; it never builds patches on the
+        // render thread when the source has only borrowed lifetime.
+
+        auto admitted = jobs::TrySubmitBackgroundCpu(
+            [owner = state.authority.owner,
+             shape = state.authority.shape,
+             id,
+             ocean = state.oceanEnabled]
             {
-                return;
-            }
-            ++state.syncBuildsThisPrepare;
+                ORBIT_PROFILE_SCOPE("globe.build_patch");
+                return BuildPatchData(owner.get(), shape, id, ocean);
+            }, jobs::JobPriority::Normal);
+        if (admitted)
+            state.pending.emplace(id, std::move(*admitted));
+        // Under load simply retain the parent LOD; retry on next prepare.
 
-            BuiltPatch built = BuildPatchData(
-                state.authority.source,
-                state.authority.shape,
-                id,
-                state.oceanEnabled);
-            Upload(state, id, built);
-            return;
-        }
-
-        state.pending.emplace(
-            id,
-            std::async(
-                std::launch::async,
-                [owner = state.authority.owner,
-                 shape = state.authority.shape,
-                 id,
-                 ocean = state.oceanEnabled]
-                {
-                    ORBIT_PROFILE_SCOPE("globe.build_patch");
-                    return BuildPatchData(owner.get(), shape, id, ocean);
-                }));
     }
 
     void Upload(State& state, const PlanetPatchId id, BuiltPatch& built)
@@ -874,27 +892,41 @@ private:
     // Uploads finished patches on the calling (render) thread.
     void CollectCompleted(State& state)
     {
+        const auto started = std::chrono::steady_clock::now();
         u32 uploaded = 0U;
         for (auto it = state.pending.begin(); it != state.pending.end();)
         {
-            if (uploaded >= kPatchUploadsPerPrepare)
-            {
+            if (uploaded >= kPatchUploadsPerPrepare ||
+                (uploaded > 0U && std::chrono::steady_clock::now() - started >=
+                    kPatchUploadCpuBudget))
                 break;
-            }
-
             if (it->second.wait_for(std::chrono::seconds(0)) !=
                 std::future_status::ready)
             {
                 ++it;
                 continue;
             }
-
             const PlanetPatchId id = it->first;
-            BuiltPatch built = it->second.get();
+            std::optional<BuiltPatch> built;
+            try
+            {
+                built = it->second.get();
+            }
+            catch (const std::exception& error)
+            {
+                log::Warning(std::string("Orbital patch generation failed: ") + error.what());
+            }
             it = state.pending.erase(it);
-
-            Upload(state, id, built);
-            ++uploaded;
+            if (!built.has_value()) continue;
+            try
+            {
+                Upload(state, id, *built);
+                ++uploaded;
+            }
+            catch (const std::exception& error)
+            {
+                log::Warning(std::string("Orbital patch upload failed: ") + error.what());
+            }
         }
     }
 
