@@ -232,6 +232,16 @@ constexpr u32 kPushConstantDwords = 40;
 }
 } // namespace
 
+void GpuFieldGenerator::PrewarmShaders(const shader::Compiler& compiler)
+{
+    static_cast<void>(compiler.Compile({
+        .source = detail::kFieldGenerationComputeShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Compute,
+        .debug = false
+    }));
+}
+
 GpuFieldGenerator::GpuFieldGenerator(
     rhi::Device& device,
     const shader::Compiler& shaderCompiler,
