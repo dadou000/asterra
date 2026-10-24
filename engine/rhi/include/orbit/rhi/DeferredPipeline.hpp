@@ -33,7 +33,9 @@ public:
                        desc.vertexShader.data + desc.vertexShader.size);
         pixel_.assign(desc.pixelShader.data,
                       desc.pixelShader.data + desc.pixelShader.size);
-        attributes_.assign(desc.vertexAttributes.begin(), desc.vertexAttributes.end());
+        if (!desc.vertexAttributes.empty())
+            attributes_.assign(desc.vertexAttributes.begin(),
+                               desc.vertexAttributes.end());
         desc_.vertexShader = {vertex_.data(), vertex_.size()};
         desc_.pixelShader = {pixel_.data(), pixel_.size()};
         desc_.vertexAttributes = attributes_;
