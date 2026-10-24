@@ -209,12 +209,12 @@ bool MeshSurfaceRenderer::PipelineReady()
     {
         auto admitted = jobs::TrySubmitBackgroundCpu([]() -> CompiledShaders {
             const shader::dxc::DxcShaderCompiler compiler;
-    const auto vs = compiler.Compile({
+    auto vs = compiler.Compile({
         .source = Compose(kVertexShader),
         .entryPoint = "main",
         .stage = shader::Stage::Vertex,
         .debug = false});
-    const auto ps = compiler.Compile({
+    auto ps = compiler.Compile({
         .source = Compose(kPixelShader),
         .entryPoint = "main",
         .stage = shader::Stage::Pixel,
