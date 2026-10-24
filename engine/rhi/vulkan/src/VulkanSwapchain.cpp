@@ -312,9 +312,12 @@ bool VulkanSwapchain::TryAcquireImage()
     const VkResult result = vkAcquireNextImageKHR(
         device_, nativeSwapchain_, 0U, available, VK_NULL_HANDLE,
         &currentImageIndex_);
-    if (result == VK_NOT_READY || result == VK_TIMEOUT ||
-        result == VK_ERROR_OUT_OF_DATE_KHR)
+    if (result == VK_NOT_READY || result == VK_TIMEOUT)
         return false;
+    // An invalidated surface requires explicit swapchain recreation; silently
+    // retrying the same old swapchain forever would freeze visible updates.
+    if (result == VK_ERROR_OUT_OF_DATE_KHR)
+        throw std::runtime_error("Orbit Vulkan swapchain is out of date.");
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
         throw std::runtime_error("Orbit failed nonblocking Vulkan image acquire.");
     if (vkResetFences(device_, 1, &previousSubmit) != VK_SUCCESS)
