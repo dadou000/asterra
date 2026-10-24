@@ -8,6 +8,7 @@
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/rhi/DeferredPipeline.hpp>
+#include <orbit/rhi/FrameBufferPool.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <array>
@@ -55,6 +56,11 @@ public:
         rhi::Device& device,
         const shader::Compiler& compiler);
 
+    void BeginFrame(u32 completedSlot, u32 framesInFlight)
+    {
+        recordUploads_.BeginFrame(completedSlot, framesInFlight);
+    }
+
     // Optional: the global distance field to keep up to date. Updated right
     // after the library pump, outside the render pass.
     void SetSdfScene(MeshSdfScene* scene) noexcept
@@ -87,16 +93,9 @@ private:
     };
     [[nodiscard]] bool PipelineReady();
     std::future<CompiledShaders> pendingShaders_;
-    struct RetiredRecords
-    {
-        std::unique_ptr<rhi::Buffer> buffer;
-        u64 retireAtTick{0U};
-    };
-
     rhi::Device& device_;
     std::unique_ptr<rhi::DeferredGraphicsPipeline> pipeline_;
-    std::vector<RetiredRecords> records_;
-    u64 tick_{0U};
+    rhi::FrameBufferPool recordUploads_;
     MeshSdfScene* sdfScene_{nullptr};
 };
 } // namespace orbit::mesh_render
