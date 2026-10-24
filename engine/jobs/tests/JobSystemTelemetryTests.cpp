@@ -121,6 +121,17 @@ int main()
     orbit::jobs::BackgroundCpuPool().WaitIdle();
     Check(orbit::jobs::BackgroundCpuAdmission().outstanding == 0U,
           "admission capacity is released after completion");
+    auto failedAdmitted = orbit::jobs::TrySubmitBackgroundCpu([]() -> int {
+        throw std::runtime_error("intentional admitted task failure");
+    });
+    Check(failedAdmitted.has_value(), "failed job reserves a slot");
+    bool caught = false;
+    try { static_cast<void>(failedAdmitted->get()); }
+    catch (const std::runtime_error&) { caught = true; }
+    Check(caught, "admitted worker exceptions reach the future");
+    orbit::jobs::BackgroundCpuPool().WaitIdle();
+    Check(orbit::jobs::BackgroundCpuAdmission().outstanding == 0U,
+          "failed tasks release admission capacity");
     Check(orbit::jobs::BackgroundCpuAdmission().rejected > 0U,
           "admission rejections are counted");
 
