@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cassert>
 #include <future>
 #include <memory>
 #include <stdexcept>
@@ -17,6 +16,11 @@ using orbit::f64;
 
 namespace
 {
+void Check(const bool good)
+{
+    if (!good) throw std::runtime_error("Deferred pipeline contract failed.");
+}
+
 class TestGraphics final : public rhi::GraphicsPipeline
 {
 public:
@@ -134,22 +138,22 @@ int main()
                 .vertexShader = {vertex.data(), vertex.size()},
                 .pixelShader = {pixel.data(), pixel.size()},
                 .vertexAttributes = attributes});
-        assert(device.graphicsAttempts == 1U);
+        Check(device.graphicsAttempts == 1U);
         vertex.fill(0U);
         pixel.fill(0U);
         attributes.clear();
     }
-    assert(graphics->Poll() == nullptr);
-    assert(device.graphicsAttempts == 2U);
-    assert((device.seenVertex == std::vector<u8>{1U, 2U, 3U, 4U}));
-    assert((device.seenPixel == std::vector<u8>{5U, 6U, 7U, 8U}));
-    assert(device.seenAttributes.size() == 1U);
-    assert(device.seenAttributes[0].location == 2U);
-    assert(graphics->Poll() == nullptr); // Never blocks on incomplete driver work.
-    assert(device.graphicsAttempts == 2U); // No duplicate submissions.
+    Check(graphics->Poll() == nullptr);
+    Check(device.graphicsAttempts == 2U);
+    Check((device.seenVertex == std::vector<u8>{1U, 2U, 3U, 4U}));
+    Check((device.seenPixel == std::vector<u8>{5U, 6U, 7U, 8U}));
+    Check(device.seenAttributes.size() == 1U);
+    Check(device.seenAttributes[0].location == 2U);
+    Check(graphics->Poll() == nullptr); // Never blocks on incomplete driver work.
+    Check(device.graphicsAttempts == 2U); // No duplicate submissions.
     device.graphicsPromise->set_value(std::make_unique<TestGraphics>());
-    assert(graphics->Poll() != nullptr);
-    assert(device.graphicsAttempts == 2U);
+    Check(graphics->Poll() != nullptr);
+    Check(device.graphicsAttempts == 2U);
 
     std::unique_ptr<rhi::DeferredComputePipeline> compute;
     {
@@ -158,11 +162,11 @@ int main()
             rhi::ComputePipelineDesc{.computeShader = {shader.data(), shader.size()}});
         shader.fill(0U);
     }
-    assert(device.computeAttempts == 1U);
-    assert((device.seenCompute == std::vector<u8>{11U, 12U, 13U, 14U}));
-    assert(compute->Poll() == nullptr);
+    Check(device.computeAttempts == 1U);
+    Check((device.seenCompute == std::vector<u8>{11U, 12U, 13U, 14U}));
+    Check(compute->Poll() == nullptr);
     device.computePromise->set_value(std::make_unique<TestCompute>());
-    assert(compute->Poll() != nullptr);
-    assert(device.computeAttempts == 1U);
+    Check(compute->Poll() != nullptr);
+    Check(device.computeAttempts == 1U);
     return 0;
 }
