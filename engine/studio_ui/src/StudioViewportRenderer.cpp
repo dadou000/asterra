@@ -2036,7 +2036,7 @@ StudioViewportRenderer::ComposeBase(
                   {
                     std::shared_ptr<const terrain::TerrainSource> climateHold =
                         macroGlobeSurface != nullptr ? macroGlobeSurface->terrain : nullptr;
-                    cloudPresentation.pending = jobs::SubmitBackgroundCpu(
+                    auto admitted = jobs::TrySubmitBackgroundCpu(
                         [climateHold, referenceRadius, parameters = cloudParameters, atTime, cloudConfig]() {
                             CloudBuiltProduct product{};
                             product.field = celestial_clouds::BuildCloudField(
@@ -2057,10 +2057,20 @@ StudioViewportRenderer::ComposeBase(
                                 product.meanOpticalDepth = optical / static_cast<f64>(samples);
                             }
                             return product;
-                        });
-                    cloudPresentation.hasPending = true;
-                    cloudPresentation.pendingFingerprint = cloudFingerprint;
-                    cloudPresentation.pendingBody = logicalTarget->target->body;
+                        }, jobs::JobPriority::Normal);
+                    if (admitted)
+                    {
+                        cloudPresentation.pending = std::move(*admitted);
+                        cloudPresentation.hasPending = true;
+                        cloudPresentation.pendingFingerprint = cloudFingerprint;
+                        cloudPresentation.pendingBody = logicalTarget->target->body;
+                    }
+                    else
+                    {
+                        celestialScheduler_.Abandon(CelestialWorkKeyFor(info.id,
+                            logicalTarget->target->body, celestial_scheduler::WorkKind::CloudField),
+                            cloudFingerprint);
+                    }
                   }
                 }
 
@@ -2679,12 +2689,20 @@ StudioViewportRenderer::ComposeBase(
                     4U, 90, true))
             {
                 const auto params = resolvedAtmosphere->parameters;
-                presentation.pendingStatic = jobs::SubmitBackgroundCpu(
+                auto admitted = jobs::TrySubmitBackgroundCpu(
                     [params, atmosphereConfig] {
                         return celestial_atmosphere::BuildStaticLuts(params, atmosphereConfig);
-                    });
-                presentation.pendingStaticFingerprint = staticFingerprint;
-                presentation.pendingStaticBody = logicalTarget->target->body;
+                    }, jobs::JobPriority::High);
+                if (admitted)
+                {
+                    presentation.pendingStatic = std::move(*admitted);
+                    presentation.pendingStaticFingerprint = staticFingerprint;
+                    presentation.pendingStaticBody = logicalTarget->target->body;
+                }
+                else
+                    celestialScheduler_.Abandon(CelestialWorkKeyFor(info.id,
+                        logicalTarget->target->body, celestial_scheduler::WorkKind::AtmosphereLut),
+                        staticFingerprint);
             }
 
             const bool atmosphereCurrent =
@@ -2801,12 +2819,20 @@ StudioViewportRenderer::ComposeBase(
             {
                 const auto params = resolvedAtmosphere->parameters;
                 const auto luts = presentation.staticLuts;
-                presentation.pendingSky = jobs::SubmitBackgroundCpu(
+                auto admitted = jobs::TrySubmitBackgroundCpu(
                     [params, luts, skyInput, atmosphereConfig] {
                         return celestial_atmosphere::BuildSkyView(params, *luts, skyInput, atmosphereConfig);
-                    });
-                presentation.pendingSkyFingerprint = skyFingerprint;
-                presentation.pendingSkyBody = logicalTarget->target->body;
+                    }, jobs::JobPriority::High);
+                if (admitted)
+                {
+                    presentation.pendingSky = std::move(*admitted);
+                    presentation.pendingSkyFingerprint = skyFingerprint;
+                    presentation.pendingSkyBody = logicalTarget->target->body;
+                }
+                else
+                    celestialScheduler_.Abandon(CelestialWorkKeyFor(info.id,
+                        logicalTarget->target->body, celestial_scheduler::WorkKind::AtmosphereSky),
+                        skyFingerprint);
             }
 
             const bool skyCurrent =
