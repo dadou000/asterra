@@ -27,21 +27,24 @@ Base: `0.1.1-Harmony` at `e96d400b697898b0e2e4f634c576bb0329bfb612`.
 12. Cloud per-texel summary reduction moved into the background field build, eliminating a repeated complete cloud-map scan during viewport composition. Completed fields publish with strong staging of the GPU product; a same-body previous time bucket remains eligible for last-ready display during continuous clock advancement.
 13. Shader prewarming owns an isolated DXC compiler inside the worker task, avoiding use-after-free when Studio closes while a compile is still queued. The orbital patch builder also refuses borrowed, non-owned terrain authorities rather than dereferencing a null shared owner.
 
+14. Added process-wide, nonblocking CPU admission for the new background workload family. `TrySubmitBackgroundCpu` reserves a slot atomically for both running and queued jobs; low and normal priorities have smaller ceilings so high-priority work retains admission headroom. Terrain, cloud, atmosphere, sun-shadow, shader-prewarm, corridor and junction tasks now defer on rejection and retry later, rather than accumulating an unbounded queue. Includes saturation/priority regression tests and queue telemetry (`BackgroundCpuAdmission`). The legacy `SubmitBackgroundCpu` entry point remains available and is **not** admission-bounded.
+15. Cancelled whole-world bake services now retire after cooperative worker completion instead of joining inside Studio's world-close or project-switch frame. Explicit rebake during an in-flight bake coalesces a replacement, cancels the prior worker, and publishes only the newest result. Cancel/retire and deferred restart regressions were added to `Orbit.TerrainBake`.
+
 ## Not yet guaranteed by this patch
 
 * `StudioSession::Tick` still resolves path-source centerlines and captures mutable scene inputs synchronously. Although corridor engineering, meshing, junction construction and contact cooking have moved off-thread, source resolution and semantic scene traversal are not yet time-sliced or deadline-bound. Other synchronous Studio updates also remain.
 * `GpuFieldGenerator`, `GpuPhysicalPageComposite` and `TerrainPreviewRenderer` now precompile their exact HLSL requests through the global DXC cache off-thread. However Vulkan pipeline and resource creation still occur inline when terrain identity or clipmap configuration changes, and a newly generated shader variant outside the prewarm set could still compile synchronously. Pipeline installation and retirement need an explicit GPU-thread staging budget.
 * `StudioApplication` still shares its main thread across editor update, viewport composition, command recording, and submission. Frame-slot fences, swapchain resize and presentation may block for GPU/OS reasons.
-* Legacy independent pools are still present, and `BackgroundCpuPool` is not yet a process-wide admission/affinity/deadline budget for **all** engine subsystems.
+* The new bounded admission protects the migrated background CPU workload family, but legacy independent pools and the compatibility `SubmitBackgroundCpu` path still lack process-wide admission, CPU affinity and true deadline enforcement.
 * CPU-to-GPU promotion of completed cloud/atmosphere products is currently bounded by one product per view on completion, not a measured microsecond budget.
-* Canceling/clearing an entire terrain bake service can still join its long-running worker during project teardown.
+* Whole-world bake cleanup and overlapping explicit bake requests now defer long joins. Final application shutdown still joins remaining workers by design; first-time persisted bake file loading in `TerrainBakeService::Observe` can still perform synchronous disk I/O. The number of simultaneously retired services is not yet globally budgeted.
 
 These require dedicated scheduler / snapshot architecture changes and Windows Vulkan stress profiling. This patch is an incremental reduction in render-thread stalls, not a proof of a CPU-independent hard frame deadline.
 
 ## Validation
 
 1. Compile `OrbitStudio` with MSVC, warnings-as-errors, on the base's supported Windows environment.
-2. Run `Orbit.JobSystemTelemetry`, `Orbit.TerrainSurfaceShader`, `Orbit.TerrainGpuPhysicalPageCompositeShader`, atmosphere tests, `Orbit.StudioSession` and `Orbit.StudioRenderingIntegration`, then Studio terrain smoke.
+2. Run `Orbit.JobSystemTelemetry`, `Orbit.TerrainBake`, `Orbit.TerrainSurfaceShader`, `Orbit.TerrainGpuPhysicalPageCompositeShader`, atmosphere tests, `Orbit.StudioSession` and `Orbit.StudioRenderingIntegration`, then Studio terrain smoke.
 3. Profile first planet opening, first cloud generation, sun and altitude animation, source revision invalidation, rapid world swaps, road/rail edits, junction contact generation, and orbital LOD refinement.
 4. Record p50/p95/p99/p99.9 frame CPU timings and `vk.fence_wait` separately; inspect Perfetto for `BuildCloudField`, `BuildSkyView`, `BuildStaticLuts`, `BakeNow` and CPU texel packing on `Orbit.Main`.
 5. Stress CPU-heavy tasks concurrently and confirm obsolete products never overwrite newer generation state. Test dozens of rapid road edits while a junction worker is running and validate that old collision packets cannot be used for vehicle contacts.
@@ -53,3 +56,10 @@ These require dedicated scheduler / snapshot architecture changes and Windows Vu
 - The existing self-hosted Windows workflow `.github/workflows/orbit-self-hosted-unpacked.yml` accepts trusted manual dispatch but intentionally has no pull-request trigger. There were no completed workflow runs for this draft head during this pass.
 - `PlanInfrastructureSection` used to call `BuildPathDerived` synchronously inside the corridor resolver. It is now within the async job, where it can spend unbounded time without extending `StudioSession::Tick`.
 - Terrain shader prewarming removes initial CPU DXC compilation from the ordinary viewport path, but GPU allocation and Vulkan pipeline construction are still non-preemptible render-thread operations. Their tail latency must be measured separately; the 700-microsecond inter-upload limit is not a hard deadline on an individual operation.
+
+## Background admission contract
+
+- `TrySubmitBackgroundCpu` is a **non-waiting** request, returning `std::nullopt` when priority capacity is exhausted. Callers must keep last-ready products and retry rather than treating backpressure as simulation failure.
+- Running and queued work consume admission until their packaged task invocation completes. Abandoned future ownership does not free admission early; a completed worker does.
+- `BackgroundCpuAdmission().outstanding/rejected/capacity` records aggregate pressure. Admission headroom is not a substitute for OS-level CPU reservations or frame deadlines.
+- CPU worker cancellation remains cooperative for long jobs. No hard real-time FPS guarantee follows without a separate frame-submission thread and GPU synchronization budget.
