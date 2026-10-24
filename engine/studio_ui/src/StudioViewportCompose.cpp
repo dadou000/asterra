@@ -65,6 +65,8 @@ StudioViewportRenderer::Compose(
     glassSurfaceRenderer_.BeginFrame(frameIndex, framesInFlight_);
     emissiveLightRenderer_.BeginFrame(frameIndex, framesInFlight_);
     meshSurfaceRenderer_.BeginFrame(frameIndex, framesInFlight_);
+    meshShadowMapRenderer_.BeginFrame(frameIndex, framesInFlight_);
+    meshSunShadowRenderer_.BeginFrame(frameIndex, framesInFlight_);
     cloudRenderer_.BeginFrame(frameIndex, framesInFlight_);
 
     const auto overlays =
