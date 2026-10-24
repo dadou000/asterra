@@ -242,6 +242,9 @@ int orbit::editor_app::StudioApplication::Run(
     char** argv)
 {
     orbit::core::SetCurrentThreadName("Orbit.Main");
+    // The current renderer still shares this thread with Studio updates.
+    // Keep it responsive when procedural pools are saturated.
+    orbit::core::SetForegroundThreadPriority();
 
     // Always-on micro-profiler: per-thread scope rings plus a hitch/stall
     // watchdog on this (the frame-driving) thread. See docs/ORBIT_PROFILER.md.
