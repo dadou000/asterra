@@ -18,6 +18,8 @@ target_include_directories(OrbitMeshRender
 target_link_libraries(OrbitMeshRender
     PUBLIC
         Orbit::Core
+        Orbit::Jobs
+        Orbit::ShaderDxc
         Orbit::Lighting
         Orbit::Math
         Orbit::MeshImport
