@@ -7,6 +7,8 @@
 #include <future>
 #include <type_traits>
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -182,6 +184,49 @@ private:
 // packaged task (rather than std::async) keeps future destruction nonblocking.
 // Worker count is read once from ORBIT_BACKGROUND_CPU_WORKERS (default HW/4).
 [[nodiscard]] JobSystem& BackgroundCpuPool();
+
+struct BackgroundCpuAdmissionTelemetry
+{
+    u64 outstanding{0U};
+    u64 rejected{0U};
+    u64 capacity{0U};
+};
+
+// A non-blocking CPU admission gate: counts waiting AND executing jobs, not
+// just the worker threads. The reserved capacity for higher priorities keeps
+// camera-critical work responsive during a background bake flood.
+[[nodiscard]] bool TryReserveBackgroundCpu(JobPriority priority) noexcept;
+void ReleaseBackgroundCpu() noexcept;
+[[nodiscard]] BackgroundCpuAdmissionTelemetry BackgroundCpuAdmission() noexcept;
+
+template <typename Callable>
+requires std::invocable<std::decay_t<Callable>&>
+[[nodiscard]] auto TrySubmitBackgroundCpu(
+    Callable&& callable, JobPriority priority = JobPriority::Low)
+    -> std::optional<std::future<std::invoke_result_t<std::decay_t<Callable>&>>>
+{
+    using Result = std::invoke_result_t<std::decay_t<Callable>&>;
+    if (!TryReserveBackgroundCpu(priority))
+        return std::nullopt; // Frame thread never waits for queue capacity.
+    try
+    {
+        auto task = std::make_shared<std::packaged_task<Result()>>(
+            std::forward<Callable>(callable));
+        auto future = task->get_future();
+        BackgroundCpuPool().Submit(priority, [task] {
+            // packaged_task captures any task exception internally; the slot
+            // must be released after invocation regardless of the result.
+            (*task)();
+            ReleaseBackgroundCpu();
+        });
+        return std::optional<std::future<Result>>(std::move(future));
+    }
+    catch (...)
+    {
+        ReleaseBackgroundCpu();
+        throw;
+    }
+}
 
 template <typename Callable>
 requires std::invocable<std::decay_t<Callable>&>
