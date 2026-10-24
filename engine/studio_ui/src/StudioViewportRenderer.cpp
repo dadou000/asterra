@@ -2734,71 +2734,54 @@ StudioViewportRenderer::ComposeBase(
                         skyInput,
                         atmosphereConfig);
 
-            const bool skyNeedsBuild =
-                presentation.skyView ==
-                    nullptr ||
-                presentation.skyFingerprint !=
-                    skyFingerprint;
-
-            if (skyNeedsBuild &&
-                acquireCelestialGrant(
-                    info.id,
-                    logicalTarget->
-                        target->body,
-                    celestial_scheduler::
-                        WorkKind::AtmosphereSky,
-                    skyFingerprint,
-                    celestial_scheduler::
-                        WorkBackend::Gpu,
-                    2U,
-                    95,
-                    true))
+            if (presentation.pendingSky.valid() &&
+                presentation.pendingSky.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
             {
-                presentation.skyView =
-                    std::make_unique<
-                        celestial_atmosphere::
-                            AtmosphereSkyView>(
-                                celestial_atmosphere::
-                                    BuildSkyView(
-                                        resolvedAtmosphere->
-                                            parameters,
-                                        *presentation.
-                                            staticLuts,
-                                        skyInput,
-                                        atmosphereConfig));
-
-                presentation.skyFingerprint =
-                    skyFingerprint;
-
-                if (presentation.gpu ==
-                    nullptr)
+                try
                 {
-                    presentation.gpu =
-                        std::make_unique<
-                            celestial_atmosphere::
-                                GpuAtmosphereLuts>(
-                                    *device_,
-                                    *presentation.
-                                        staticLuts,
-                                    *presentation.
-                                        skyView);
+                    auto built = presentation.pendingSky.get();
+                    if (presentation.pendingSkyBody == logicalTarget->target->body &&
+                        presentation.pendingSkyFingerprint == skyFingerprint)
+                    {
+                        presentation.skyView =
+                            std::make_unique<celestial_atmosphere::AtmosphereSkyView>(std::move(built));
+                        presentation.skyFingerprint = skyFingerprint;
+                        if (presentation.gpu == nullptr)
+                            presentation.gpu = std::make_unique<celestial_atmosphere::GpuAtmosphereLuts>(
+                                *device_, *presentation.staticLuts, *presentation.skyView);
+                        else
+                            presentation.gpu->ReplaceSkyView(*presentation.skyView);
+                    }
                 }
-                else
+                catch (const std::exception& error)
                 {
-                    presentation.gpu->
-                        ReplaceSkyView(
-                            *presentation.
-                                skyView);
+                    log::Warning(std::string("Atmosphere sky-view build failed: ") + error.what());
                 }
+                static_cast<void>(completeCelestialGrant(
+                    info.id, presentation.pendingSkyBody,
+                    celestial_scheduler::WorkKind::AtmosphereSky,
+                    presentation.pendingSkyFingerprint));
+            }
 
-                static_cast<void>(
-                    completeCelestialGrant(
-                        info.id,
-                        logicalTarget->
-                            target->body,
-                        celestial_scheduler::
-                            WorkKind::AtmosphereSky,
-                        skyFingerprint));
+            const bool skyNeedsBuild =
+                presentation.skyView == nullptr ||
+                presentation.skyFingerprint != skyFingerprint;
+
+            if (skyNeedsBuild && !presentation.pendingSky.valid() &&
+                retiredAtmosphereSky_.size() < 24U &&
+                acquireCelestialGrant(info.id, logicalTarget->target->body,
+                    celestial_scheduler::WorkKind::AtmosphereSky,
+                    skyFingerprint, celestial_scheduler::WorkBackend::Cpu,
+                    2U, 95, true))
+            {
+                const auto params = resolvedAtmosphere->parameters;
+                const auto luts = presentation.staticLuts;
+                presentation.pendingSky = std::async(std::launch::async,
+                    [params, luts, skyInput, atmosphereConfig] {
+                        return celestial_atmosphere::BuildSkyView(params, *luts, skyInput, atmosphereConfig);
+                    });
+                presentation.pendingSkyFingerprint = skyFingerprint;
+                presentation.pendingSkyBody = logicalTarget->target->body;
             }
 
             const bool skyCurrent =
@@ -2881,8 +2864,9 @@ StudioViewportRenderer::ComposeBase(
                     info.id);
             atmosphereFound !=
                     atmospherePresentations_.end() &&
-                atmosphereFound->second.gpu !=
-                    nullptr)
+                atmosphereFound->second.gpu != nullptr &&
+                logicalTarget->target.has_value() &&
+                atmosphereFound->second.body == logicalTarget->target->body)
         {
             auto* atmosphereGpu =
                 atmosphereFound->
