@@ -16,6 +16,8 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <utility>
@@ -818,5 +820,13 @@ private:
     std::unique_ptr<RenderDocCapture> renderDoc_;
     VkSampler defaultSampler_{VK_NULL_HANDLE};
     std::unique_ptr<GpuProgress> progress_;
+
+    // Vulkan pipeline caches require explicit external synchronization when
+    // multiple threads compile pipelines or the cache is serialized.
+    VkPipelineCache pipelineCache_{VK_NULL_HANDLE};
+    std::mutex pipelineCacheMutex_;
+    std::filesystem::path pipelineCachePath_;
+    void InitializePipelineCache() noexcept;
+    void SavePipelineCache() noexcept;
 };
 } // namespace orbit::rhi::vulkan::detail
