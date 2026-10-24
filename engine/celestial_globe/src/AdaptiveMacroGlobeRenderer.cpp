@@ -856,17 +856,19 @@ private:
         // Prepare requires shared ownership; it never builds patches on the
         // render thread when the source has only borrowed lifetime.
 
-        state.pending.emplace(
-            id,
-            jobs::SubmitBackgroundCpu(
-                [owner = state.authority.owner,
-                 shape = state.authority.shape,
-                 id,
-                 ocean = state.oceanEnabled]
-                {
-                    ORBIT_PROFILE_SCOPE("globe.build_patch");
-                    return BuildPatchData(owner.get(), shape, id, ocean);
-                }));
+        auto admitted = jobs::TrySubmitBackgroundCpu(
+            [owner = state.authority.owner,
+             shape = state.authority.shape,
+             id,
+             ocean = state.oceanEnabled]
+            {
+                ORBIT_PROFILE_SCOPE("globe.build_patch");
+                return BuildPatchData(owner.get(), shape, id, ocean);
+            }, jobs::JobPriority::Normal);
+        if (admitted)
+            state.pending.emplace(id, std::move(*admitted));
+        // Under load simply retain the parent LOD; retry on next prepare.
+
     }
 
     void Upload(State& state, const PlanetPatchId id, BuiltPatch& built)
