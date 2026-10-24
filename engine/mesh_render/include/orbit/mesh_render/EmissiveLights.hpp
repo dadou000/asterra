@@ -5,6 +5,7 @@
 #include <orbit/lighting/ScreenSpaceFinalGather.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
+#include <orbit/rhi/DeferredPipeline.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <array>
@@ -96,8 +97,8 @@ private:
     };
 
     rhi::Device& device_;
-    std::unique_ptr<rhi::ComputePipeline> lightPipeline_;
-    std::unique_ptr<rhi::GraphicsPipeline> compositePipeline_;
+    std::unique_ptr<rhi::DeferredComputePipeline> lightPipeline_;
+    std::unique_ptr<rhi::DeferredGraphicsPipeline> compositePipeline_;
     std::unique_ptr<rhi::Buffer> dummySdf_;
     std::vector<RetiredBuffer> lightBuffers_;
     u64 tick_{0U};
