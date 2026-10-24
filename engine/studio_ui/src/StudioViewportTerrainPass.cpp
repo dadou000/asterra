@@ -43,6 +43,7 @@ void StudioViewportRenderer::ComposeTerrainPass(StudioScenePassContext& context)
                 const shader::dxc::DxcShaderCompiler compiler;
                 terrain_gpu::GpuFieldGenerator::PrewarmShaders(compiler);
                 terrain_gpu::GpuPhysicalPageComposite::PrewarmShaders(compiler);
+                terrain_gpu::GpuRegionDelta::PrewarmShaders(compiler);
                 terrain_render::TerrainPreviewRenderer::PrewarmShaders(compiler);
             }, jobs::JobPriority::High);
             if (!admitted)
