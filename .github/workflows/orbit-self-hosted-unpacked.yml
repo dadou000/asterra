@@ -54,10 +54,10 @@ jobs:
         run: call build_orbit.bat unpacked nopause
 
       - name: Build targeted CPU test executables
-        run: cmake --build build --config Release --target OrbitJobSystemTelemetryTests OrbitUniverseBoundPathCacheTests OrbitStudioRoadJunctionPipelineTests OrbitTerrainSunShadowTests OrbitCelestialAtmosphereTests OrbitTerrainSurfaceShaderTests OrbitTerrainGpuPhysicalPageCompositeShaderTests OrbitTerrainBakeTests OrbitPathSourceTests OrbitRhiDeferredPipelineTests --parallel 2
+        run: cmake --build build --config Release --target OrbitJobSystemTelemetryTests OrbitUniverseBoundPathCacheTests OrbitStudioRoadJunctionPipelineTests OrbitTerrainSunShadowTests OrbitCelestialAtmosphereTests OrbitTerrainSurfaceShaderTests OrbitTerrainGpuPhysicalPageCompositeShaderTests OrbitTerrainBakeTests OrbitPathSourceTests OrbitRhiDeferredPipelineTests OrbitMeshRenderTests OrbitGlassSurfaceTests OrbitEmissiveLightsTests OrbitReflectionShaderTests --parallel 2
 
       - name: Run targeted CPU tests
-        run: ctest --test-dir build -C Release -R "Orbit\.(JobSystemTelemetry|UniverseBoundPathCache|StudioRoadJunctionPipeline|TerrainSunShadow|CelestialAtmosphere|TerrainSurfaceShader|TerrainGpuPhysicalPageCompositeShader|TerrainBake|PathSource|RhiDeferredPipeline)$" --output-on-failure
+        run: ctest --test-dir build -C Release -R "Orbit\.(JobSystemTelemetry|UniverseBoundPathCache|StudioRoadJunctionPipeline|TerrainSunShadow|CelestialAtmosphere|TerrainSurfaceShader|TerrainGpuPhysicalPageCompositeShader|TerrainBake|PathSource|RhiDeferredPipeline|MeshRender|GlassSurface|EmissiveLights|ReflectionShaders)$" --output-on-failure
 
       - name: Verify unpacked executable
         run: |
