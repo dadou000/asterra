@@ -1,7 +1,6 @@
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/profiler/Profiler.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
-#include <orbit/core/ThreadName.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/celestial_globe/PlanetPatchHierarchy.hpp>
 
@@ -784,7 +783,7 @@ private:
         const PlanetPatchId id,
         const bool oceanEnabled)
     {
-        core::SetCurrentThreadName("Orbit.GlobePatch");
+        // The shared background pool already owns the worker's thread name.
         BuiltPatch built;
         built.patch = BuildPlanetPatch(
             *source,
