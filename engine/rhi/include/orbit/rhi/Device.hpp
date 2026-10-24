@@ -9,7 +9,9 @@
 #include <orbit/rhi/Queue.hpp>
 #include <orbit/rhi/Swapchain.hpp>
 
+#include <future>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 namespace orbit::rhi
@@ -73,6 +75,25 @@ public:
 
     [[nodiscard]] virtual std::unique_ptr<ComputePipeline> CreateComputePipeline(
         const ComputePipelineDesc& desc) = 0;
+
+    // Optional driver-side pipeline compilation that never waits on the
+    // graphics-owning thread. The backend takes its own copies of bytecode
+    // and attribute arrays before returning. Nullopt means its bounded
+    // compile queue is full/unsupported; retry on a subsequent frame.
+    // The future is packaged-task-owned, never std::async joined at teardown.
+    [[nodiscard]] virtual std::optional<
+        std::future<std::unique_ptr<GraphicsPipeline>>>
+    TryCreateGraphicsPipelineAsync(const GraphicsPipelineDesc&)
+    {
+        return std::nullopt;
+    }
+
+    [[nodiscard]] virtual std::optional<
+        std::future<std::unique_ptr<ComputePipeline>>>
+    TryCreateComputePipelineAsync(const ComputePipelineDesc&)
+    {
+        return std::nullopt;
+    }
 
     [[nodiscard]] virtual std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
