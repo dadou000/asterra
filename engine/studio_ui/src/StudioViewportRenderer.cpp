@@ -1962,6 +1962,7 @@ StudioViewportRenderer::ComposeBase(
 
                 if (cloudNeedsBuild &&
                     !cloudPresentation.hasPending &&
+                    retiredCloudBuilds_.size() < 24U &&
                     acquireCelestialGrant(
                         info.id,
                         logicalTarget->
@@ -1978,7 +1979,6 @@ StudioViewportRenderer::ComposeBase(
                   // Both first-use and refresh builds belong on workers. The
                   // previous GPU field remains visible; a cold field starts
                   // without holding up the viewport for ~1 second.
-                  if (retiredCloudBuilds_.size() < 24U)
                   {
                     std::shared_ptr<const terrain::TerrainSource> climateHold =
                         macroGlobeSurface != nullptr ? macroGlobeSurface->terrain : nullptr;
