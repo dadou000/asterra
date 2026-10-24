@@ -42,4 +42,11 @@ void SetCurrentThreadName(const std::string_view name) noexcept
     static_cast<void>(name);
 #endif
 }
+void SetBackgroundThreadPriority() noexcept
+{
+#if defined(_WIN32)
+    static_cast<void>(SetThreadPriority(
+        GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL));
+#endif
+}
 } // namespace orbit::core
