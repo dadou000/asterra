@@ -429,9 +429,12 @@ bool ServiceBakesRebakesAndKeepsTheRunningBakeOnFailure()
         auto edited = desc;
         edited.global.tectonic.plateCount = 9;
         service.Observe(planet.id, planet, edited, {.resolution = 32, .autoRebake = true});
+        ok &= Check(Pump(service, [&] {
+            return service.Status(planet.id).state == terrain_bake::BakeState::Ready;
+        }), "saved bake file loads asynchronously");
         const auto completed = service.TakeCompleted();
         ok &= Check(completed.size() == 1 && completed[0].matchesRecipe,
-            "a saved bake for the current recipe loads at once");
+            "a saved bake activates without recomputing terrain");
         ok &= Check(service.Status(planet.id).state == terrain_bake::BakeState::Ready,
             "and is ready without baking");
     }
@@ -440,8 +443,9 @@ bool ServiceBakesRebakesAndKeepsTheRunningBakeOnFailure()
     {
         terrain_bake::TerrainBakeService service(TempDirectory("cancel"));
         service.Observe(planet.id, planet, desc, {.resolution = 1024, .autoRebake = true});
-        service.Tick(1.0);
-        ok &= Check(service.Status(planet.id).state == terrain_bake::BakeState::Baking, "a large bake runs in the background");
+        ok &= Check(Pump(service, [&] {
+            return service.Status(planet.id).state == terrain_bake::BakeState::Baking;
+        }), "a large bake runs after checking for a saved bake");
         ok &= Check(!service.WorkersQuiescent(),
             "active world bake must not be retired while worker runs");
         service.Cancel(planet.id);
