@@ -94,6 +94,9 @@ public:
         const terrain::AnalyticTerrainSource& source);
     ~GpuFieldGenerator();
 
+    // Precompiles CPU DXC code off the frame thread; no Vulkan device used.
+    static void PrewarmShaders(const shader::Compiler& compiler);
+
     GpuFieldGenerator(const GpuFieldGenerator&) = delete;
     GpuFieldGenerator& operator=(const GpuFieldGenerator&) = delete;
 
