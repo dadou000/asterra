@@ -68,6 +68,12 @@ int main()
         CHECK(studio.PathProducts().Find(n.id)!=nullptr);
         const auto& pipeline=studio.RoadJunctions();
         CHECK(pipeline.ActiveJunctions()==1U);
+        const auto stableCacheRevision = studio.PathProducts().ContentRevision();
+        const auto stableJunctionRevision = pipeline.Revision();
+        for (int idleTick = 0; idleTick < 8; ++idleTick)
+            static_cast<void>(studio.Tick(false));
+        CHECK(studio.PathProducts().ContentRevision() == stableCacheRevision);
+        CHECK(pipeline.Revision() == stableJunctionRevision);
         CHECK(pipeline.FindPatch(centre.id)!=nullptr);
         CHECK(pipeline.FindEdge(e.id)!=nullptr);
         CHECK(pipeline.FindEdge(e.id)->product.visualMesh.indices.size()<
