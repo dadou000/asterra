@@ -67,6 +67,13 @@ ResolveUpProvider(
     {
         return request.upResolver;
     }
+    if (request.resolvedBodyShape)
+    {
+        const auto shape = *request.resolvedBodyShape;
+        return [shape](const math::Double3& position) {
+            return ReferenceNormal(shape, position);
+        };
+    }
 
     const auto* startSurface =
         std::get_if<paths::SurfaceAnchor>(
@@ -162,19 +169,24 @@ ResolveUpProvider(
     if(request.maximumSamples<2U || request.maximumSamples>131072U)
         return fail("Path maximumSamples must be between 2 and 131072.");
 
-    if (request.frames == nullptr ||
-        request.bodies == nullptr)
+    if (request.resolvedFramePointAnchors)
     {
-        return fail(
-            "Path source requires frame and body registries.");
+        const auto* start = std::get_if<paths::FramePointAnchor>(
+            &request.startNode.anchor);
+        const auto* end = std::get_if<paths::FramePointAnchor>(
+            &request.endNode.anchor);
+        if (!request.targetFrame || start == nullptr || end == nullptr ||
+            start->frame != request.targetFrame ||
+            end->frame != request.targetFrame ||
+            request.edge.mode == paths::EdgeMode::Routed)
+            return fail("Resolved path source requires matching frame-local anchors.");
     }
-
-    if (!request.targetFrame ||
-        !request.frames->Contains(
-            request.targetFrame))
+    else
     {
-        return fail(
-            "Path source target frame does not exist.");
+        if (request.frames == nullptr || request.bodies == nullptr)
+            return fail("Path source requires frame and body registries.");
+        if (!request.targetFrame || !request.frames->Contains(request.targetFrame))
+            return fail("Path source target frame does not exist.");
     }
 
     if (request.edge.startNode !=
@@ -317,22 +329,20 @@ BuildPathCenterline(
         return centerline;
     }
 
-    const auto start =
-        paths::ResolveAnchor(
-            request.startNode.anchor,
+    const auto start = request.resolvedFramePointAnchors
+        ? std::optional<frames::FramePoint>{frames::FramePoint{
             request.targetFrame,
-            request.atTime,
-            *request.frames,
-            *request.bodies,
+            std::get<paths::FramePointAnchor>(request.startNode.anchor).localMeters}}
+        : paths::ResolveAnchor(request.startNode.anchor, request.targetFrame,
+            request.atTime, *request.frames, *request.bodies,
             request.entityResolver);
 
-    const auto end =
-        paths::ResolveAnchor(
-            request.endNode.anchor,
+    const auto end = request.resolvedFramePointAnchors
+        ? std::optional<frames::FramePoint>{frames::FramePoint{
             request.targetFrame,
-            request.atTime,
-            *request.frames,
-            *request.bodies,
+            std::get<paths::FramePointAnchor>(request.endNode.anchor).localMeters}}
+        : paths::ResolveAnchor(request.endNode.anchor, request.targetFrame,
+            request.atTime, *request.frames, *request.bodies,
             request.entityResolver);
 
     if (!start.has_value() ||
