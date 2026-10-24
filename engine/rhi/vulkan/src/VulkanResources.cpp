@@ -1277,24 +1277,41 @@ VulkanDevice::CreateAabbAccelerationStructure(
         submit.pCommandBufferInfos =
             &submitCommand;
 
+        u64 asBuildSerial = 0U;
+        VkSemaphoreSubmitInfo asCompletion{};
+        if (progress_ != nullptr)
+        {
+            asBuildSerial = progress_->BeginSubmit();
+            asCompletion.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+            asCompletion.semaphore = progress_->Timeline();
+            asCompletion.value = asBuildSerial;
+            asCompletion.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            submit.signalSemaphoreInfoCount = 1U;
+            submit.pSignalSemaphoreInfos = &asCompletion;
+        }
+
         if (vkQueueSubmit2(
                 queue,
                 1U,
                 &submit,
                 VK_NULL_HANDLE) != VK_SUCCESS)
         {
-            vkDestroyCommandPool(
-                nativeDevice_,
-                pool,
-                nullptr);
+            if (progress_ != nullptr)
+            {
+                // Exceptional submit failure: drain earlier work before
+                // advancing the timeline on the host.
+                static_cast<void>(vkQueueWaitIdle(queue));
+                progress_->SignalFromHost(asBuildSerial);
+            }
+            vkDestroyCommandPool(nativeDevice_, pool, nullptr);
             throw std::runtime_error(
                 "Orbit failed to submit proxy AS build commands.");
         }
         submittedAsBuild = true;
 
         // Temporary AS build scratch and command memory must survive GPU
-        // execution, not the CPU function call. Retire both once a later
-        // graphics timeline submit proves the AS build has completed.
+        // execution, not the CPU function call. The build submission signals
+        // its own serial even if there is never a subsequent graphics frame.
         // No vkQueueWaitIdle on the normal frame/resource path.
         bool retired = false;
         if (progress_ != nullptr)
@@ -1302,7 +1319,7 @@ VulkanDevice::CreateAabbAccelerationStructure(
             try
             {
                 const auto scratch = scratchBuffer;
-                progress_->Retire(progress_->NextSerial(),
+                progress_->Retire(asBuildSerial,
                     [device = nativeDevice_, allocator = allocator_,
                      pool, scratch] {
                         vkDestroyCommandPool(device, pool, nullptr);
