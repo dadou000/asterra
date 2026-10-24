@@ -2867,6 +2867,18 @@ int orbit::editor_app::StudioApplication::Run(
 
             static_cast<void>(runtime.ResizeSwapchainToWindow());
 
+            // FIFO presentation can exhaust available swapchain images even
+            // when this frame slot's GPU timeline has completed. Poll the
+            // acquire semaphore/fence with zero timeout before recording.
+            // If unavailable, keep showing the last frame and service input
+            // on the next iteration instead of waiting inside Vulkan.
+            if (!swapchain.TryAcquireImage())
+            {
+                orbit::profiler::CancelFrame();
+                window.WaitForActivity(1U);
+                continue;
+            }
+
             if (const auto wanted =
                     viewportCapture.WantedViewSize();
                 wanted.has_value() &&
