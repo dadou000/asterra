@@ -92,12 +92,21 @@ void ScheduleInitialImageTransition(
     allocateInfo.commandBufferCount = 1;
 
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-    vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer);
+    if (vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer) !=
+        VK_SUCCESS)
+    {
+        vkDestroyCommandPool(device, pool, nullptr);
+        throw std::runtime_error("Orbit could not allocate image init commands.");
+    }
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+    if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS)
+    {
+        vkDestroyCommandPool(device, pool, nullptr);
+        throw std::runtime_error("Orbit could not begin image init commands.");
+    }
 
     const bool isDepth =
         (aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0;
@@ -125,7 +134,11 @@ void ScheduleInitialImageTransition(
     dependencyInfo.pImageMemoryBarriers = &barrier;
 
     vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
-    vkEndCommandBuffer(commandBuffer);
+    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
+    {
+        vkDestroyCommandPool(device, pool, nullptr);
+        throw std::runtime_error("Orbit could not finish image init commands.");
+    }
 
     VkCommandBufferSubmitInfo commandBufferInfo{};
     commandBufferInfo.sType =
