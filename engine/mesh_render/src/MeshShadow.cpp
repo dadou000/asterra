@@ -12,7 +12,6 @@ namespace orbit::mesh_render
 {
 namespace
 {
-constexpr u64 kRecordRetireTicks = 24U;
 constexpr u32 kShadowPushDwords = 16U;
 constexpr u32 kResolvePushDwords = 29U;
 
@@ -853,7 +852,7 @@ std::array<f32, 3> MeshLocalUp(
 MeshShadowMapRenderer::MeshShadowMapRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler)
-    : device_(device)
+    : device_(device), recordUploads_(device)
 {
     const auto vs = compiler.Compile({
         .source = kShadowVertexShader,
@@ -906,14 +905,6 @@ void MeshShadowMapRenderer::DrawViews(
     const u32 width,
     const u32 height)
 {
-    ++tick_;
-    std::erase_if(
-        records_,
-        [this](const RetiredRecords& records)
-        {
-            return tick_ >= records.retireAtTick;
-        });
-
     // The shadow map must be a well-defined fully-lit fallback during cold
     // driver compilation. Do not sample uninitialized shadow atlas pixels.
     if (pipeline_ == nullptr || pipeline_->Poll() == nullptr)
@@ -938,13 +929,9 @@ void MeshShadowMapRenderer::DrawViews(
         return;
     }
 
-    auto buffer = device_.CreateBuffer({
-        .sizeBytes = records.size() * sizeof(f32),
-        .usage = rhi::BufferUsage::Structured,
-        .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::ShaderResource});
-    std::memcpy(buffer->Map(), records.data(), records.size() * sizeof(f32));
-    buffer->Unmap();
+    auto& buffer = recordUploads_.Acquire(records.size() * sizeof(f32));
+    std::memcpy(buffer.Map(), records.data(), records.size() * sizeof(f32));
+    buffer.Unmap();
 
     commands.SetScissor({
         .left = 0,
@@ -983,7 +970,7 @@ void MeshShadowMapRenderer::DrawViews(
                     MeshTextureRole::BaseColor)]);
 
             commands.SetGraphicsConstants(constants);
-            commands.SetGraphicsBuffer(0U, *buffer);
+            commands.SetGraphicsBuffer(0U, buffer);
             // Opaque parts never read the texture; any bound texture will do.
             commands.SetGraphicsTexture(
                 0U,
@@ -999,7 +986,7 @@ void MeshShadowMapRenderer::DrawViews(
         }
     }
 
-    records_.push_back({std::move(buffer), tick_ + kRecordRetireTicks});
+
 }
 
 void MeshShadowMapRenderer::Draw(
@@ -1055,7 +1042,7 @@ void MeshShadowMapRenderer::DrawSky(
 MeshSunShadowRenderer::MeshSunShadowRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler)
-    : device_(device)
+    : device_(device), parameterUploads_(device)
 {
     const auto compute = compiler.Compile({
         .source = kResolveShader,
@@ -1096,14 +1083,6 @@ void MeshSunShadowRenderer::Draw(
         return;
     }
 
-    ++tick_;
-    std::erase_if(
-        parameters_,
-        [this](const RetiredBuffer& retired)
-        {
-            return tick_ >= retired.retireAtTick;
-        });
-
     const bool skyEnabled =
         sky.irradiance.x > 0.0F || sky.irradiance.y > 0.0F ||
         sky.irradiance.z > 0.0F;
@@ -1111,13 +1090,9 @@ void MeshSunShadowRenderer::Draw(
         sky.irradiance.x, sky.irradiance.y, sky.irradiance.z,
         skyEnabled ? 1.0F : 0.0F,
         sky.localUp[0], sky.localUp[1], sky.localUp[2], 0.0F};
-    auto buffer = device_.CreateBuffer({
-        .sizeBytes = sizeof(parameters),
-        .usage = rhi::BufferUsage::Structured,
-        .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::ShaderResource});
-    std::memcpy(buffer->Map(), parameters.data(), sizeof(parameters));
-    buffer->Unmap();
+    auto& buffer = parameterUploads_.Acquire(sizeof(parameters));
+    std::memcpy(buffer.Map(), parameters.data(), sizeof(parameters));
+    buffer.Unmap();
 
     const f32 aspect = static_cast<f32>(width) / static_cast<f32>(height);
     const f32 nearPlane = std::max(view.nearPlaneMeters, 1.0e-5F);
@@ -1147,7 +1122,7 @@ void MeshSunShadowRenderer::Draw(
 
     commands.SetComputePipeline(*pipeline_->Poll());
     commands.SetComputeConstants(constants);
-    commands.SetComputeBuffer(0U, *buffer);
+    commands.SetComputeBuffer(0U, buffer);
     commands.SetComputeStorageTexture(0U, target);
     commands.SetComputeTexture(0U, surfaceNormalMetallic);
     commands.SetComputeTexture(1U, surfaceEmissionClass);
@@ -1157,6 +1132,6 @@ void MeshSunShadowRenderer::Draw(
     // One thread per 2x2 quad, 16x16 quads (32x32 pixels) per group.
     commands.Dispatch((width + 31U) / 32U, (height + 31U) / 32U, 1U);
 
-    parameters_.push_back({std::move(buffer), tick_ + kRecordRetireTicks});
+
 }
 } // namespace orbit::mesh_render
