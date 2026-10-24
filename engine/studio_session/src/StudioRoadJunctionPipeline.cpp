@@ -257,13 +257,6 @@ void StudioRoadJunctionPipeline::Refresh(
 
     if (fingerprint == observedFingerprint_)
         return;
-    // A previous full junction build is still running. Deferring its
-    // replacement prevents a flood of obsolete workers under rapid edits.
-    // Consumers already reject packets whose raw corridors are dirty.
-    if (pendingBuild_ && pendingBuild_->future.wait_for(
-            std::chrono::seconds(0)) != std::future_status::ready)
-        return;
-
     // The previous completed packet is stale as soon as the semantic graph
     // changes, not when a replacement worker eventually finishes. Invalidate
     // once per fingerprint; then resume discovery over multiple frames.
@@ -287,6 +280,13 @@ void StudioRoadJunctionPipeline::Refresh(
         discoveryInProgress_ = true;
         // Root pages are fetched on demand below, never as a bulk list.
     }
+
+    // An obsolete worker may still be running, but do not leave its old
+    // contacts or render patches usable while it finishes. Invalidate first;
+    // then defer constructing a replacement until the prior job retires.
+    if (pendingBuild_ && pendingBuild_->future.wait_for(
+            std::chrono::seconds(0)) != std::future_status::ready)
+        return;
 
     // Both roots and children are fetched using bounded SQLite pages.
     // Count page queries as well as interpreted records against the frame
