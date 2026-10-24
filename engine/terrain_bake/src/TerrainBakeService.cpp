@@ -1053,6 +1053,20 @@ void TerrainBakeService::Tick(const f64 deltaSeconds)
 
             entry.baking = false;
             entry.lastBakeSeconds = entry.workerSeconds;
+            if (entry.restartRequested)
+            {
+                // A newer explicit request superseded this worker. It has
+                // already finished and been joined, so Launch cannot block
+                // while replacing it. Do not publish the older product.
+                entry.restartRequested = false;
+                entry.result.reset();
+                entry.resultRivers.reset();
+                entry.resultGeology.reset();
+                lock.unlock();
+                Launch(entry, planet, entry.settings.resolution);
+                lock.lock();
+                continue;
+            }
             if (entry.result != nullptr)
             {
                 // Validated by construction (finite layers, matching sizes);
@@ -1145,6 +1159,15 @@ bool TerrainBakeService::StartBake(
     entry->failedHash = 0;
     entry->staleSeconds = 0.0;
 
+    if (entry->baking)
+    {
+        // Never synchronously StopWorker/join from an editor or RPC command.
+        // Cancel the old work and replace it after it actually finishes.
+        entry->restartRequested = true;
+        if (entry->control)
+            entry->control->cancel.store(true, std::memory_order_relaxed);
+        return true;
+    }
     lock.unlock();
     Launch(*entry, planet, options.resolution);
     return true;
@@ -1157,6 +1180,7 @@ void TerrainBakeService::RequestCancelAll() noexcept
     for (auto& [key, entry] : entries_)
     {
         static_cast<void>(key);
+        entry->restartRequested = false;
         if (entry->control)
             entry->control->cancel.store(true, std::memory_order_relaxed);
     }
@@ -1184,6 +1208,7 @@ void TerrainBakeService::Cancel(const world::PlanetId planet)
     if (entry != nullptr && entry->control != nullptr && entry->baking)
     {
         entry->control->cancel.store(true, std::memory_order_relaxed);
+        entry->restartRequested = false;
         // A cancelled bake must not simply restart: remember it as failed for
         // this recipe until the recipe changes or the user bakes again.
         entry->failedHash = entry->currentHash;
