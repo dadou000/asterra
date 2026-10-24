@@ -685,6 +685,7 @@ public:
     VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
 
     void Present(bool verticalSync) override;
+    [[nodiscard]] bool TryAcquireImage() override;
     void Resize(u32 width, u32 height) override;
 
     [[nodiscard]] u32 Width() const noexcept override;
