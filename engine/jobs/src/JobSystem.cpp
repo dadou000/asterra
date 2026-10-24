@@ -617,15 +617,24 @@ namespace
 {
 std::atomic<u64> gBackgroundCpuOutstanding{0U};
 std::atomic<u64> gBackgroundCpuRejected{0U};
+
+[[nodiscard]] u64 BackgroundCpuCapacity() noexcept
+{
+    // Avoid querying/allocating environment strings at frame frequency.
+    static const u64 limit = [] {
+        const u64 workers = std::max<u64>(
+            PoolWorkerCount("ORBIT_BACKGROUND_CPU_WORKERS", 4U), 1U);
+        return std::max<u64>(workers * 8U, 32U);
+    }();
+    return limit;
+}
 }
 
 bool TryReserveBackgroundCpu(const JobPriority priority) noexcept
 {
     // No application locks or waits: a full queue simply defers an update.
     // Critical/normal work can take reserved headroom above low priority.
-    const u64 workers = std::max<u64>(
-        PoolWorkerCount("ORBIT_BACKGROUND_CPU_WORKERS", 4U), 1U);
-    const u64 fullCapacity = std::max<u64>(workers * 8U, 32U);
+    const u64 fullCapacity = BackgroundCpuCapacity();
     const u64 cap = priority == JobPriority::Low
         ? fullCapacity / 2U
         : priority == JobPriority::Normal
@@ -650,12 +659,10 @@ void ReleaseBackgroundCpu() noexcept
 
 BackgroundCpuAdmissionTelemetry BackgroundCpuAdmission() noexcept
 {
-    const u64 workers = std::max<u64>(
-        PoolWorkerCount("ORBIT_BACKGROUND_CPU_WORKERS", 4U), 1U);
     return {
         .outstanding = gBackgroundCpuOutstanding.load(std::memory_order_acquire),
         .rejected = gBackgroundCpuRejected.load(std::memory_order_relaxed),
-        .capacity = std::max<u64>(workers * 8U, 32U)
+        .capacity = BackgroundCpuCapacity()
     };
 }
 
