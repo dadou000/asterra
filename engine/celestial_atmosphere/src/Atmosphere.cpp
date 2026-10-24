@@ -1189,13 +1189,13 @@ AtmosphereSkyView BuildSkyView(
         0.0,
         input.observerRadiusMeters};
 
-    // Every texel is independent (shared inputs are read-only and each writes its
-    // own element), so the rows are built in parallel: this table is rebuilt on
-    // the CPU whenever the camera altitude changes.
+    // This CPU-heavy operation is called from Orbit's bounded background pool.
+    // Do not spawn a second unrestricted parallel worker set inside a job:
+    // nested std::execution::par can saturate every core and starve rendering.
     std::vector<u32> skyRows(sky.height);
     std::iota(skyRows.begin(), skyRows.end(), 0U);
     std::for_each(
-        std::execution::par,
+        std::execution::seq,
         skyRows.begin(),
         skyRows.end(),
         [&](const u32 y)
