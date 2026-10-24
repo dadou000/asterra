@@ -24,6 +24,12 @@ public:
 
     virtual void Present(bool verticalSync) = 0;
 
+    // Nonblocking image readiness check before recording a frame. Vulkan
+    // implementations return false under presentation backpressure; the
+    // caller must skip this render iteration and keep the previous frame.
+    // Legacy implementations retain their existing acquisition behavior.
+    [[nodiscard]] virtual bool TryAcquireImage() { return true; }
+
     // Recreates the swapchain's images against a new size (e.g. after
     // the window was resized). No-op if width/height already match.
     // The caller is responsible for recreating anything else sized to
