@@ -1130,10 +1130,11 @@ StudioTickResult StudioSession::Tick(
         infrastructureDiscoveryRevision_ = sceneRevision;
         infrastructureDiscoveryParents_.clear();
         infrastructureDiscoveryChildren_.clear();
+        infrastructureDiscoveryActiveParent_.reset();
+        infrastructureDiscoveryChildOffset_ = 0U;
+        infrastructureDiscoveryRootOffset_ = 0U;
+        infrastructureDiscoveryRootsExhausted_ = false;
         infrastructureDiscoveryChildCursor_ = 0U;
-        const auto roots = world_.Objects().Roots();
-        for (const auto& root : roots)
-            infrastructureDiscoveryParents_.push_back(root.id);
     }
     constexpr std::size_t kInfrastructureObjectsPerTick = 96U;
     std::size_t discovered = 0U;
@@ -1144,10 +1145,43 @@ StudioTickResult StudioSession::Tick(
         {
             infrastructureDiscoveryChildren_.clear();
             infrastructureDiscoveryChildCursor_ = 0U;
-            if (infrastructureDiscoveryParents_.empty()) break;
-            const auto parent = infrastructureDiscoveryParents_.back();
-            infrastructureDiscoveryParents_.pop_back();
-            infrastructureDiscoveryChildren_ = world_.Objects().Children(parent);
+            if (!infrastructureDiscoveryActiveParent_)
+            {
+                if (infrastructureDiscoveryParents_.empty() &&
+                    !infrastructureDiscoveryRootsExhausted_)
+                {
+                    auto roots = world_.Objects().RootsPage(
+                        static_cast<u32>(kInfrastructureObjectsPerTick),
+                        infrastructureDiscoveryRootOffset_);
+                    infrastructureDiscoveryRootOffset_ +=
+                        static_cast<u32>(roots.size());
+                    if (roots.size() < kInfrastructureObjectsPerTick)
+                        infrastructureDiscoveryRootsExhausted_ = true;
+                    discovered += roots.size();
+                    for (const auto& root : roots)
+                        infrastructureDiscoveryParents_.push_back(root.id);
+                    if (discovered >= kInfrastructureObjectsPerTick)
+                        break;
+                }
+                if (infrastructureDiscoveryParents_.empty()) break;
+                infrastructureDiscoveryActiveParent_ =
+                    infrastructureDiscoveryParents_.back();
+                infrastructureDiscoveryParents_.pop_back();
+                infrastructureDiscoveryChildOffset_ = 0U;
+            }
+            ++discovered; // Every SQLite query consumes some frame budget.
+            auto page = world_.Objects().ChildrenPage(
+                *infrastructureDiscoveryActiveParent_,
+                static_cast<u32>(kInfrastructureObjectsPerTick),
+                infrastructureDiscoveryChildOffset_);
+            infrastructureDiscoveryChildOffset_ +=
+                static_cast<u32>(page.size());
+            if (page.empty())
+            {
+                infrastructureDiscoveryActiveParent_.reset();
+                continue;
+            }
+            infrastructureDiscoveryChildren_ = std::move(page);
             continue;
         }
         const auto& child = infrastructureDiscoveryChildren_[
