@@ -6,6 +6,7 @@
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/rhi/DeferredPipeline.hpp>
+#include <orbit/rhi/FrameBufferPool.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <array>
@@ -64,6 +65,11 @@ public:
         rhi::Device& device,
         const shader::Compiler& compiler);
 
+    void BeginFrame(u32 completedSlot, u32 framesInFlight)
+    {
+        lightUploads_.BeginFrame(completedSlot, framesInFlight);
+    }
+
     // Writes the added lighting (RGBA16F) into `target`, which must be in
     // UnorderedAccess; the sampled inputs in ShaderResource (`depth` in
     // DepthRead). `sdf` may be null: lights then cast no shadows.
@@ -90,17 +96,10 @@ public:
         u32 height);
 
 private:
-    struct RetiredBuffer
-    {
-        std::unique_ptr<rhi::Buffer> buffer;
-        u64 retireAtTick{0U};
-    };
-
     rhi::Device& device_;
     std::unique_ptr<rhi::DeferredComputePipeline> lightPipeline_;
     std::unique_ptr<rhi::DeferredGraphicsPipeline> compositePipeline_;
     std::unique_ptr<rhi::Buffer> dummySdf_;
-    std::vector<RetiredBuffer> lightBuffers_;
-    u64 tick_{0U};
+    rhi::FrameBufferPool lightUploads_;
 };
 } // namespace orbit::mesh_render
