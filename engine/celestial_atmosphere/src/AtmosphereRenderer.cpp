@@ -494,7 +494,7 @@ bool AtmosphereRenderer::Ready()
             // The worker owns the DXC instance. No borrowed Studio compiler
             // or mutable viewport state can outlive the render graph.
             const shader::dxc::DxcShaderCompiler compiler;
-    const auto vertex =
+    auto vertex =
         compiler.Compile({
             .source = kVertexShader,
             .entryPoint = "main",
@@ -534,7 +534,7 @@ float EllipsoidSunVisibility(float3 p, float3 axes,
     return StellarDiscFraction(clearance, spread);
 }
 )");
-    const auto pixel =
+    auto pixel =
         compiler.Compile({
             .source = pixelSource,
             .entryPoint = "main",
