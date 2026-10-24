@@ -6,6 +6,7 @@
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/editor_session/EditorWorldSession.hpp>
+#include <future>
 #include <map>
 #include <optional>
 #include <string>
@@ -60,6 +61,26 @@ public:
     [[nodiscard]] u64 Revision() const noexcept {return revision_;}
     [[nodiscard]] std::size_t ActiveJunctions() const noexcept;
 private:
+    struct PreparedJunction
+    {
+        frames::FrameId frame{};
+        path_geometry::RoadJunctionPublicationResult candidate;
+        path_geometry::RoadContactSceneBuild cooked;
+    };
+    struct PreparedBatch
+    {
+        std::vector<PreparedJunction> junctions;
+        std::string error;
+    };
+    struct PendingBuild
+    {
+        std::future<PreparedBatch> future;
+        u64 fingerprint{0U};
+        u64 worldGeneration{0U};
+    };
+    // Task futures are packaged by Orbit::Jobs, not std::async: erasing an
+    // obsolete pending build cannot synchronously join the render thread.
+    std::optional<PendingBuild> pendingBuild_;
     std::map<frames::FrameId,path_geometry::RoadJunctionScenePublisher> frames_;
     std::map<frames::FrameId,path_geometry::RoadContactSceneOwner> contactScenes_;
     [[nodiscard]] bool PacketCurrent(
