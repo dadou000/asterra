@@ -2,6 +2,7 @@
 #include <orbit/profiler/Profiler.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
 #include <orbit/core/ThreadName.hpp>
+#include <orbit/core/Log.hpp>
 #include <orbit/celestial_globe/PlanetPatchHierarchy.hpp>
 
 #include <orbit/terrain/TerrainContracts.hpp>
@@ -714,7 +715,8 @@ private:
     // per call, so the render thread never waits on terrain sampling.
     static constexpr std::size_t kPatchBuildsInFlight = 6U;
     static constexpr std::size_t kMaximumRetiredPatchJobs = 24U;
-    static constexpr u32 kPatchUploadsPerPrepare = 8U;
+    static constexpr u32 kPatchUploadsPerPrepare = 2U;
+    static constexpr auto kPatchUploadCpuBudget = std::chrono::microseconds(700);
 
     struct Resident
     {
@@ -888,27 +890,33 @@ private:
     // Uploads finished patches on the calling (render) thread.
     void CollectCompleted(State& state)
     {
+        const auto started = std::chrono::steady_clock::now();
         u32 uploaded = 0U;
         for (auto it = state.pending.begin(); it != state.pending.end();)
         {
-            if (uploaded >= kPatchUploadsPerPrepare)
-            {
+            if (uploaded >= kPatchUploadsPerPrepare ||
+                (uploaded > 0U && std::chrono::steady_clock::now() - started >=
+                    kPatchUploadCpuBudget))
                 break;
-            }
-
             if (it->second.wait_for(std::chrono::seconds(0)) !=
                 std::future_status::ready)
             {
                 ++it;
                 continue;
             }
-
             const PlanetPatchId id = it->first;
-            BuiltPatch built = it->second.get();
-            it = state.pending.erase(it);
-
-            Upload(state, id, built);
-            ++uploaded;
+            try
+            {
+                BuiltPatch built = it->second.get();
+                it = state.pending.erase(it);
+                Upload(state, id, built);
+                ++uploaded;
+            }
+            catch (const std::exception& error)
+            {
+                log::Warning(std::string("Orbital patch preparation failed: ") + error.what());
+                it = state.pending.erase(it);
+            }
         }
     }
 
