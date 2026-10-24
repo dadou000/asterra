@@ -1,5 +1,6 @@
 #include <orbit/terrain_bake/TerrainBakeService.hpp>
 
+#include <orbit/jobs/JobSystem.hpp>
 #include <orbit/terrain_bake/PlanetBakeFile.hpp>
 #include <orbit/terrain_impacts/ImpactField.hpp>
 
@@ -49,10 +50,11 @@ template<typename SampleTexel>
             std::memory_order_relaxed);
     }
 
-    const u32 reportedWorkers = std::thread::hardware_concurrency();
     const u64 sampleCount = static_cast<u64>(6U) * stride * stride;
+    // This solver launches an independent nested worker group. Reserving
+    // CPU capacity prevents one expensive bake from occupying all cores.
     const u32 availableWorkers = std::clamp(
-        reportedWorkers == 0U ? 2U : reportedWorkers,
+        jobs::PoolWorkerCount("ORBIT_GEOLOGY_BAKE_WORKERS", 4U, 1U),
         1U, kMaximumParallelGeologyWorkers);
     const u32 workerCount = sampleCount < kMinimumParallelGeologySamples
         ? 1U
