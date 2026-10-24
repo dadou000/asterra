@@ -26,6 +26,10 @@ void StudioRoadJunctionPipeline::Clear() noexcept {
     discoveredEdges_.clear();
     discoveryParents_.clear();
     discoveryChildren_.clear();
+    discoveryActiveParent_.reset();
+    discoveryChildOffset_ = 0U;
+    discoveryRootOffset_ = 0U;
+    discoveryRootsExhausted_ = false;
     discoveryNextChild_ = 0U;
     discoveryScanned_ = 0U;
     discoveryFingerprint_ = 0U;
@@ -273,19 +277,20 @@ void StudioRoadJunctionPipeline::Refresh(
         discoveredEdges_.clear();
         discoveryParents_.clear();
         discoveryChildren_.clear();
+        discoveryActiveParent_.reset();
+        discoveryChildOffset_ = 0U;
+        discoveryRootOffset_ = 0U;
+        discoveryRootsExhausted_ = false;
         discoveryNextChild_ = 0U;
         discoveryScanned_ = 0U;
         discoveryFingerprint_ = fingerprint;
         discoveryInProgress_ = true;
-        const auto roots = world.Objects().Roots();
-        for (const auto& root : roots)
-            discoveryParents_.push_back(root.id);
+        // Root pages are fetched on demand below, never as a bulk list.
     }
 
-    // Children() still materializes one direct-child list synchronously,
-    // but at most 96 records are interpreted on the owner thread per tick.
-    // The next call resumes exactly where it stopped unless an authoritative
-    // revision changed, in which case all earlier captured edges are dropped.
+    // Both roots and children are fetched using bounded SQLite pages.
+    // Count page queries as well as interpreted records against the frame
+    // budget so many empty parents cannot create a hidden long frame.
     constexpr std::size_t kJunctionObjectsPerTick = 96U;
     constexpr std::size_t kJunctionMaximumSceneObjects = 131072U;
     std::size_t thisTick = 0U;
@@ -295,14 +300,44 @@ void StudioRoadJunctionPipeline::Refresh(
         {
             discoveryChildren_.clear();
             discoveryNextChild_ = 0U;
-            if (discoveryParents_.empty())
+            if (!discoveryActiveParent_)
             {
-                discoveryInProgress_ = false;
-                break;
+                if (discoveryParents_.empty() &&
+                    !discoveryRootsExhausted_)
+                {
+                    auto roots = world.Objects().RootsPage(
+                        static_cast<u32>(kJunctionObjectsPerTick),
+                        discoveryRootOffset_);
+                    discoveryRootOffset_ += static_cast<u32>(roots.size());
+                    if (roots.size() < kJunctionObjectsPerTick)
+                        discoveryRootsExhausted_ = true;
+                    thisTick += roots.size();
+                    for (const auto& root : roots)
+                        discoveryParents_.push_back(root.id);
+                    if (thisTick >= kJunctionObjectsPerTick)
+                        break;
+                }
+                if (discoveryParents_.empty())
+                {
+                    discoveryInProgress_ = false;
+                    break;
+                }
+                discoveryActiveParent_ = discoveryParents_.back();
+                discoveryParents_.pop_back();
+                discoveryChildOffset_ = 0U;
             }
-            const auto parent = discoveryParents_.back();
-            discoveryParents_.pop_back();
-            discoveryChildren_ = world.Objects().Children(parent);
+            ++thisTick; // Even an empty SQL page costs CPU work.
+            auto page = world.Objects().ChildrenPage(
+                *discoveryActiveParent_,
+                static_cast<u32>(kJunctionObjectsPerTick),
+                discoveryChildOffset_);
+            discoveryChildOffset_ += static_cast<u32>(page.size());
+            if (page.empty())
+            {
+                discoveryActiveParent_.reset();
+                continue;
+            }
+            discoveryChildren_ = std::move(page);
             continue;
         }
         const auto& child = discoveryChildren_[discoveryNextChild_++];
