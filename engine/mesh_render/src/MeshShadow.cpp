@@ -1,4 +1,8 @@
 #include <orbit/mesh_render/MeshShadow.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <chrono>
+#include <utility>
 
 #include "MeshDrawRecords.hpp"
 
@@ -851,27 +855,48 @@ std::array<f32, 3> MeshLocalUp(
 
 MeshShadowMapRenderer::MeshShadowMapRenderer(
     rhi::Device& device,
-    const shader::Compiler& compiler)
+    const shader::Compiler&)
     : device_(device), recordUploads_(device)
 {
-    const auto vs = compiler.Compile({
+}
+
+bool MeshShadowMapRenderer::PipelineReady()
+{
+    if (pipeline_) return pipeline_->Poll() != nullptr;
+    if (!pendingShaders_.valid())
+    {
+        auto submitted = jobs::TrySubmitBackgroundCpu([]() -> CompiledShaders {
+            const shader::dxc::DxcShaderCompiler compiler;
+    auto vs = compiler.Compile({
         .source = kShadowVertexShader,
         .entryPoint = "main",
         .stage = shader::Stage::Vertex,
         .debug = false});
-    const auto ps = compiler.Compile({
+    auto ps = compiler.Compile({
         .source = kShadowPixelShader,
         .entryPoint = "main",
         .stage = shader::Stage::Pixel,
         .debug = false});
 
+            return {std::move(vs), std::move(ps)};
+        }, jobs::JobPriority::High);
+        if (submitted) pendingShaders_ = std::move(*submitted);
+    }
+    if (!pendingShaders_.valid() ||
+        pendingShaders_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        return false;
+    auto compiled = pendingShaders_.get();
+    const auto& vs = compiled.vertex;
+    const auto& ps = compiled.pixel;
     static constexpr std::array<rhi::VertexAttribute, 2> attributes{{
         {0U, rhi::VertexFormat::Float3,
          offsetof(mesh_import::MeshVertex, position)},
         {3U, rhi::VertexFormat::Float2,
          offsetof(mesh_import::MeshVertex, uv)}}};
 
-    pipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(device,
+
+    pipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(device_,
         rhi::GraphicsPipelineDesc{
         .vertexShader = {.data = vs.bytecode.data(), .size = vs.bytecode.size()},
         .pixelShader = {.data = ps.bytecode.data(), .size = ps.bytecode.size()},
@@ -893,6 +918,7 @@ MeshShadowMapRenderer::MeshShadowMapRenderer(
             rhi::TextureFormat::RGBA8_UNorm,
             rhi::TextureFormat::RGBA8_UNorm},
         .colorAttachmentCount = 1U});
+    return pipeline_->Poll() != nullptr;
 }
 
 void MeshShadowMapRenderer::DrawViews(
@@ -907,7 +933,7 @@ void MeshShadowMapRenderer::DrawViews(
 {
     // The shadow map must be a well-defined fully-lit fallback during cold
     // driver compilation. Do not sample uninitialized shadow atlas pixels.
-    if (pipeline_ == nullptr || pipeline_->Poll() == nullptr)
+    if (!PipelineReady())
     {
         commands.ClearColorTarget(colorMap, {1.0e9F, 1.0e9F, 1.0e9F, 1.0e9F});
         commands.ClearDepthTarget(depthMap, 1.0F);
@@ -1041,16 +1067,34 @@ void MeshShadowMapRenderer::DrawSky(
 
 MeshSunShadowRenderer::MeshSunShadowRenderer(
     rhi::Device& device,
-    const shader::Compiler& compiler)
+    const shader::Compiler&)
     : device_(device), parameterUploads_(device)
 {
-    const auto compute = compiler.Compile({
+}
+
+bool MeshSunShadowRenderer::PipelineReady()
+{
+    if (pipeline_) return pipeline_->Poll() != nullptr;
+    if (!pendingShader_.valid())
+    {
+        auto submitted = jobs::TrySubmitBackgroundCpu([]() -> shader::Binary {
+            const shader::dxc::DxcShaderCompiler compiler;
+    auto compute = compiler.Compile({
         .source = kResolveShader,
         .entryPoint = "main",
         .stage = shader::Stage::Compute,
         .debug = false});
 
-    pipeline_ = std::make_unique<rhi::DeferredComputePipeline>(device,
+            return std::move(compute);
+        }, jobs::JobPriority::High);
+        if (submitted) pendingShader_ = std::move(*submitted);
+    }
+    if (!pendingShader_.valid() ||
+        pendingShader_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        return false;
+    auto compute = pendingShader_.get();
+    pipeline_ = std::make_unique<rhi::DeferredComputePipeline>(device_,
         rhi::ComputePipelineDesc{
         .computeShader = {
             .data = compute.bytecode.data(),
@@ -1059,6 +1103,7 @@ MeshSunShadowRenderer::MeshSunShadowRenderer(
         .shaderResourceBuffers = 1U,
         .storageTextures = 1U,
         .sampledTextures = 5U});
+    return pipeline_->Poll() != nullptr;
 }
 
 void MeshSunShadowRenderer::Draw(
@@ -1077,8 +1122,7 @@ void MeshSunShadowRenderer::Draw(
     const bool initialize,
     const u32 temporalIndex)
 {
-    if (pipeline_ == nullptr || pipeline_->Poll() == nullptr ||
-        width == 0U || height == 0U)
+    if (!PipelineReady() || width == 0U || height == 0U)
     {
         return;
     }
