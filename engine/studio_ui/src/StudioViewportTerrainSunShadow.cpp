@@ -39,13 +39,17 @@ std::shared_ptr<rhi::Buffer> StudioViewportRenderer::EnsureTerrainSunShadow(
     if (!cache.pending.valid() && std::chrono::steady_clock::now() >= cache.retryAfter &&
         (cache.source != source || cache.body != body || cache.radius != radius || cache.revision != revision))
     {
-        cache.pendingSource = source;
-        cache.pendingBody = body;
-        cache.pendingRadius = radius;
-        cache.pending = jobs::SubmitBackgroundCpu( [source, radius]
+        auto admitted = jobs::TrySubmitBackgroundCpu([source, radius]
         {
             return lighting::BuildTerrainSunShadowField(*source, radius);
-        });
+        }, jobs::JobPriority::Normal);
+        if (admitted)
+        {
+            cache.pendingSource = source;
+            cache.pendingBody = body;
+            cache.pendingRadius = radius;
+            cache.pending = std::move(*admitted);
+        }
     }
     // Old same-body data remains usable while a new recipe builds. A field
     // from another body/radius is never applied to the replacement target.
