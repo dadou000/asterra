@@ -295,6 +295,37 @@ void VulkanSwapchain::Resize(const u32 width, const u32 height)
     CreatePerImageResources();
 }
 
+bool VulkanSwapchain::TryAcquireImage()
+{
+    if (acquired_) return true;
+    ORBIT_PROFILE_SCOPE("vk.swapchain_try_acquire");
+    const VkFence previousSubmit = imageAvailableFences_[frameSlot_];
+    // The acquire semaphore is reusable only after the previous graphics
+    // submission retired its wait. Do not reset its fence unless we succeed
+    // in acquiring an image; a failed zero-timeout acquire submits nothing.
+    const VkResult ready = vkGetFenceStatus(device_, previousSubmit);
+    if (ready == VK_NOT_READY) return false;
+    if (ready != VK_SUCCESS)
+        throw std::runtime_error("Orbit could not poll swapchain semaphore reuse fence.");
+
+    const VkSemaphore available = imageAvailableSemaphores_[frameSlot_];
+    const VkResult result = vkAcquireNextImageKHR(
+        device_, nativeSwapchain_, 0U, available, VK_NULL_HANDLE,
+        &currentImageIndex_);
+    if (result == VK_NOT_READY || result == VK_TIMEOUT ||
+        result == VK_ERROR_OUT_OF_DATE_KHR)
+        return false;
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+        throw std::runtime_error("Orbit failed nonblocking Vulkan image acquire.");
+    if (vkResetFences(device_, 1, &previousSubmit) != VK_SUCCESS)
+        throw std::runtime_error("Orbit could not reset swapchain submission fence.");
+    presentQueue_->SetPendingSwapchainSync(
+        available, renderFinishedSemaphores_[currentImageIndex_],
+        previousSubmit);
+    acquired_ = true;
+    return true;
+}
+
 void VulkanSwapchain::AcquireIfNeeded() const
 {
     if (acquired_)
