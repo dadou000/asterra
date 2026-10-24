@@ -1453,6 +1453,7 @@ void GlassSurfaceRenderer::DrawGlass(
     const lighting::ReflectionSceneInput* const exact)
 {
     if (glassPipeline_ == nullptr || glassPipeline_->Poll() == nullptr ||
+        copyPipeline_ == nullptr || copyPipeline_->Poll() == nullptr ||
         width == 0U || height == 0U ||
         instances.empty())
     {
