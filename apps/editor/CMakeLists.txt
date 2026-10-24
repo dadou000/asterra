@@ -1,6 +1,7 @@
 add_executable(OrbitStudio
     src/Main.cpp
     src/StudioApplication.cpp
+    src/StudioGpuSubmitWorker.cpp
     src/StudioWorkspaceRpc.cpp
     src/EditorAppSupport.cpp
     src/StudioBuildHost.cpp
@@ -130,3 +131,19 @@ add_custom_target(OrbitStudioTerrainUiSmoke
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL
 )
+
+if(BUILD_TESTING)
+    add_executable(OrbitStudioGpuSubmitWorkerTests
+        tests/StudioGpuSubmitWorkerTests.cpp
+        src/StudioGpuSubmitWorker.cpp
+    )
+    target_include_directories(OrbitStudioGpuSubmitWorkerTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(OrbitStudioGpuSubmitWorkerTests
+        PRIVATE Orbit::Core)
+    target_compile_features(OrbitStudioGpuSubmitWorkerTests
+        PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioGpuSubmitWorkerTests)
+    add_test(NAME Orbit.StudioGpuSubmitWorker
+        COMMAND OrbitStudioGpuSubmitWorkerTests)
+endif()
