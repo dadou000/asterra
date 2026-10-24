@@ -50,9 +50,13 @@ public:
         {
             // Recycle only completed-slot buffers. Bound the pool's long-term
             // allocation footprint so an unusually large upload is retired.
+            constexpr u64 kMaximumFreeBytes = 32U * 1024U * 1024U;
             if (buffer && available_.size() < 32U &&
-                buffer->SizeBytes() <= 8U * 1024U * 1024U)
+                buffer->SizeBytes() <= kMaximumFreeBytes - cachedBytes_)
+            {
+                cachedBytes_ += buffer->SizeBytes();
                 available_.push_back(std::move(buffer));
+            }
         }
         slots_[completedSlot].clear();
     }
@@ -76,6 +80,7 @@ public:
         std::unique_ptr<Buffer> buffer;
         if (choice != available_.end())
         {
+            cachedBytes_ -= (*choice)->SizeBytes();
             buffer = std::move(*choice);
             available_.erase(choice);
         }
@@ -110,6 +115,7 @@ private:
     ResourceState initialState_;
     std::vector<std::vector<std::unique_ptr<Buffer>>> slots_;
     std::vector<std::unique_ptr<Buffer>> available_;
+    u64 cachedBytes_{0U};
     std::optional<u32> activeSlot_;
 };
 } // namespace orbit::rhi
