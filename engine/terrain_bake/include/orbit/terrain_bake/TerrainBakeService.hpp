@@ -223,6 +223,7 @@ private:
         std::thread worker;
         std::unique_ptr<BakeControl> control;
         bool baking{false};
+        bool restartRequested{false}; // explicit bake request coalesced during cancellation
         u64 bakingHash{0};
         u64 bakingGeologyHash{0};
         // Worker -> main thread handoff, guarded by the service mutex.
