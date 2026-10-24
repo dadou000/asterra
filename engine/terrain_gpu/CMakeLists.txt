@@ -81,6 +81,7 @@ if(BUILD_TESTING)
     target_link_libraries(OrbitTerrainGpuPhysicalPageCompositeShaderTests
         PRIVATE
             Orbit::ShaderDxc
+            Orbit::TerrainGpu
     )
 
     target_compile_features(
