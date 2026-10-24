@@ -7,6 +7,10 @@
 #include <orbit/lighting/ProxySurface.hpp>
 #include <orbit/lighting/SurfaceBuffer.hpp>
 #include <orbit/mesh_import/MeshAsset.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <chrono>
+#include <utility>
 
 #include <algorithm>
 #include <bit>
@@ -193,9 +197,18 @@ std::array<f32, 12> MakeInstanceRows(
 
 MeshSurfaceRenderer::MeshSurfaceRenderer(
     rhi::Device& device,
-    const shader::Compiler& compiler)
+    const shader::Compiler&)
     : device_(device)
 {
+}
+
+bool MeshSurfaceRenderer::PipelineReady()
+{
+    if (pipeline_) return pipeline_->Poll() != nullptr;
+    if (!pendingShaders_.valid())
+    {
+        auto admitted = jobs::TrySubmitBackgroundCpu([]() -> CompiledShaders {
+            const shader::dxc::DxcShaderCompiler compiler;
     const auto vs = compiler.Compile({
         .source = Compose(kVertexShader),
         .entryPoint = "main",
@@ -207,6 +220,17 @@ MeshSurfaceRenderer::MeshSurfaceRenderer(
         .stage = shader::Stage::Pixel,
         .debug = false});
 
+            return {std::move(vs), std::move(ps)};
+        }, jobs::JobPriority::High);
+        if (admitted) pendingShaders_ = std::move(*admitted);
+    }
+    if (!pendingShaders_.valid() ||
+        pendingShaders_.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+        return false;
+    auto compiled = pendingShaders_.get();
+    const auto& vs = compiled.vertex;
+    const auto& ps = compiled.pixel;
     static constexpr std::array<rhi::VertexAttribute, 4> attributes{{
         {0U, rhi::VertexFormat::Float3,
          offsetof(mesh_import::MeshVertex, position)},
@@ -217,7 +241,8 @@ MeshSurfaceRenderer::MeshSurfaceRenderer(
         {3U, rhi::VertexFormat::Float2,
          offsetof(mesh_import::MeshVertex, uv)}}};
 
-    pipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(device,
+
+    pipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(device_,
         rhi::GraphicsPipelineDesc{
         .vertexShader = {.data = vs.bytecode.data(), .size = vs.bytecode.size()},
         .pixelShader = {.data = ps.bytecode.data(), .size = ps.bytecode.size()},
@@ -241,6 +266,7 @@ MeshSurfaceRenderer::MeshSurfaceRenderer(
             rhi::TextureFormat::RGBA16_Float,
             rhi::TextureFormat::RGBA16_Float},
         .colorAttachmentCount = 4U});
+    return pipeline_->Poll() != nullptr;
 }
 
 void MeshSurfaceRenderer::Draw(
@@ -275,8 +301,7 @@ void MeshSurfaceRenderer::Draw(
             return tick_ >= records.retireAtTick;
         });
 
-    if (pipeline_ == nullptr || pipeline_->Poll() == nullptr ||
-        width == 0U || height == 0U)
+    if (!PipelineReady() || width == 0U || height == 0U)
     {
         return;
     }
