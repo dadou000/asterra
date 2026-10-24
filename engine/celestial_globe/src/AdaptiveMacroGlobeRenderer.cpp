@@ -457,10 +457,12 @@ public:
         const f32 lodBiasStops)
     {
         ORBIT_PROFILE_SCOPE("globe.prepare");
+        ReapRetiredPatches();
         const auto registered = LookupTerrainAuthority(fallback.Fingerprint());
         if (!registered.has_value() ||
             registered->source == nullptr ||
-            registered->source->Revision() != registered->sourceRevision)
+            registered->source->Revision() != registered->sourceRevision ||
+            registered->owner == nullptr)
         {
             return false;
         }
@@ -471,6 +473,7 @@ public:
             state.authority.sourceRevision != registered->sourceRevision ||
             state.oceanEnabled != oceanEnabled)
         {
+            RetirePending(state);
             state = State{};
             state.initialized = true;
             state.authority = *registered;
@@ -709,6 +712,7 @@ private:
     // at most kPatchUploadsPerPrepare finished patches are uploaded to the GPU
     // per call, so the render thread never waits on terrain sampling.
     static constexpr std::size_t kPatchBuildsInFlight = 6U;
+    static constexpr std::size_t kMaximumRetiredPatchJobs = 24U;
     static constexpr u32 kPatchUploadsPerPrepare = 8U;
 
     struct Resident
@@ -742,6 +746,31 @@ private:
         // is done), so jobs never outlive the source/shape they read.
         std::map<PlanetPatchId, std::future<BuiltPatch>> pending;
     };
+
+    // Obsolete workers cannot be joined from the renderer: std::async future
+    // destruction waits for unfinished tasks. Keep them alive until ready.
+    std::vector<std::future<BuiltPatch>> retiredPatchBuilds_;
+
+    void ReapRetiredPatches()
+    {
+        for (auto it = retiredPatchBuilds_.begin(); it != retiredPatchBuilds_.end();)
+        {
+            if (it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+                it = retiredPatchBuilds_.erase(it);
+            else
+                ++it;
+        }
+    }
+
+    void RetirePending(State& state)
+    {
+        for (auto& [id, task] : state.pending)
+        {
+            static_cast<void>(id);
+            retiredPatchBuilds_.push_back(std::move(task));
+        }
+        state.pending.clear();
+    }
 
     // Samples the terrain and builds the vertex/appearance data for one patch.
     // Pure CPU work with no GPU access, so it is safe on a worker thread
@@ -814,30 +843,15 @@ private:
     {
         if (state.residents.contains(id) ||
             state.pending.contains(id) ||
+            retiredPatchBuilds_.size() >= kMaximumRetiredPatchJobs ||
             state.authority.source == nullptr ||
             device_ == nullptr)
         {
             return;
         }
 
-        if (state.authority.owner == nullptr)
-        {
-            // No shared ownership: the source is only guaranteed alive for
-            // this call, so build on the calling thread.
-            if (state.syncBuildsThisPrepare >= 2U)
-            {
-                return;
-            }
-            ++state.syncBuildsThisPrepare;
-
-            BuiltPatch built = BuildPatchData(
-                state.authority.source,
-                state.authority.shape,
-                id,
-                state.oceanEnabled);
-            Upload(state, id, built);
-            return;
-        }
+        // Prepare requires shared ownership; it never builds patches on the
+        // render thread when the source has only borrowed lifetime.
 
         state.pending.emplace(
             id,
