@@ -452,6 +452,25 @@ bool ServiceBakesRebakesAndKeepsTheRunningBakeOnFailure()
         ok &= Check(service.WorkersQuiescent(),
             "cancelled bake can be retired after worker completion");
     }
+    // Rapid explicit re-bakes must defer a replacement rather than joining
+    // the active worker in the caller's Tick/RPC path.
+    {
+        terrain_bake::TerrainBakeService service(TempDirectory("restart"));
+        service.Observe(planet.id, planet, desc,
+            {.resolution = 256, .autoRebake = false});
+        ok &= Check(service.StartBake(planet.id, 256U),
+            "first explicit bake must launch");
+        ok &= Check(service.StartBake(planet.id, 32U),
+            "second explicit bake must be accepted while first runs");
+        ok &= Check(Pump(service, [&] {
+            const auto status = service.Status(planet.id);
+            return status.state == terrain_bake::BakeState::Ready &&
+                status.activeResolution == 32U;
+        }), "deferred bake must publish the newest requested resolution");
+        ok &= Check(service.Active(planet.id) != nullptr &&
+            service.Active(planet.id)->Resolution() == 32U,
+            "superseded bake must not be published");
+    }
     return ok;
 }
 
