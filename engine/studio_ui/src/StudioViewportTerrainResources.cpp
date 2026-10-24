@@ -1,3 +1,4 @@
+#include <orbit/jobs/JobSystem.hpp>
 #include "StudioViewportInternals.hpp"
 
 #include <orbit/terrain_water/LakeWater.hpp>
@@ -418,7 +419,7 @@ BuildPhysicalRenderPages(
                     pendingSurfaces.push_back({
                         .key = key,
                         .source = snapshot,
-                        .result = std::async(std::launch::async,
+                        .result = jobs::SubmitBackgroundCpu(
                             [snapshot, seaLevelMeters] {
                                 core::SetCurrentThreadName("Orbit.SurfacePrepare");
                                 const u32 resolution = snapshot->material->Resolution();
