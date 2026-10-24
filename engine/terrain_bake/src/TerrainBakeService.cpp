@@ -1150,6 +1150,33 @@ bool TerrainBakeService::StartBake(
     return true;
 }
 
+void TerrainBakeService::RequestCancelAll() noexcept
+{
+    // Only the owning Studio thread changes the entries map/control owners;
+    // bake workers observe the atomic cancel flags. No joins or waiting.
+    for (auto& [key, entry] : entries_)
+    {
+        static_cast<void>(key);
+        if (entry->control)
+            entry->control->cancel.store(true, std::memory_order_relaxed);
+    }
+}
+
+bool TerrainBakeService::WorkersQuiescent() const noexcept
+{
+    // A bake may be publishing its final result under the service lock.
+    // Never wait for that lock on the Studio frame thread.
+    std::unique_lock lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) return false;
+    for (const auto& [key, entry] : entries_)
+    {
+        static_cast<void>(key);
+        if (entry->worker.joinable() && !entry->workerDone)
+            return false;
+    }
+    return true;
+}
+
 void TerrainBakeService::Cancel(const world::PlanetId planet)
 {
     std::scoped_lock lock(mutex_);
