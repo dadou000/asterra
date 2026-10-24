@@ -8,6 +8,7 @@
 #include <string>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 #define CHECK(x) do {if(!(x)){std::cerr<<"StudioRoadJunctionPipeline: " #x " at "<<__LINE__<<'\n';return 1;}}while(false)
 
@@ -255,6 +256,25 @@ int main()
                 "Unused " + std::to_string(i),
                 paths::FramePointAnchor{.frame=frame,
                     .localMeters={0.0, 0.0, 100.0 + i}}));
+        // A 37-item SQL page must preserve the canonical sibling order,
+        // include every node exactly once, and finish with an empty page.
+        const auto fullChildren = world.Objects().Children(network.id);
+        std::vector<scene::ObjectRecord> pagedChildren;
+        for (std::size_t offset = 0; offset < fullChildren.size(); offset += 37U)
+        {
+            auto page = world.Objects().ChildrenPage(network.id, 37U,
+                static_cast<u32>(offset));
+            CHECK(!page.empty() && page.size() <= 37U);
+            pagedChildren.insert(pagedChildren.end(),
+                page.begin(), page.end());
+        }
+        CHECK(pagedChildren == fullChildren);
+        CHECK(world.Objects().ChildrenPage(network.id, 37U,
+            static_cast<u32>(fullChildren.size())).empty());
+        const auto fullRoots = world.Objects().Roots();
+        CHECK(world.Objects().RootsPage(1U, 0U).size() == 1U);
+        CHECK(world.Objects().RootsPage(1U,
+            static_cast<u32>(fullRoots.size())).empty());
         static_cast<void>(studio.Tick(false));
         CHECK(studio.RoadJunctions().ActiveContactScenes()==0U);
         CHECK(studio.RoadJunctions().CurrentContact(
