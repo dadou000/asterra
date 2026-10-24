@@ -4,6 +4,8 @@
 
 #include <concepts>
 #include <functional>
+#include <future>
+#include <type_traits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -175,4 +177,24 @@ private:
     class Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+// Shared, bounded CPU executor for immutable background products. Using a
+// packaged task (rather than std::async) keeps future destruction nonblocking.
+// Worker count is read once from ORBIT_BACKGROUND_CPU_WORKERS (default HW/4).
+[[nodiscard]] JobSystem& BackgroundCpuPool();
+
+template <typename Callable>
+requires std::invocable<std::decay_t<Callable>&>
+[[nodiscard]] auto SubmitBackgroundCpu(
+    Callable&& callable,
+    JobPriority priority = JobPriority::Low)
+    -> std::future<std::invoke_result_t<std::decay_t<Callable>&>>
+{
+    using Result = std::invoke_result_t<std::decay_t<Callable>&>;
+    auto task = std::make_shared<std::packaged_task<Result()>>(
+        std::forward<Callable>(callable));
+    auto result = task->get_future();
+    BackgroundCpuPool().Submit(priority, [task] { (*task)(); });
+    return result;
+}
 } // namespace orbit::jobs
