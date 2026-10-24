@@ -176,6 +176,12 @@ public:
     bool StartBake(world::PlanetId planet, std::optional<u32> resolution = {});
     void Cancel(world::PlanetId planet);
 
+    // World switching must not join an expensive bake on Studio's frame.
+    // These operations cancel in-flight work and permit deferred retirement
+    // only after every worker has reported completion.
+    void RequestCancelAll() noexcept;
+    [[nodiscard]] bool WorkersQuiescent() const noexcept;
+
     // True once Observe has been called for the planet.
     [[nodiscard]] bool Knows(world::PlanetId planet) const;
 
