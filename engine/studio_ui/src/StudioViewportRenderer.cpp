@@ -75,7 +75,12 @@ void StudioViewportRenderer::RetireCloudPresentation(const std::string& viewport
     const auto found = cloudPresentations_.find(viewportId);
     if (found == cloudPresentations_.end()) return;
     if (found->second.pending.valid())
+    {
+        celestialScheduler_.Abandon(CelestialWorkKeyFor(viewportId,
+            found->second.pendingBody, celestial_scheduler::WorkKind::CloudField),
+            found->second.pendingFingerprint);
         retiredCloudBuilds_.push_back(std::move(found->second.pending));
+    }
     cloudPresentations_.erase(found);
 }
 
@@ -96,9 +101,19 @@ void StudioViewportRenderer::RetireAtmospherePresentation(const std::string& vie
     const auto found = atmospherePresentations_.find(viewportId);
     if (found == atmospherePresentations_.end()) return;
     if (found->second.pendingStatic.valid())
+    {
+        celestialScheduler_.Abandon(CelestialWorkKeyFor(viewportId,
+            found->second.pendingStaticBody, celestial_scheduler::WorkKind::AtmosphereLut),
+            found->second.pendingStaticFingerprint);
         retiredAtmosphereStatic_.push_back(std::move(found->second.pendingStatic));
+    }
     if (found->second.pendingSky.valid())
+    {
+        celestialScheduler_.Abandon(CelestialWorkKeyFor(viewportId,
+            found->second.pendingSkyBody, celestial_scheduler::WorkKind::AtmosphereSky),
+            found->second.pendingSkyFingerprint);
         retiredAtmosphereSky_.push_back(std::move(found->second.pendingSky));
+    }
     atmospherePresentations_.erase(found);
 }
 
@@ -2625,7 +2640,12 @@ StudioViewportRenderer::ComposeBase(
                         presentation.staticFingerprint = presentation.pendingStaticFingerprint;
                         presentation.parameters = resolvedAtmosphere->parameters;
                         if (presentation.pendingSky.valid())
+                        {
+                            celestialScheduler_.Abandon(CelestialWorkKeyFor(info.id,
+                                presentation.pendingSkyBody, celestial_scheduler::WorkKind::AtmosphereSky),
+                                presentation.pendingSkyFingerprint);
                             retiredAtmosphereSky_.push_back(std::move(presentation.pendingSky));
+                        }
                         presentation.skyView.reset();
                         presentation.gpu.reset();
                         presentation.skyFingerprint = 0U;
