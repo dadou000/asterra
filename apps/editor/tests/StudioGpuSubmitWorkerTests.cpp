@@ -10,7 +10,7 @@
 
 #define REQUIRE(test) do { if (!(test)) { \
     std::cerr << "StudioGpuSubmitWorker: " #test " at line " \
-              << __LINE__ << '\\n'; return 1; } } while (false)
+              << __LINE__ << '\n'; return 1; } } while (false)
 
 int main()
 {
