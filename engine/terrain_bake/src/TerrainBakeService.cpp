@@ -944,26 +944,16 @@ void TerrainBakeService::Observe(
     }
     RefreshRiverHash(entry);
 
-    if (first)
+    if (!entry.diskLoadResolved && !entry.pendingDiskLoad.valid())
     {
-        // Pick up a bake saved by an earlier session. One for an older recipe
-        // is still installed: it keeps the terrain stable until the rebake
-        // finishes.
-        std::string loadError;
-        if (auto loaded = LoadPlanetBake(BakePath(planet), &loadError);
-            loaded.has_value() && loaded->tectonics != nullptr)
-        {
-            entry.active = loaded->tectonics;
-            entry.activeRivers = loaded->rivers;
-            entry.activeGeology = loaded->geology;
-            RefreshRiverHash(entry);
-            completed_.push_back({
-                .planet = planet,
-                .tectonics = entry.active,
-                .rivers = entry.activeRivers,
-                .geology = entry.activeGeology,
-                .matchesRecipe = !NeedsBake(entry)});
-        }
+        // First-visit persisted bake files can be hundreds of megabytes.
+        // File I/O and validation must never occur in StudioSession::Tick.
+        const auto path = BakePath(planet);
+        auto admission = jobs::TrySubmitBackgroundCpu(
+            [path] { return LoadPlanetBake(path); }, jobs::JobPriority::Normal);
+        if (admission)
+            entry.pendingDiskLoad = std::move(*admission);
+        // On overload, Observe retries next tick without blocking.
     }
 }
 
@@ -1043,6 +1033,36 @@ void TerrainBakeService::Tick(const f64 deltaSeconds)
     {
         Entry& entry = *slot;
         const world::PlanetId planet = ids_.at(key);
+
+        if (!entry.diskLoadResolved)
+        {
+            if (!entry.pendingDiskLoad.valid() ||
+                entry.pendingDiskLoad.wait_for(std::chrono::seconds(0)) !=
+                    std::future_status::ready)
+                continue;
+            try
+            {
+                auto loaded = entry.pendingDiskLoad.get();
+                if (loaded && loaded->tectonics)
+                {
+                    entry.active = std::move(loaded->tectonics);
+                    entry.activeRivers = std::move(loaded->rivers);
+                    entry.activeGeology = std::move(loaded->geology);
+                    RefreshRiverHash(entry);
+                    completed_.push_back({
+                        .planet = planet,
+                        .tectonics = entry.active,
+                        .rivers = entry.activeRivers,
+                        .geology = entry.activeGeology,
+                        .matchesRecipe = !NeedsBake(entry)});
+                }
+            }
+            catch (const std::exception& error)
+            {
+                entry.error = std::string("Failed to read persisted terrain bake: ") + error.what();
+            }
+            entry.diskLoadResolved = true;
+        }
 
         if (entry.baking && entry.workerDone)
         {
@@ -1157,6 +1177,10 @@ bool TerrainBakeService::StartBake(
     {
         return false;
     }
+    // Explicit bake supersedes any still-loading persisted product.
+    // Packaged-task futures can be discarded without waiting for disk I/O.
+    entry->pendingDiskLoad = {};
+    entry->diskLoadResolved = true;
     entry->settings.resolution = options.resolution;
     entry->failedHash = 0;
     entry->staleSeconds = 0.0;
