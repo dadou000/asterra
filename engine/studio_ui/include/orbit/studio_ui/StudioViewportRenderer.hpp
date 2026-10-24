@@ -950,6 +950,12 @@ private:
     std::map<std::string, MagnetospherePresentation, std::less<>> magnetospherePresentations_;
     std::map<std::string, StudioOceanDiagnostics, std::less<>> oceanDiagnostics_;
     std::map<std::string, StudioCloudDiagnostics, std::less<>> cloudDiagnostics_;
+    // std::async futures must not be destroyed while still running on the
+    // render thread: their destructors can join the asynchronous worker.
+    // Retired work stays owned until a zero-time readiness poll completes.
+    std::vector<std::future<celestial_clouds::CloudFieldProduct>> retiredCloudBuilds_;
+    void RetireCloudPresentation(const std::string& viewportId);
+    void CollectRetiredCloudJobs();
     std::map<std::string, CloudPresentation, std::less<>> cloudPresentations_;
     std::map<std::string, StudioAtmosphereDiagnostics, std::less<>> atmosphereDiagnostics_;
     std::map<std::string, AtmospherePresentation, std::less<>> atmospherePresentations_;
