@@ -751,6 +751,7 @@ VulkanDevice::CreateAabbAccelerationStructure(
         VK_NULL_HANDLE;
     VkAccelerationStructureKHR topLevel =
         VK_NULL_HANDLE;
+    bool submittedAsBuild = false;
 
     const auto cleanup =
         [&]()
@@ -1253,6 +1254,7 @@ VulkanDevice::CreateAabbAccelerationStructure(
             throw std::runtime_error(
                 "Orbit failed to submit proxy AS build commands.");
         }
+        submittedAsBuild = true;
 
         // Temporary AS build scratch and command memory must survive GPU
         // execution, not the CPU function call. Retire both once a later
@@ -1310,6 +1312,15 @@ VulkanDevice::CreateAabbAccelerationStructure(
     }
     catch (...)
     {
+        // Only the exceptional failure path may synchronize the queue.
+        // Never reclaim buffers/AS objects while a successfully submitted
+        // GPU build could still reference them.
+        if (submittedAsBuild)
+        {
+            VkQueue queue = VK_NULL_HANDLE;
+            vkGetDeviceQueue(nativeDevice_, graphicsFamilyIndex_, 0U, &queue);
+            static_cast<void>(vkQueueWaitIdle(queue));
+        }
         cleanup();
         throw;
     }
