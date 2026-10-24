@@ -788,6 +788,7 @@ public:
     [[nodiscard]] std::optional<std::future<std::unique_ptr<ComputePipeline>>>
     TryCreateComputePipelineAsync(const ComputePipelineDesc& desc) override;
     [[nodiscard]] PipelineCompilationStats PipelineCompilation() noexcept override;
+    [[nodiscard]] u64 PendingGpuRetirements() const noexcept override;
 
     [[nodiscard]] std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
