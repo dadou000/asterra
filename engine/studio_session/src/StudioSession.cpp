@@ -1119,39 +1119,51 @@ StudioTickResult StudioSession::Tick(
     result.pathProductsInvalidated =
         pathProducts_.RefreshBinding();
     static_cast<void>(pathProducts_.RefreshSemanticInvalidation());
-    // Discover only newly authored infrastructure edges. Reuse scene revision
-    // to avoid rescanning unrelated world objects during steady-state ticks.
+    // Incremental scene discovery: a single root can contain thousands of
+    // authored roads. Keep the owner-thread SQLite/scene reads here, but cap
+    // semantic work per tick so world edits cannot freeze frame recording.
     const u64 sceneRevision = world_.Objects().Revision();
     if (infrastructureDiscoveryWorldGeneration_ != world_.Generation() ||
         infrastructureDiscoveryRevision_ != sceneRevision)
     {
         infrastructureDiscoveryWorldGeneration_ = world_.Generation();
         infrastructureDiscoveryRevision_ = sceneRevision;
+        infrastructureDiscoveryParents_.clear();
+        infrastructureDiscoveryChildren_.clear();
+        infrastructureDiscoveryChildCursor_ = 0U;
         const auto roots = world_.Objects().Roots();
         for (const auto& root : roots)
+            infrastructureDiscoveryParents_.push_back(root.id);
+    }
+    constexpr std::size_t kInfrastructureObjectsPerTick = 96U;
+    std::size_t discovered = 0U;
+    while (discovered < kInfrastructureObjectsPerTick)
+    {
+        if (infrastructureDiscoveryChildCursor_ >=
+            infrastructureDiscoveryChildren_.size())
         {
-            // Iterative traversal; path networks may be nested under world folders.
-            std::vector<scene::ObjectId> pending{root.id};
-            while (!pending.empty())
-            {
-                const auto parent = pending.back();
-                pending.pop_back();
-                for (const auto& child : world_.Objects().Children(parent))
-                {
-                    if (child.type == paths::kPathEdgeType)
-                    {
-                        const auto edge = pathNetwork_.Service().FindEdge(child.id);
-                        if (edge && !edge->infrastructureCatalogId.empty() &&
-                            pathProducts_.Find(edge->id) == nullptr &&
-                            !pathProducts_.IsDirty(edge->id))
-                            pathProducts_.MarkDirty(edge->id);
-                    }
-                    else if (child.type != paths::kPathNodeType)
-                    {
-                        pending.push_back(child.id);
-                    }
-                }
-            }
+            infrastructureDiscoveryChildren_.clear();
+            infrastructureDiscoveryChildCursor_ = 0U;
+            if (infrastructureDiscoveryParents_.empty()) break;
+            const auto parent = infrastructureDiscoveryParents_.back();
+            infrastructureDiscoveryParents_.pop_back();
+            infrastructureDiscoveryChildren_ = world_.Objects().Children(parent);
+            continue;
+        }
+        const auto& child = infrastructureDiscoveryChildren_[
+            infrastructureDiscoveryChildCursor_++];
+        ++discovered;
+        if (child.type == paths::kPathEdgeType)
+        {
+            const auto edge = pathNetwork_.Service().FindEdge(child.id);
+            if (edge && !edge->infrastructureCatalogId.empty() &&
+                pathProducts_.Find(edge->id) == nullptr &&
+                !pathProducts_.IsDirty(edge->id))
+                pathProducts_.MarkDirty(edge->id);
+        }
+        else if (child.type != paths::kPathNodeType)
+        {
+            infrastructureDiscoveryParents_.push_back(child.id);
         }
     }
     // Bounded initial production resolver for authored *frame-local* road/rail
