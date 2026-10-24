@@ -4212,8 +4212,16 @@ int orbit::editor_app::StudioApplication::Run(
             {
                 ++terrainUiSmokeRenderedFrames;
 
-                if (terrainUiSmokeRenderedFrames >=
-                    2U)
+                // The first few frames may legitimately show the orbital
+                // fallback while driver pipelines compile asynchronously.
+                // Test actual terrain draws, not merely frame submissions.
+                if (!studioViewportRenderer.HasDrawnProductionTerrain() &&
+                    terrainUiSmokeRenderedFrames > 1800U)
+                    throw std::runtime_error(
+                        "Terrain UI smoke: asynchronous Vulkan pipelines never became drawable.");
+
+                if (terrainUiSmokeRenderedFrames >= 2U &&
+                    studioViewportRenderer.HasDrawnProductionTerrain())
                 {
                     fence->Wait(
                         submittedFence);
