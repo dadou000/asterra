@@ -84,6 +84,7 @@ private:
     };
     // DXC and Vulkan driver compilation have independent asynchronous stages.
     // Neither stage may block Studio's command-recording thread.
+    rhi::Device* device_{nullptr};
     std::future<CompiledShaders> pendingShaders_;
     std::unique_ptr<rhi::DeferredGraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::Buffer> emptyTerrainShadow_;
