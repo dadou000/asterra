@@ -673,7 +673,11 @@ private:
         u64 staticFingerprint{0};
         u64 skyFingerprint{0};
         celestial_atmosphere::AtmosphereParameters parameters{};
-        std::unique_ptr<celestial_atmosphere::AtmosphereStaticLuts> staticLuts;
+        std::shared_ptr<const celestial_atmosphere::AtmosphereStaticLuts> staticLuts;
+        std::future<celestial_atmosphere::AtmosphereStaticLuts> pendingStatic;
+        std::future<celestial_atmosphere::AtmosphereSkyView> pendingSky;
+        u64 pendingStaticFingerprint{0U}, pendingSkyFingerprint{0U};
+        universe::BodyId pendingStaticBody{}, pendingSkyBody{};
         std::unique_ptr<celestial_atmosphere::AtmosphereSkyView> skyView;
         std::unique_ptr<celestial_atmosphere::GpuAtmosphereLuts> gpu;
     };
@@ -958,6 +962,10 @@ private:
     void CollectRetiredCloudJobs();
     std::map<std::string, CloudPresentation, std::less<>> cloudPresentations_;
     std::map<std::string, StudioAtmosphereDiagnostics, std::less<>> atmosphereDiagnostics_;
+    std::vector<std::future<celestial_atmosphere::AtmosphereStaticLuts>> retiredAtmosphereStatic_;
+    std::vector<std::future<celestial_atmosphere::AtmosphereSkyView>> retiredAtmosphereSky_;
+    void RetireAtmospherePresentation(const std::string& viewportId);
+    void CollectRetiredAtmosphereJobs();
     std::map<std::string, AtmospherePresentation, std::less<>> atmospherePresentations_;
     // Per-view composite target for the atmosphere pass (scene is read while
     // the result is written, then copied back into the view's scene color).
