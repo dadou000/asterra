@@ -81,6 +81,11 @@ public:
         path_geometry::PathCenterline centerline;
         paths::PathProfile profile;
         path_geometry::CorridorSweep corridor;
+        // When true, worker derives the actual road/rail cross section,
+        // engineering report and cant from immutable path/profile inputs.
+        bool autoPlanInfrastructure{false};
+        f64 designSpeedMetersPerSecond{0.0};
+        bool applyAutomaticCant{true};
         path_geometry::PathBuildOptions options{};
         path_geometry::CorridorRefinementOptions refinement{};
         std::optional<u64> routeGeneration;
