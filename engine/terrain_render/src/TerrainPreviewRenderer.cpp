@@ -679,6 +679,7 @@ public:
         if (targetWidth == 0 || targetHeight == 0 || waterOptics_.opacity <= 0.0F ||
             wireframe_)
             return;
+        if (!gpuFieldGenerator_.Ready()) return;
         if (!CollectWaterPipeline()) return;
 
         const math::Mat4 mvp =
@@ -781,6 +782,10 @@ public:
             throw std::out_of_range(
                 "Orbit terrain frame index exceeds configured frames in flight.");
         if (targetWidth == 0 || targetHeight == 0)
+            return;
+        // The GPU compute shader may still be compiling on the driver
+        // worker. Never generate incomplete terrain patches in this case.
+        if (!gpuFieldGenerator_.Ready())
             return;
 
         const math::Mat4 mvp =
