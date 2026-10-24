@@ -229,17 +229,10 @@ void StudioRoadJunctionPipeline::Refresh(
                     const auto frame = prepared.frame;
                     contactScenes_.emplace(frame, std::move(contact));
                     frames_.emplace(frame, std::move(publisher));
-                    if (const auto* packet = frames_.at(frame).Snapshot())
-                        for (const auto& patch : packet->patches)
-                        {
-                            path_geometry::PathDerivedProduct product;
-                            product.edge = patch.node;
-                            product.frame = patch.frame;
-                            product.sourceRevision = packet->worldGeneration;
-                            product.buildSignature = packet->buildSignature;
-                            product.visualMesh = patch.mesh;
-                            renderPatches_.emplace(patch.node, std::move(product));
-                        }
+                    // Mesh construction/copying already happened on the
+                    // worker. Publication only moves complete products.
+                    for (auto& product : prepared.renderPatches)
+                        renderPatches_.emplace(product.edge, std::move(product));
                 }
                 ++revision_;
             }
@@ -428,7 +421,20 @@ void StudioRoadJunctionPipeline::Refresh(
                     result.error = cooked.error;
                     continue;
                 }
-                result.junctions.push_back({frame, std::move(candidate), std::move(cooked)});
+                std::vector<path_geometry::PathDerivedProduct> patches;
+                patches.reserve(candidate.packet.patches.size());
+                for (const auto& patch : candidate.packet.patches)
+                {
+                    path_geometry::PathDerivedProduct product;
+                    product.edge = patch.node;
+                    product.frame = patch.frame;
+                    product.sourceRevision = candidate.packet.worldGeneration;
+                    product.buildSignature = candidate.packet.buildSignature;
+                    product.visualMesh = patch.mesh;
+                    patches.push_back(std::move(product));
+                }
+                result.junctions.push_back({frame, std::move(candidate),
+                    std::move(cooked), std::move(patches)});
             }
             return result;
         }, jobs::JobPriority::Normal);
