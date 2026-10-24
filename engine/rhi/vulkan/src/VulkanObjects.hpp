@@ -15,6 +15,11 @@
 #include "VulkanGpuProgress.hpp"
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <future>
+#include <thread>
 #include <memory>
 #include <mutex>
 #include <filesystem>
@@ -777,6 +782,11 @@ public:
     [[nodiscard]] std::unique_ptr<ComputePipeline> CreateComputePipeline(
         const ComputePipelineDesc& desc) override;
 
+    [[nodiscard]] std::optional<std::future<std::unique_ptr<GraphicsPipeline>>>
+    TryCreateGraphicsPipelineAsync(const GraphicsPipelineDesc& desc) override;
+    [[nodiscard]] std::optional<std::future<std::unique_ptr<ComputePipeline>>>
+    TryCreateComputePipelineAsync(const ComputePipelineDesc& desc) override;
+
     [[nodiscard]] std::unique_ptr<Swapchain> CreateSwapchain(
         Queue& queue,
         const SwapchainDesc& desc) override;
@@ -829,5 +839,19 @@ private:
     std::filesystem::path pipelineCachePath_;
     void InitializePipelineCache() noexcept;
     void SavePipelineCache() noexcept;
+
+    // The Vulkan device owns its cold-pipeline worker. During device teardown
+    // queued tasks are drained and the thread is joined BEFORE any VkDevice
+    // or VkPipelineCache is destroyed. Only compiled VkPipeline objects cross
+    // from this worker to the graphics thread via futures.
+    void PipelineCompileLoop() noexcept;
+    [[nodiscard]] bool TryQueuePipelineCompile(std::function<void()> work);
+    std::thread pipelineCompileThread_;
+    std::mutex pipelineQueueMutex_;
+    std::condition_variable pipelineQueueCv_;
+    std::deque<std::function<void()>> pipelineQueue_;
+    bool pipelineQueueStopping_{false};
+    static constexpr std::size_t kMaxOutstandingPipelineCompiles = 6U;
+    std::size_t pipelineCompilesInProgress_{0U};
 };
 } // namespace orbit::rhi::vulkan::detail
