@@ -14,7 +14,6 @@ namespace orbit::mesh_render
 {
 namespace
 {
-constexpr u64 kBufferRetireTicks = 24U;
 
 // Buffers: 0 = lights (element 0 = count, then two float4 per light: position
 // + equivalent radius, radiance + bounding radius), 1..4 = the distance field.
