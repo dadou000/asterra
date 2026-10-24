@@ -24,6 +24,16 @@ bool GpuPhysicalSurfacePage::IsValid() const noexcept
                 GpuPhysicalSurfaceTexel);
 }
 
+void GpuPhysicalPageComposite::PrewarmShaders(const shader::Compiler& compiler)
+{
+    static_cast<void>(compiler.Compile({
+        .source = detail::kPhysicalPageCompositeShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Compute,
+        .debug = false
+    }));
+}
+
 GpuPhysicalPageComposite::
 GpuPhysicalPageComposite(
     rhi::Device& device,
