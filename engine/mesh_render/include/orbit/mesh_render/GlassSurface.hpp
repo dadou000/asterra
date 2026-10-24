@@ -9,6 +9,7 @@
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/rhi/DeferredPipeline.hpp>
+#include <orbit/rhi/FrameBufferPool.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <array>
@@ -210,6 +211,7 @@ private:
         std::span<const f32> tail);
 
     rhi::Device& device_;
+    rhi::FrameBufferPool recordUploads_;
     std::unique_ptr<rhi::DeferredGraphicsPipeline> copyPipeline_;
     std::unique_ptr<rhi::DeferredGraphicsPipeline> causticPipeline_;
     // Photon pre-pass (ORBIT_GLASS_CAUSTIC_COMPUTE=1): one compute thread traces each photon once into
