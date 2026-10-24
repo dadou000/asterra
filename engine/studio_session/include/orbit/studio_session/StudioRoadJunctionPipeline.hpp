@@ -66,6 +66,7 @@ private:
         frames::FrameId frame{};
         path_geometry::RoadJunctionPublicationResult candidate;
         path_geometry::RoadContactSceneBuild cooked;
+        std::vector<path_geometry::PathDerivedProduct> renderPatches;
     };
     struct PreparedBatch
     {
