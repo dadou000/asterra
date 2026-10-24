@@ -575,6 +575,16 @@ std::unique_ptr<GraphicsPipeline> VulkanDevice::CreateGraphicsPipeline(
     // creators serialize only this driver call; cache data can be reused
     // across sessions and cache persistence at device shutdown is safe.
     VkResult result = VK_ERROR_UNKNOWN;
+    if (std::this_thread::get_id() == pipelineCompileThread_.get_id())
+    {
+        // Only the dedicated compiler thread uses this cache. No lock can
+        // stall a render-thread pipeline construction behind cold DXC/driver
+        // pipeline optimization.
+        result = vkCreateGraphicsPipelines(
+            nativeDevice_, pipelineWorkerCache_, 1, &pipelineCreateInfo,
+            nullptr, &pipeline);
+    }
+    else
     {
         std::scoped_lock cacheLock(pipelineCacheMutex_);
         result = vkCreateGraphicsPipelines(
@@ -855,6 +865,13 @@ std::unique_ptr<ComputePipeline> VulkanDevice::CreateComputePipeline(
 
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkResult result = VK_ERROR_UNKNOWN;
+    if (std::this_thread::get_id() == pipelineCompileThread_.get_id())
+    {
+        result = vkCreateComputePipelines(
+            nativeDevice_, pipelineWorkerCache_, 1, &pipelineCreateInfo,
+            nullptr, &pipeline);
+    }
+    else
     {
         std::scoped_lock cacheLock(pipelineCacheMutex_);
         result = vkCreateComputePipelines(
