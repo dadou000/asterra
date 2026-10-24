@@ -2,6 +2,7 @@
 
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/path_geometry/PathDerived.hpp>
+#include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_geometry/CorridorSweep.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 
@@ -79,6 +80,7 @@ public:
     {
         u64 authoredSignature{0};
         path_geometry::PathCenterline centerline;
+        std::optional<path_geometry::PathSourceRequest> sourceRequest;
         paths::PathProfile profile;
         path_geometry::CorridorSweep corridor;
         // When true, worker derives the actual road/rail cross section,
