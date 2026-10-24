@@ -103,6 +103,9 @@ public:
         const RebuildResolver& resolver, std::size_t budget = 2);
     [[nodiscard]] std::string RebuildError(scene::ObjectId edge) const;
     [[nodiscard]] std::size_t DirtyCount() const noexcept;
+    // Cheap owner-thread invalidation stamp for render/junction consumers.
+    // Changes whenever visible products, dirty state or cache binding changes.
+    [[nodiscard]] u64 ContentRevision() const noexcept;
     [[nodiscard]] bool Erase(scene::ObjectId edge) noexcept;
     void Clear() noexcept;
 
@@ -140,6 +143,7 @@ private:
         std::make_shared<std::atomic<u32>>(0U)};
     std::unordered_map<scene::ObjectId, DependencySnapshot> dependencySnapshots_;
     u64 observedSceneRevision_{~u64{0}};
+    u64 contentRevision_{1U};
     editor_session::EditorWorldSession* world_{nullptr};
     std::unordered_map<
         scene::ObjectId,
