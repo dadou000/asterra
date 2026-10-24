@@ -35,6 +35,19 @@ add_subdirectory(mesh_import)
 add_subdirectory(mesh_sdf)
 add_subdirectory(shader)
 add_subdirectory(shader/dxc)
+# The atmosphere renderer uses a worker-owned DXC compiler; its test
+# executables are declared before this target exists, so attach the Vulkan
+# SDK's runtime copy after the DXC subdirectory registers the helper.
+if(BUILD_TESTING)
+    foreach(test_target IN ITEMS
+        OrbitCelestialAtmosphereTests
+        OrbitCelestialAtmosphereRefractionTests
+        OrbitCelestialAtmosphereSkyIrradianceTests)
+        if(TARGET ${test_target})
+            orbit_copy_dxc_runtime(${test_target})
+        endif()
+    endforeach()
+endif()
 add_subdirectory(build)
 add_subdirectory(math)
 add_subdirectory(time)
