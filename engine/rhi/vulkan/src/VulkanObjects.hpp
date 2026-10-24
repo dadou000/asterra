@@ -80,12 +80,13 @@ struct BufferBarrierInfo
 // after creation so the very first per-frame Transition(Present ->
 // RenderTarget) call's claimed prior layout is actually true. See
 // VulkanResources.cpp.
-void TransitionNewImageBlocking(
+void ScheduleInitialImageTransition(
     VkDevice device,
     u32 graphicsFamilyIndex,
     VkImage image,
     VkImageAspectFlags aspectMask,
-    ResourceState targetState);
+    ResourceState targetState,
+    GpuProgress* progress);
 
 [[nodiscard]] VkFormat ToNativeVertexFormat(VertexFormat format);
 [[nodiscard]] VkFormat ToNativeTextureFormat(TextureFormat format);
@@ -295,7 +296,7 @@ public:
     // acquired (including a layout-transition barrier) is a validation
     // error, so it cannot be pre-warmed into its claimed initial state
     // the way a regular CreateTexture() result is (see
-    // TransitionNewImageBlocking). VulkanCommandList::Transition
+    // ScheduleInitialImageTransition). VulkanCommandList::Transition
     // consults this to treat such an image's *true* first-ever
     // transition as coming from UNDEFINED regardless of what
     // ResourceState the caller claims as "before".
