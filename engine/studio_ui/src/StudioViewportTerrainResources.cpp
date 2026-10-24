@@ -224,6 +224,7 @@ BuildPhysicalRenderPages(
     struct PendingSurface
     {
         terrain_gpu::PersistentGpuTerrainCacheKey key;
+        std::shared_ptr<const studio_session::StudioTerrainPhysicalPageSnapshot> source;
         std::future<std::vector<terrain_gpu::GpuPhysicalSurfaceTexel>> result;
         u64 lastSeen{0U};
     };
@@ -407,13 +408,16 @@ BuildPhysicalRenderPages(
             if (bytesForBudget > kUploadByteBudget - attemptedUploadBytes)
                 continue;
             auto pending = std::find_if(pendingSurfaces.begin(), pendingSurfaces.end(),
-                [&key](const PendingSurface& item) { return item.key == key; });
+                [&key, &snapshot](const PendingSurface& item) {
+                    return item.key == key && item.source == snapshot;
+                });
             if (pending == pendingSurfaces.end())
             {
                 if (pendingSurfaces.size() < 12U)
                 {
                     pendingSurfaces.push_back({
                         .key = key,
+                        .source = snapshot,
                         .result = std::async(std::launch::async,
                             [snapshot, seaLevelMeters] {
                                 core::SetCurrentThreadName("Orbit.SurfacePrepare");
