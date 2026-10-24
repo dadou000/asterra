@@ -85,7 +85,9 @@ int main()
             .laneCount = 2U
         };
 
+        const auto emptyRevision = cache.ContentRevision();
         cache.Store(product, 7U);
+        Check(cache.ContentRevision() > emptyRevision);
         Check(cache.Size() == 1U);
         Check(cache.Find(edge) != nullptr);
         Check(cache.Find(edge)->buildSignature == 1234U);
@@ -117,13 +119,17 @@ int main()
         };
         Check(cache.StoreCorridorIfChanged(101U, centerline, roadProfile, roadSection));
         const auto generatedSignature = cache.Find(edge)->buildSignature;
+        const auto revisionAfterBuild = cache.ContentRevision();
         Check(!cache.StoreCorridorIfChanged(101U, centerline, roadProfile, roadSection));
+        Check(cache.ContentRevision() == revisionAfterBuild);
         Check(cache.Find(edge)->buildSignature == generatedSignature);
         roadSection.bands[0].profile[1].elevationMeters = 0.2;
         Check(cache.StoreCorridorIfChanged(102U, centerline, roadProfile, roadSection));
         Check(cache.Find(edge)->buildSignature != generatedSignature);
         Check(cache.Size() == 1U);
+        const auto beforeInvalidation = cache.ContentRevision();
         cache.MarkDirty(edge);
+        Check(cache.ContentRevision() > beforeInvalidation);
         Check(cache.IsDirty(edge));
         Check(cache.Find(edge) != nullptr); // keep previous version available
         Check(cache.StoreCorridorIfChanged(102U, centerline, roadProfile, roadSection));
