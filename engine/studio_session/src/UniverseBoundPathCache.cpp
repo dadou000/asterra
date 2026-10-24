@@ -438,6 +438,7 @@ bool UniverseBoundPathCache::IsDirty(const scene::ObjectId edge) const noexcept
 bool UniverseBoundPathCache::Erase(
     const scene::ObjectId edge) noexcept
 {
+    const bool wasDirty = dirtyCorridors_.contains(edge);
     routeGenerations_.erase(edge);
     dirtyCorridors_.erase(edge);
     dirtyTokens_.erase(edge);
@@ -446,7 +447,7 @@ bool UniverseBoundPathCache::Erase(
     corridorAuthoredSignatures_.erase(edge);
     dependencySnapshots_.erase(edge);
     const bool erased = products_.erase(edge) != 0U;
-    if (erased) ++contentRevision_;
+    if (erased || wasDirty) ++contentRevision_;
     return erased;
 }
 
