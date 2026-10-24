@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace orbit::studio_session
 {
@@ -57,7 +58,12 @@ private:
     [[nodiscard]] std::optional<world::PlanetId> PlanetFor(
         scene::ObjectId terrainObject) const;
 
+    void ReapRetiredServices();
+
     editor_session::EditorWorldSession& world_;
+    // Old-world bake workers are cancelled but not joined on a frame.
+    // Services stay alive until the workers report completion.
+    std::vector<std::unique_ptr<terrain_bake::TerrainBakeService>> retiredServices_;
     std::unique_ptr<terrain_bake::TerrainBakeService> service_;
     std::filesystem::path root_;
     std::shared_ptr<const terrain_bake::GeologyBakeBackend> geologyBakeBackend_;
