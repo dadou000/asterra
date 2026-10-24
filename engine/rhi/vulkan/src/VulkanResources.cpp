@@ -1503,13 +1503,27 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
         }
     }
 
-    ScheduleInitialImageTransition(
-        nativeDevice_,
-        graphicsFamilyIndex_,
-        nativeImage,
-        aspectMask,
-        desc.initialState,
-        progress_.get());
+    try
+    {
+        ScheduleInitialImageTransition(
+            nativeDevice_,
+            graphicsFamilyIndex_,
+            nativeImage,
+            aspectMask,
+            desc.initialState,
+            progress_.get());
+    }
+    catch (...)
+    {
+        // A failed init submit leaves no GPU command holding these handles;
+        // if retire bookkeeping failed after a successful submit, the helper
+        // already waited for the queue before propagating the exception.
+        if (sampler != VK_NULL_HANDLE)
+            vkDestroySampler(nativeDevice_, sampler, nullptr);
+        vkDestroyImageView(nativeDevice_, imageView, nullptr);
+        vmaDestroyImage(allocator_, nativeImage, allocation);
+        throw;
+    }
 
     return std::make_unique<VulkanTexture>(
         nativeDevice_,
