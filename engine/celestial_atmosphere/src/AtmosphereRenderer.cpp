@@ -526,8 +526,8 @@ float EllipsoidSunVisibility(float3 p, float3 axes,
         });
 
     emptyTerrainShadow_ = lighting::CreateEmptyTerrainSunShadowBuffer(device);
-    pipeline_ =
-        device.CreateGraphicsPipeline({
+    pipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(
+        device, rhi::GraphicsPipelineDesc{
             .vertexShader = {
                 .data = vertex.bytecode.data(),
                 .size = vertex.bytecode.size()
@@ -567,9 +567,10 @@ void AtmosphereRenderer::Draw(
     const AtmosphereParameters& p,
     const AtmosphereRenderView& view)
 {
-    if (width == 0U || height == 0U)
+    if (width == 0U || height == 0U ||
+        pipeline_ == nullptr || pipeline_->Poll() == nullptr)
     {
-        return;
+        return; // Retain prior composite while Vulkan compiles in the background.
     }
 
     const auto f =
@@ -651,7 +652,7 @@ void AtmosphereRenderer::Draw(
         .bottom = static_cast<i32>(height)
     });
 
-    commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsPipeline(*pipeline_->Poll());
     commands.SetGraphicsConstants(constants);
     commands.SetGraphicsTexture(0, sceneColor);
     commands.SetGraphicsTexture(1, depth);
