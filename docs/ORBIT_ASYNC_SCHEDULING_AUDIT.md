@@ -19,8 +19,8 @@ Base: `0.1.1-Harmony` at `e96d400b697898b0e2e4f634c576bb0329bfb612`.
 
 6. Centralized the above CPU jobs (including the terrain sun-shadow builder) through `jobs::BackgroundCpuPool` with configurable `ORBIT_BACKGROUND_CPU_WORKERS` (default approximately hardware threads / 4); Studio prewarms the pool before its first frame.
 
-7. Road/rail corridor cache now retains immutable, shared-ownership geometry snapshots. Dirty corridor derivation, engineering analysis and rail cant planning execute on the bounded background pool. A completed mesh is accepted only when the originating cache binding, dirty token and dependencies still match. In-flight work (including already-discarded jobs) has an eight-job admission cap.
-8. Road junction geometry construction, full-scene packet assembly and collision-scene cooking now execute on background workers reading captured immutable path snapshots. The owner thread retains atomic render/contact publication and rejects superseded scene generations. Rapid edits cannot queue unlimited overlapping junction builds.
+7. Road/rail corridor cache now retains immutable, shared-ownership geometry snapshots. Dirty corridor derivation, full transport-section engineering and railway cant planning execute on the bounded background pool. A completed mesh is accepted only when the originating cache binding, dirty token and dependencies still match. In-flight work (including already-discarded jobs) has an eight-job admission cap.
+8. Road junction geometry construction, full-scene packet assembly, patch mesh preparation and collision-scene cooking now execute on background workers reading captured immutable path snapshots. The owner thread retains atomic render/contact publication and rejects superseded scene generations. Rapid edits cannot queue unlimited overlapping junction builds.
 9. Orbital patch upload processing now has a two-patch-per-compose maximum and a 700-microsecond *between-uploads* budget, with failed preparation/upload isolated from other patches. One individual upload remains non-preemptible.
 10. Extended corridor, junction and background job tests for asynchronous completion, stale-work discard and immutable product lifetime.
 
@@ -43,3 +43,10 @@ These require dedicated scheduler / snapshot architecture changes and Windows Vu
 4. Record p50/p95/p99/p99.9 frame CPU timings and `vk.fence_wait` separately; inspect Perfetto for `BuildCloudField`, `BuildSkyView`, `BuildStaticLuts`, `BakeNow` and CPU texel packing on `Orbit.Main`.
 5. Stress CPU-heavy tasks concurrently and confirm obsolete products never overwrite newer generation state. Test dozens of rapid road edits while a junction worker is running and validate that old collision packets cannot be used for vehicle contacts.
 6. GitHub's existing Windows self-hosted workflow does not run on pull requests by design. This draft branch has no completed CI run; run the manual Windows build or dispatch the trusted build workflow explicitly after review.
+
+## Review notes
+
+- Source review completed for the changed corridor cache, road-junction pipeline, atmosphere renderer, job scheduler and orbital patch uploader; brace and C++ comment/string lexical balance checks passed for the main modified source files. This is **not equivalent to compilation**.
+- The existing self-hosted Windows workflow `.github/workflows/orbit-self-hosted-unpacked.yml` accepts trusted manual dispatch but intentionally has no pull-request trigger. There were no completed workflow runs for this draft head during this pass.
+- `PlanInfrastructureSection` used to call `BuildPathDerived` synchronously inside the corridor resolver. It is now within the async job, where it can spend unbounded time without extending `StudioSession::Tick`.
+- GPU allocation and Vulkan pipeline construction are still non-preemptible render-thread operations. Their tail latency must be measured separately; the 700-microsecond inter-upload limit is not a hard deadline on an individual operation.
