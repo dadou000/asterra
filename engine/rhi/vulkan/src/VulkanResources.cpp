@@ -1205,6 +1205,25 @@ VulkanDevice::CreateAabbAccelerationStructure(
             &topBuild,
             topRanges);
 
+        // Shader ray queries in later graphics/compute submissions must see
+        // the completed TLAS. Queue-order alone is not a memory dependency.
+        VkMemoryBarrier2 readyForShader{};
+        readyForShader.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        readyForShader.srcStageMask =
+            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        readyForShader.srcAccessMask =
+            VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        readyForShader.dstStageMask =
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        readyForShader.dstAccessMask =
+            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        VkDependencyInfo shaderDependency{};
+        shaderDependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        shaderDependency.memoryBarrierCount = 1U;
+        shaderDependency.pMemoryBarriers = &readyForShader;
+        vkCmdPipelineBarrier2(command, &shaderDependency);
+
         vkEndCommandBuffer(command);
 
         VkCommandBufferSubmitInfo submitCommand{};
@@ -1235,18 +1254,41 @@ VulkanDevice::CreateAabbAccelerationStructure(
                 "Orbit failed to submit proxy AS build commands.");
         }
 
-        vkQueueWaitIdle(queue);
-
-        vkDestroyCommandPool(
-            nativeDevice_,
-            pool,
-            nullptr);
-
-        vmaDestroyBuffer(
-            allocator_,
-            scratchBuffer.buffer,
-            scratchBuffer.allocation);
-        scratchBuffer = {};
+        // Temporary AS build scratch and command memory must survive GPU
+        // execution, not the CPU function call. Retire both once a later
+        // graphics timeline submit proves the AS build has completed.
+        // No vkQueueWaitIdle on the normal frame/resource path.
+        bool retired = false;
+        if (progress_ != nullptr)
+        {
+            try
+            {
+                const auto scratch = scratchBuffer;
+                progress_->Retire(progress_->NextSerial(),
+                    [device = nativeDevice_, allocator = allocator_,
+                     pool, scratch] {
+                        vkDestroyCommandPool(device, pool, nullptr);
+                        vmaDestroyBuffer(allocator, scratch.buffer,
+                            scratch.allocation);
+                    });
+                retired = true;
+                scratchBuffer = {};
+            }
+            catch (...)
+            {
+                // Low-memory allocation failures in the retire list are
+                // exceptional: prefer a synchronous safe cleanup over a GPU
+                // use-after-free of command pools or scratch memory.
+            }
+        }
+        if (!retired)
+        {
+            static_cast<void>(vkQueueWaitIdle(queue));
+            vkDestroyCommandPool(nativeDevice_, pool, nullptr);
+            vmaDestroyBuffer(allocator_, scratchBuffer.buffer,
+                scratchBuffer.allocation);
+            scratchBuffer = {};
+        }
 
         return std::make_unique<
             VulkanAccelerationStructure>(
