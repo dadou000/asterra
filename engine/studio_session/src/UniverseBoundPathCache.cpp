@@ -288,8 +288,9 @@ std::size_t UniverseBoundPathCache::RebuildDirty(
     }
 
     // Avoid unbounded allocation and background backlog during rapid editing.
-    constexpr std::size_t kMaxPendingCorridors = 8U;
-    if (pendingCorridors_.size() >= kMaxPendingCorridors)
+    constexpr u32 kMaxPendingCorridors = 8U;
+    if (pendingCorridors_.size() >= kMaxPendingCorridors ||
+        activeCorridorJobs_->load(std::memory_order_relaxed) >= kMaxPendingCorridors)
         return 0;
 
     std::vector<scene::ObjectId> candidates;
@@ -303,7 +304,9 @@ std::size_t UniverseBoundPathCache::RebuildDirty(
     std::size_t scheduled = 0;
     for (const auto edge : candidates)
     {
-        if (scheduled >= budget || pendingCorridors_.size() >= kMaxPendingCorridors)
+        if (scheduled >= budget ||
+            pendingCorridors_.size() >= kMaxPendingCorridors ||
+            activeCorridorJobs_->load(std::memory_order_relaxed) >= kMaxPendingCorridors)
             break;
         try
         {
@@ -323,13 +326,33 @@ std::size_t UniverseBoundPathCache::RebuildDirty(
             pending.bindingGeneration = bindingGeneration_;
             pending.dirtyToken = dirtyTokens_[edge];
             pending.sourceDependencies = CaptureDependencies(edge);
-            pending.result = jobs::SubmitBackgroundCpu(
-                [snapshot = std::move(*request)]() mutable {
-                    return path_geometry::BuildCorridorDerived(
-                        snapshot.centerline, snapshot.profile,
-                        snapshot.corridor, snapshot.options,
-                        snapshot.refinement);
-                }, jobs::JobPriority::Normal);
+            const auto activeJobs = activeCorridorJobs_;
+            activeJobs->fetch_add(1U, std::memory_order_relaxed);
+            try
+            {
+                pending.result = jobs::SubmitBackgroundCpu(
+                    [snapshot = std::move(*request), activeJobs]() mutable {
+                        try
+                        {
+                            auto built = path_geometry::BuildCorridorDerived(
+                                snapshot.centerline, snapshot.profile,
+                                snapshot.corridor, snapshot.options,
+                                snapshot.refinement);
+                            activeJobs->fetch_sub(1U, std::memory_order_relaxed);
+                            return built;
+                        }
+                        catch (...)
+                        {
+                            activeJobs->fetch_sub(1U, std::memory_order_relaxed);
+                            throw;
+                        }
+                    }, jobs::JobPriority::Normal);
+            }
+            catch (...)
+            {
+                activeJobs->fetch_sub(1U, std::memory_order_relaxed);
+                throw;
+            }
             pendingCorridors_.emplace(edge, std::move(pending));
             ++scheduled;
         }
