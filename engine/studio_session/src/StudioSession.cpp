@@ -1195,12 +1195,25 @@ StudioTickResult StudioSession::Tick(
             source.startNode = *a;
             source.endNode = *b;
             source.targetFrame = fa->frame;
-            source.frames = &world_.Universe().Frames();
-            source.bodies = &world_.Universe().Bodies();
+            source.resolvedFramePointAnchors = true;
             source.atTime = clock_.Time();
             source.sourceRevision = world_.Objects().Revision();
-            const auto centerline = path_geometry::BuildPathCenterline(source);
-            if (!centerline) return std::nullopt;
+            // Snapshot the body's reference shape while owning the universe.
+            // A worker must never scan the live frame/body registry.
+            const auto& bodies = world_.Universe().Bodies();
+            for (const auto system : bodies.Systems())
+            {
+                if (source.resolvedBodyShape) break;
+                for (const auto bodyId : bodies.Bodies(system))
+                {
+                    const auto* body = bodies.FindBody(bodyId);
+                    if (body != nullptr && body->frame == fa->frame)
+                    {
+                        source.resolvedBodyShape = body->shape;
+                        break;
+                    }
+                }
+            }
             // Domain recipe, not another hand-authored Studio-specific
             // triangle set. Curvature and design speed can generate bounded
             // railway cant in the same station frame as the swept railhead.
@@ -1210,7 +1223,10 @@ StudioTickResult StudioSession::Tick(
             UniverseBoundPathCache::RebuildRequest request{};
             request.authoredSignature = world_.Objects().Revision();
             if (request.authoredSignature == 0U) request.authoredSignature = 1U;
-            request.centerline = *centerline;
+            // Defer adaptive Bézier tessellation to the CPU job too.
+            request.centerline.edge = edge->id;
+            request.centerline.frame = fa->frame;
+            request.sourceRequest = std::move(source);
             request.profile = std::move(profile);
             request.autoPlanInfrastructure = true;
             request.designSpeedMetersPerSecond = edge->designSpeedKmh > 0.0
