@@ -162,6 +162,46 @@ int main()
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         Check(cache.DirtyCount() == 0U);
+
+        // Obsolete in-flight work must never overwrite the latest edit.
+        // Invalidate immediately after submission, before owner-thread polling.
+        const auto committedSignature = cache.Find(edge)->buildSignature;
+        cache.MarkDirty(edge);
+        const auto staleScheduled = cache.RebuildDirty([&](const orbit::scene::ObjectId id)
+            -> std::optional<orbit::studio_session::UniverseBoundPathCache::RebuildRequest> {
+            if (id != edge) return std::nullopt;
+            orbit::studio_session::UniverseBoundPathCache::RebuildRequest req{};
+            req.authoredSignature = 104U;
+            req.centerline = centerline;
+            req.profile = roadProfile;
+            req.corridor = roadSection;
+            return req;
+        }, 1U);
+        Check(staleScheduled == 1U);
+        cache.MarkDirty(edge); // discard 104 regardless of worker completion
+        Check(cache.Find(edge)->buildSignature == committedSignature);
+        roadSection.bands[0].profile[1].elevationMeters = 0.37;
+        const auto latestDeadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds(5);
+        while (cache.IsDirty(edge) && std::chrono::steady_clock::now() < latestDeadline)
+        {
+            static_cast<void>(cache.RebuildDirty([&](const orbit::scene::ObjectId id)
+                -> std::optional<orbit::studio_session::UniverseBoundPathCache::RebuildRequest> {
+                if (id != edge) return std::nullopt;
+                orbit::studio_session::UniverseBoundPathCache::RebuildRequest req{};
+                req.authoredSignature = 105U;
+                req.centerline = centerline;
+                req.profile = roadProfile;
+                req.corridor = roadSection;
+                return req;
+            }, 1U));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        Check(!cache.IsDirty(edge));
+        Check(cache.Find(edge)->buildSignature != committedSignature);
+        Check(cache.Find(edge)->buildSignature ==
+            orbit::path_geometry::BuildCorridorDerived(
+                centerline, roadProfile, roadSection).buildSignature);
         cache.MarkDirty(edge);
         Check(cache.RebuildDirty([](const orbit::scene::ObjectId)
             -> std::optional<orbit::studio_session::UniverseBoundPathCache::RebuildRequest> {
