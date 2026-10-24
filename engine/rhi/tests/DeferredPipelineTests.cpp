@@ -1,4 +1,5 @@
 #include <orbit/rhi/DeferredPipeline.hpp>
+#include <orbit/rhi/FrameBufferPool.hpp>
 
 #include <algorithm>
 #include <array>
@@ -20,6 +21,23 @@ void Check(const bool good)
 {
     if (!good) throw std::runtime_error("Deferred pipeline contract failed.");
 }
+
+class TestBuffer final : public rhi::Buffer
+{
+public:
+    explicit TestBuffer(const rhi::BufferDesc& desc)
+        : usage_(desc.usage), memory_(desc.memory), bytes_(
+              static_cast<std::size_t>(desc.sizeBytes)) {}
+    u64 SizeBytes() const noexcept override { return bytes_.size(); }
+    rhi::BufferUsage Usage() const noexcept override { return usage_; }
+    rhi::MemoryUsage Memory() const noexcept override { return memory_; }
+    std::byte* Map() override { return bytes_.data(); }
+    void Unmap() override {}
+private:
+    rhi::BufferUsage usage_;
+    rhi::MemoryUsage memory_;
+    std::vector<std::byte> bytes_;
+};
 
 class TestGraphics final : public rhi::GraphicsPipeline
 {
@@ -46,6 +64,7 @@ class TestDevice final : public rhi::Device
 {
 public:
     bool rejectFirstGraphics{true};
+    u32 bufferAllocations{0U};
     u32 graphicsAttempts{0U};
     u32 computeAttempts{0U};
     std::vector<u8> seenVertex;
@@ -70,7 +89,11 @@ public:
     std::unique_ptr<rhi::CommandList> CreateCommandList(
         rhi::CommandAllocator&) override { return {}; }
     std::unique_ptr<rhi::Buffer> CreateBuffer(
-        const rhi::BufferDesc&) override { return {}; }
+        const rhi::BufferDesc& desc) override
+    {
+        ++bufferAllocations;
+        return std::make_unique<TestBuffer>(desc);
+    }
     std::unique_ptr<rhi::Texture> CreateTexture(
         const rhi::TextureDesc&) override { return {}; }
     std::unique_ptr<rhi::AccelerationStructure> CreateAabbAccelerationStructure(
@@ -168,5 +191,20 @@ int main()
     device.computePromise->set_value(std::make_unique<TestCompute>());
     Check(compute->Poll() != nullptr);
     Check(device.computeAttempts == 1U);
+
+    // Reuse may begin ONLY when the frame slot's GPU fence completed.
+    rhi::FrameBufferPool uploads(device);
+    uploads.BeginFrame(0U, 2U);
+    auto* first = &uploads.Acquire(1000U);
+    Check(first->SizeBytes() == 1024U);
+    uploads.BeginFrame(1U, 2U);
+    auto* second = &uploads.Acquire(1000U);
+    Check(first != second);
+    Check(device.bufferAllocations == 2U);
+    uploads.BeginFrame(0U, 2U);
+    auto* recycled = &uploads.Acquire(800U);
+    Check(recycled == first);
+    Check(device.bufferAllocations == 2U);
+    Check(uploads.CachedCount() == 0U);
     return 0;
 }
