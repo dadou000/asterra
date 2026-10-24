@@ -1123,7 +1123,8 @@ GlassSurfaceRenderer::GlassSurfaceRenderer(
     {
         const auto vs = compile(kFullscreenVertex, shader::Stage::Vertex);
         const auto ps = compile(kCopyPixel, shader::Stage::Pixel);
-        copyPipeline_ = device.CreateGraphicsPipeline({
+        copyPipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(
+            device, rhi::GraphicsPipelineDesc{
             .vertexShader = view(vs),
             .pixelShader = view(ps),
             .shaderResourceBuffers = 0U,
@@ -1144,7 +1145,8 @@ GlassSurfaceRenderer::GlassSurfaceRenderer(
         const auto ps = compile(
             Compose({kCommon, kScene, kCausticPixel}),
             shader::Stage::Pixel);
-        causticPipeline_ = device.CreateGraphicsPipeline({
+        causticPipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(
+            device, rhi::GraphicsPipelineDesc{
             .vertexShader = view(vs),
             .pixelShader = view(ps),
             .pushConstantDwords = kGlassPushDwords,
@@ -1185,7 +1187,8 @@ GlassSurfaceRenderer::GlassSurfaceRenderer(
             return text + last;
         };
         const auto cs = compile(join(kCausticCompute), shader::Stage::Compute);
-        causticTracePipeline_ = device.CreateComputePipeline({
+        causticTracePipeline_ = std::make_unique<rhi::DeferredComputePipeline>(
+            device, rhi::ComputePipelineDesc{
             .computeShader = view(cs),
             .pushConstantDwords = kGlassPushDwords,
             .shaderResourceBuffers = 2U,
@@ -1194,7 +1197,8 @@ GlassSurfaceRenderer::GlassSurfaceRenderer(
         const auto vs = compile(join(kCausticVertexBuffered), shader::Stage::Vertex);
         const auto ps = compile(
             Compose({kCommon, kScene, kCausticPixel}, kPhotonPassDefines), shader::Stage::Pixel);
-        causticBufferedPipeline_ = device.CreateGraphicsPipeline({
+        causticBufferedPipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(
+            device, rhi::GraphicsPipelineDesc{
             .vertexShader = view(vs),
             .pixelShader = view(ps),
             .pushConstantDwords = kGlassPushDwords,
@@ -1214,7 +1218,8 @@ GlassSurfaceRenderer::GlassSurfaceRenderer(
         const auto ps = compile(
             BuildGlassPixelShaderSource(),
             shader::Stage::Pixel);
-        glassPipeline_ = device.CreateGraphicsPipeline({
+        glassPipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(
+            device, rhi::GraphicsPipelineDesc{
             .vertexShader = view(vs),
             .pixelShader = view(ps),
             .pushConstantDwords = kGlassPushDwords,
@@ -1277,13 +1282,14 @@ void GlassSurfaceRenderer::CopyBackdrop(
     const u32 width,
     const u32 height)
 {
-    if (copyPipeline_ == nullptr || width == 0U || height == 0U)
+    if (copyPipeline_ == nullptr || copyPipeline_->Poll() == nullptr ||
+        width == 0U || height == 0U)
     {
         return;
     }
     commands.SetRenderTarget(backdrop);
     SetFullTarget(commands, width, height);
-    commands.SetGraphicsPipeline(*copyPipeline_);
+    commands.SetGraphicsPipeline(*copyPipeline_->Poll());
     commands.SetGraphicsTexture(0U, sceneColor);
     commands.Draw(3U);
 }
@@ -1306,7 +1312,8 @@ void GlassSurfaceRenderer::DrawCaustics(
 
     const f32 sunPower = lighting.sunIrradiance[0] + lighting.sunIrradiance[1] +
                          lighting.sunIrradiance[2];
-    if (causticPipeline_ == nullptr || width == 0U || height == 0U ||
+    if (causticPipeline_ == nullptr || causticPipeline_->Poll() == nullptr ||
+        width == 0U || height == 0U ||
         !(sunPower * lighting.sunVisibility > 0.0F))
     {
         return;
@@ -1363,7 +1370,10 @@ void GlassSurfaceRenderer::DrawCaustics(
         photonTotal += grids.back() * grids.back();
     }
 
-    const bool photonPass = causticTracePipeline_ != nullptr && causticBufferedPipeline_ != nullptr;
+    const bool photonPass = causticTracePipeline_ != nullptr &&
+        causticBufferedPipeline_ != nullptr &&
+        causticTracePipeline_->Poll() != nullptr &&
+        causticBufferedPipeline_->Poll() != nullptr;
     if (photonPass)
     {
         constexpr u64 kPhotonRecordBytes = 3U * 16U;
@@ -1384,7 +1394,7 @@ void GlassSurfaceRenderer::DrawCaustics(
 
         commands.Transition(
             *causticPhotons_, rhi::ResourceState::ShaderResource, rhi::ResourceState::UnorderedAccess);
-        commands.SetComputePipeline(*causticTracePipeline_);
+        commands.SetComputePipeline(*causticTracePipeline_->Poll());
         commands.SetComputeBuffer(0U, records);
         commands.SetComputeBuffer(1U, *causticPhotons_);
         commands.SetComputeTexture(0U, depth);
@@ -1406,7 +1416,8 @@ void GlassSurfaceRenderer::DrawCaustics(
 
     commands.SetRenderTarget(sceneColor);
     SetFullTarget(commands, width, height);
-    commands.SetGraphicsPipeline(photonPass ? *causticBufferedPipeline_ : *causticPipeline_);
+    commands.SetGraphicsPipeline(photonPass ? *causticBufferedPipeline_->Poll()
+                                             : *causticPipeline_->Poll());
     commands.SetGraphicsBuffer(0U, records);
     if (photonPass)
     {
@@ -1441,7 +1452,8 @@ void GlassSurfaceRenderer::DrawGlass(
     const lighting::SdfGatherInput* const sdf,
     const lighting::ReflectionSceneInput* const exact)
 {
-    if (glassPipeline_ == nullptr || width == 0U || height == 0U ||
+    if (glassPipeline_ == nullptr || glassPipeline_->Poll() == nullptr ||
+        width == 0U || height == 0U ||
         instances.empty())
     {
         return;
@@ -1498,7 +1510,7 @@ void GlassSurfaceRenderer::DrawGlass(
         .height = static_cast<f32>(height),
         .minDepth = 0.0F,
         .maxDepth = 1.0F});
-    commands.SetGraphicsPipeline(*glassPipeline_);
+    commands.SetGraphicsPipeline(*glassPipeline_->Poll());
     commands.SetGraphicsBuffer(0U, records);
     commands.SetGraphicsBuffer(1U, sdfAvailable ? *sdf->distance : *dummySdf_);
     commands.SetGraphicsBuffer(2U, sdfAvailable ? *sdf->albedo : *dummySdf_);
