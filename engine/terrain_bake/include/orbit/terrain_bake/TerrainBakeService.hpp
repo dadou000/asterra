@@ -5,12 +5,14 @@
 #include <orbit/terrain/BakedRivers.hpp>
 #include <orbit/terrain/BakedGeology.hpp>
 #include <orbit/terrain/BakedTectonics.hpp>
+#include <orbit/terrain_bake/PlanetBakeFile.hpp>
 #include <orbit/terrain_bake/RiverBaker.hpp>
 #include <orbit/terrain_bake/TectonicBaker.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <atomic>
 #include <functional>
+#include <future>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -210,6 +212,8 @@ private:
         terrain::AnalyticTerrainDesc desc{};
         terrain::AnalyticTerrainDesc geologyBaseDesc{};
         bool geologyBaseValid{false};
+        bool diskLoadResolved{false};
+        std::future<std::optional<PlanetBakeContents>> pendingDiskLoad;
         BakeSettings settings{};
         u64 currentHash{0};
         u64 currentGeologyHash{0};
