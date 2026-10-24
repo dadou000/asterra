@@ -5,6 +5,7 @@
 #include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
 
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/core/ThreadName.hpp>
 #include <algorithm>
 #include <atomic>
 #include <bit>
@@ -211,7 +212,10 @@ std::shared_ptr<const terrain::BakedRiverNetwork> BakeRivers(
         std::vector<std::thread> threads;
         for (u32 i = 1U; i < workers; ++i)
         {
-            threads.emplace_back(sampleRows);
+            threads.emplace_back([&] {
+                core::SetBackgroundThreadPriority();
+                sampleRows();
+            });
         }
         sampleRows();
         for (auto& thread : threads)
