@@ -67,6 +67,7 @@ void ScheduleInitialImageTransition(
     const ResourceState targetState,
     GpuProgress* const progress)
 {
+    ORBIT_PROFILE_SCOPE("vk.image_layout_submit_deferred");
     VkQueue queue = VK_NULL_HANDLE;
     vkGetDeviceQueue(device, graphicsFamilyIndex, 0, &queue);
 
