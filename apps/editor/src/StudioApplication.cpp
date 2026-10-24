@@ -1,5 +1,6 @@
 #include "StudioWorkspaceRpc.hpp"
 #include "StudioApplication.hpp"
+#include "StudioGpuSubmitWorker.hpp"
 #include <orbit/build/BuildService.hpp>
 #include <orbit/commands/CommandRegistry.hpp>
 #include <orbit/commands/CommandService.hpp>
@@ -2606,6 +2607,16 @@ int orbit::editor_app::StudioApplication::Run(
             frame.commands = device.CreateCommandList(*frame.allocator);
         }
         orbit::u32 nextFrameSlot = 0U;
+        // Opt-in until the trusted Windows/Vulkan smoke and validation gate
+        // passes. The worker owns only Submit/Present/Signal; live Studio and
+        // ImGui state, command recording and resource creation remain here.
+        const bool threadedGpuSubmit =
+            orbit::platform::EnvironmentVariable(
+                "ORBIT_THREADED_GPU_SUBMIT") == "1";
+        orbit::editor_app::StudioGpuSubmitWorker gpuSubmit(threadedGpuSubmit);
+        orbit::log::Info(threadedGpuSubmit
+            ? "Studio asynchronous GPU submission enabled."
+            : "Studio GPU submission remains on the foreground thread.");
         orbit::u32 previousRadianceUpdateCount = 64U;
 
         using Clock =
@@ -2686,6 +2697,17 @@ int orbit::editor_app::StudioApplication::Run(
 
         while (window.PumpEvents())
         {
+            // The worker may still own the last recorded command packet,
+            // swapchain presentation state and its render-graph resources.
+            // Before touching any of them again, require nonblocking receipt
+            // of the previous submission acknowledgment. Window/RPC messages
+            // continue to be pumped on each skipped render iteration.
+            std::optional<orbit::editor_app::SubmissionResult> submittedPacket;
+            if (!gpuSubmit.Poll(&submittedPacket))
+            {
+                window.WaitForActivity(1U);
+                continue;
+            }
             {
                 const auto paceNow = Clock::now();
                 const orbit::u64 rpcRequests = rpcHost.RequestCount();
@@ -4181,22 +4203,32 @@ int orbit::editor_app::StudioApplication::Run(
                     "studio.primary");
 
             const auto submitPresentStarted = Clock::now();
-            graphicsQueue.Submit(
-                *commands);
-
-            swapchain.Present(true);
-
-            submittedFence =
-                nextFence++;
-
-            graphicsQueue.Signal(
-                *fence,
-                submittedFence);
+            submittedFence = nextFence++;
+            // Immutable descriptor: only the GPU-submission worker derefs
+            // these handles until the main thread acknowledges completion.
+            // No worker reads mutable StudioSession or UI state.
+            gpuSubmit.Dispatch({
+                .execute = [&graphicsQueue, &swapchain, &fence,
+                            commands, fenceValue = submittedFence] {
+                    graphicsQueue.Submit(*commands);
+                    swapchain.Present(true);
+                    graphicsQueue.Signal(*fence, fenceValue);
+                },
+                .fenceValue = submittedFence,
+                .frameSlot = lightingFrameSlot
+            });
             frame.fenceValue = submittedFence;
+            // In asynchronous mode this tracks driver time on the preceding
+            // acknowledged submission, rather than misleadingly reporting
+            // the negligible cost of putting a packet into a queue.
             cpuFrameTelemetry.Record(
                 CpuFrameTelemetry::SubmitPresent,
-                std::chrono::duration<double, std::milli>(
-                    Clock::now() - submitPresentStarted).count());
+                gpuSubmit.Enabled() && submittedPacket.has_value()
+                    ? submittedPacket->workerMilliseconds
+                    : (gpuSubmit.Enabled()
+                        ? 0.0
+                        : std::chrono::duration<double, std::milli>(
+                            Clock::now() - submitPresentStarted).count()));
             cpuFrameTelemetry.Record(
                 CpuFrameTelemetry::WholeLoop,
                 std::chrono::duration<double, std::milli>(
@@ -4370,6 +4402,9 @@ int orbit::editor_app::StudioApplication::Run(
             }
         }
 
+        // Ensure no submit/present worker still holds queue, swapchain,
+        // command allocator, or borrowed fence resources at teardown.
+        gpuSubmit.Drain();
         if (submittedFence != 0)
         {
             fence->Wait(
