@@ -217,7 +217,8 @@ MeshSurfaceRenderer::MeshSurfaceRenderer(
         {3U, rhi::VertexFormat::Float2,
          offsetof(mesh_import::MeshVertex, uv)}}};
 
-    pipeline_ = device.CreateGraphicsPipeline({
+    pipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(device,
+        rhi::GraphicsPipelineDesc{
         .vertexShader = {.data = vs.bytecode.data(), .size = vs.bytecode.size()},
         .pixelShader = {.data = ps.bytecode.data(), .size = ps.bytecode.size()},
         .vertexAttributes = attributes,
@@ -274,7 +275,8 @@ void MeshSurfaceRenderer::Draw(
             return tick_ >= records.retireAtTick;
         });
 
-    if (pipeline_ == nullptr || width == 0U || height == 0U)
+    if (pipeline_ == nullptr || pipeline_->Poll() == nullptr ||
+        width == 0U || height == 0U)
     {
         return;
     }
@@ -323,7 +325,7 @@ void MeshSurfaceRenderer::Draw(
         .top = 0,
         .right = static_cast<i32>(width),
         .bottom = static_cast<i32>(height)});
-    commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsPipeline(*pipeline_->Poll());
 
     for (const detail::DrawCall& draw : draws)
     {
