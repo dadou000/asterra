@@ -190,6 +190,9 @@ public:
 
     ~TerrainPreviewRenderer();
 
+    // Same shader requests as the constructor, without GPU resource creation.
+    static void PrewarmShaders(const shader::Compiler& compiler);
+
     TerrainPreviewRenderer(
         const TerrainPreviewRenderer&) = delete;
     TerrainPreviewRenderer& operator=(
