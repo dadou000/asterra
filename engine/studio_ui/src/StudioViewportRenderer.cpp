@@ -1973,10 +1973,22 @@ StudioViewportRenderer::ComposeBase(
                     cloudPresentation.hasPending = false;
                     try
                     {
-                        cloudPresentation.field = std::make_unique<celestial_clouds::CloudFieldProduct>(cloudPresentation.pending.get());
-                        cloudPresentation.gpu = std::make_unique<celestial_clouds::GpuCloudFieldProduct>(*device_, *cloudPresentation.field);
-                        cloudPresentation.body = cloudPresentation.pendingBody;
-                        cloudPresentation.fingerprint = cloudPresentation.pendingFingerprint;
+                        auto built = cloudPresentation.pending.get();
+                        // Do not waste GPU upload time on a replaced body or
+                        // an obsolete time bucket. Stage GPU objects first,
+                        // retaining the previous presentation if upload fails.
+                        if (cloudPresentation.pendingBody == logicalTarget->target->body &&
+                            cloudPresentation.pendingFingerprint == cloudFingerprint)
+                        {
+                            auto newField = std::make_unique<celestial_clouds::CloudFieldProduct>(std::move(built.field));
+                            auto newGpu = std::make_unique<celestial_clouds::GpuCloudFieldProduct>(*device_, *newField);
+                            cloudPresentation.field = std::move(newField);
+                            cloudPresentation.gpu = std::move(newGpu);
+                            cloudPresentation.body = cloudPresentation.pendingBody;
+                            cloudPresentation.fingerprint = cloudPresentation.pendingFingerprint;
+                            cloudPresentation.meanCoverage = built.meanCoverage;
+                            cloudPresentation.meanOpticalDepth = built.meanOpticalDepth;
+                        }
                     }
                     catch (const std::exception& exception)
                     {
@@ -2023,7 +2035,25 @@ StudioViewportRenderer::ComposeBase(
                         macroGlobeSurface != nullptr ? macroGlobeSurface->terrain : nullptr;
                     cloudPresentation.pending = jobs::SubmitBackgroundCpu(
                         [climateHold, referenceRadius, parameters = cloudParameters, atTime, cloudConfig]() {
-                            return celestial_clouds::BuildCloudField(climateHold.get(), nullptr, referenceRadius, parameters, atTime, cloudConfig);
+                            CloudBuiltProduct product{};
+                            product.field = celestial_clouds::BuildCloudField(
+                                climateHold.get(), nullptr, referenceRadius, parameters, atTime, cloudConfig);
+                            f64 coverage = 0.0;
+                            f64 optical = 0.0;
+                            u64 samples = 0U;
+                            for (const auto& layer : product.field.layers)
+                                for (const auto& texel : layer.texels)
+                                {
+                                    coverage += texel.coverage;
+                                    optical += texel.opticalDepth;
+                                    ++samples;
+                                }
+                            if (samples > 0U)
+                            {
+                                product.meanCoverage = coverage / static_cast<f64>(samples);
+                                product.meanOpticalDepth = optical / static_cast<f64>(samples);
+                            }
+                            return product;
                         });
                     cloudPresentation.hasPending = true;
                     cloudPresentation.pendingFingerprint = cloudFingerprint;
@@ -2042,24 +2072,6 @@ StudioViewportRenderer::ComposeBase(
 
                 if (cloudCurrent)
                 {
-                    f64 coverageSum = 0.0;
-                    f64 opticalSum = 0.0;
-                    u64 sampleCount = 0U;
-
-                    for (const auto& layer :
-                         cloudPresentation.field->layers)
-                    {
-                        for (const auto& texel :
-                             layer.texels)
-                        {
-                            coverageSum +=
-                                texel.coverage;
-                            opticalSum +=
-                                texel.opticalDepth;
-                            ++sampleCount;
-                        }
-                    }
-
                     cloudDiagnostics_.insert_or_assign(
                         info.id,
                         StudioCloudDiagnostics{
@@ -2082,18 +2094,8 @@ StudioViewportRenderer::ComposeBase(
                                     cloudPresentation.
                                         field->
                                         layers.size()),
-                            .meanCoverage =
-                                sampleCount > 0U
-                                    ? coverageSum /
-                                          static_cast<f64>(
-                                              sampleCount)
-                                    : 0.0,
-                            .meanOpticalDepth =
-                                sampleCount > 0U
-                                    ? opticalSum /
-                                          static_cast<f64>(
-                                              sampleCount)
-                                    : 0.0,
+                            .meanCoverage = cloudPresentation.meanCoverage,
+                            .meanOpticalDepth = cloudPresentation.meanOpticalDepth,
                             .gpuResident =
                                 cloudPresentation.gpu !=
                                 nullptr
