@@ -318,7 +318,8 @@ std::size_t UniverseBoundPathCache::RebuildDirty(
                 ++scheduled;
                 continue;
             }
-            if (request->centerline.edge != edge)
+            if (request->centerline.edge != edge &&
+                (!request->sourceRequest || request->sourceRequest->edge.id != edge))
                 throw std::invalid_argument("Rebuild request edge does not match dirty edge.");
 
             PendingCorridor pending{};
@@ -335,6 +336,20 @@ std::size_t UniverseBoundPathCache::RebuildDirty(
                     [snapshot = std::move(*request), activeJobs]() mutable {
                         try
                         {
+                            // Resolve all path geometry from the immutable
+                            // frame-local snapshot. No editor/world pointers
+                            // cross this job boundary.
+                            if (snapshot.sourceRequest)
+                            {
+                                std::string failure;
+                                auto builtCenterline = path_geometry::BuildPathCenterline(
+                                    *snapshot.sourceRequest, &failure);
+                                if (!builtCenterline)
+                                    throw std::runtime_error(failure.empty()
+                                        ? "Background path source sampling failed."
+                                        : failure);
+                                snapshot.centerline = std::move(*builtCenterline);
+                            }
                             // Engineering and rail cant can involve a full
                             // path derivation. Never run them in Studio.Tick.
                             if (snapshot.autoPlanInfrastructure)
