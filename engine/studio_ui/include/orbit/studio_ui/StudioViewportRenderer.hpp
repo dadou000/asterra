@@ -1013,6 +1013,11 @@ private:
     std::map<std::string, FinalGatherPresentation, std::less<>> finalGatherPresentations_;
     std::map<std::string, LuminanceHistogramPresentation, std::less<>> luminanceHistogramPresentations_;
     std::map<std::string, MacroGlobePresentation, std::less<>> macroGlobePresentations_;
+    // Immutable shader compilation can run on a worker while Studio keeps
+    // presenting the orbital/fallback view. Vulkan resources remain render-owned.
+    std::future<void> terrainShaderPrewarm_;
+    bool terrainShadersWarm_{false};
+    bool terrainShadersFailed_{false};
     std::map<std::string, TerrainPresentation, std::less<>> terrainPresentations_;
 };
 } // namespace orbit::studio_ui
