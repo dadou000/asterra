@@ -680,7 +680,11 @@ public:
             wireframe_)
             return;
         if (!gpuFieldGenerator_.Ready() || !physicalPageComposite_.Ready()) return;
-        if (!CollectWaterPipeline()) return;
+        if (regionDeltaComposite_ != nullptr && !regionDeltaComposite_->Ready())
+            return;
+        // Water must not appear over a still-missing terrain pipeline.
+        if (!CollectTerrainPipeline(wireframe_ != config_.wireframe) ||
+            !CollectWaterPipeline()) return;
 
         const math::Mat4 mvp =
             ViewProjection(camera, targetWidth, targetHeight);
