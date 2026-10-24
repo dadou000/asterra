@@ -1,5 +1,6 @@
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/path_geometry/InfrastructureSectionBuilder.hpp>
 
 #include <chrono>
 
@@ -334,6 +335,17 @@ std::size_t UniverseBoundPathCache::RebuildDirty(
                     [snapshot = std::move(*request), activeJobs]() mutable {
                         try
                         {
+                            // Engineering and rail cant can involve a full
+                            // path derivation. Never run them in Studio.Tick.
+                            if (snapshot.autoPlanInfrastructure)
+                            {
+                                auto planned = path_geometry::PlanInfrastructureSection(
+                                    snapshot.centerline, snapshot.profile,
+                                    snapshot.options,
+                                    snapshot.designSpeedMetersPerSecond,
+                                    snapshot.applyAutomaticCant);
+                                snapshot.corridor = std::move(planned.section);
+                            }
                             auto built = path_geometry::BuildCorridorDerived(
                                 snapshot.centerline, snapshot.profile,
                                 snapshot.corridor, snapshot.options,
