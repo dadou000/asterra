@@ -1,3 +1,4 @@
+#include <orbit/jobs/JobSystem.hpp>
 #include <orbit/profiler/Profiler.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
 #include <orbit/core/ThreadName.hpp>
@@ -855,8 +856,7 @@ private:
 
         state.pending.emplace(
             id,
-            std::async(
-                std::launch::async,
+            jobs::SubmitBackgroundCpu(
                 [owner = state.authority.owner,
                  shape = state.authority.shape,
                  id,
