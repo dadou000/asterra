@@ -1103,7 +1103,7 @@ std::string BuildGlassPixelShaderSource()
 GlassSurfaceRenderer::GlassSurfaceRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler)
-    : device_(device)
+    : device_(device), recordUploads_(device)
 {
     const auto compile =
         [&compiler](const std::string& source, const shader::Stage stage)
@@ -1238,6 +1238,7 @@ GlassSurfaceRenderer::GlassSurfaceRenderer(
 
 void GlassSurfaceRenderer::BeginFrame(const u32 completedSlot, const u32 framesInFlight)
 {
+    recordUploads_.BeginFrame(completedSlot, framesInFlight);
     if (framesInFlight == 0U || framesInFlight > 64U || completedSlot >= framesInFlight)
         throw std::invalid_argument("Invalid glass frame slot");
     pendingFramesMask_ = framesInFlight == 64U ? ~0ULL : ((1ULL << framesInFlight) - 1ULL);
@@ -1263,16 +1264,11 @@ rhi::Buffer& GlassSurfaceRenderer::UploadRecords(
         floats.push_back(0.0F);
     }
 
-    auto buffer = device_.CreateBuffer({
-        .sizeBytes = std::max<std::size_t>(floats.size() * sizeof(f32), 16U),
-        .usage = rhi::BufferUsage::Structured,
-        .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::ShaderResource});
-    std::memcpy(buffer->Map(), floats.data(), floats.size() * sizeof(f32));
-    buffer->Unmap();
-
-    records_.push_back({std::move(buffer), pendingFramesMask_});
-    return *records_.back().buffer;
+    auto& buffer = recordUploads_.Acquire(
+        std::max<std::size_t>(floats.size() * sizeof(f32), 16U));
+    std::memcpy(buffer.Map(), floats.data(), floats.size() * sizeof(f32));
+    buffer.Unmap();
+    return buffer;
 }
 
 void GlassSurfaceRenderer::CopyBackdrop(
