@@ -6,6 +6,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <future>
+#include <vector>
 
 namespace
 {
@@ -87,6 +89,40 @@ int main()
     Check(orbit::jobs::BackgroundCpuPool().Telemetry().workers >= 2U,
           "background CPU pool has bounded named workers");
     orbit::jobs::BackgroundCpuPool().WaitIdle();
+
+    // Saturate the low-priority admission window without blocking the
+    // submission thread; reserve headroom for one higher-priority request.
+    std::promise<void> releaseBatches;
+    auto gate = releaseBatches.get_future().share();
+    std::vector<std::future<int>> admitted;
+    const auto limit = orbit::jobs::BackgroundCpuAdmission().capacity;
+    for (orbit::u64 index = 0U; index < limit + 2U; ++index)
+    {
+        auto task = orbit::jobs::TrySubmitBackgroundCpu(
+            [gate] { gate.wait(); return 7; },
+            orbit::jobs::JobPriority::Low);
+        if (!task.has_value()) break;
+        admitted.push_back(std::move(*task));
+    }
+    Check(!admitted.empty(), "bounded work admits pending jobs");
+    Check(admitted.size() < limit, "low-priority work stops before full capacity");
+    Check(orbit::jobs::BackgroundCpuAdmission().outstanding == admitted.size(),
+          "admission counts running and queued work");
+    const auto rejected = orbit::jobs::TrySubmitBackgroundCpu(
+        [] { return 0; }, orbit::jobs::JobPriority::Low);
+    Check(!rejected.has_value(), "overload defers rather than waiting");
+    auto highPriority = orbit::jobs::TrySubmitBackgroundCpu(
+        [] { return 19; }, orbit::jobs::JobPriority::High);
+    Check(highPriority.has_value(), "urgent work receives reserved admission");
+    releaseBatches.set_value();
+    for (auto& task : admitted)
+        Check(task.get() == 7, "all admitted jobs finish");
+    Check(highPriority->get() == 19, "high priority job finishes");
+    orbit::jobs::BackgroundCpuPool().WaitIdle();
+    Check(orbit::jobs::BackgroundCpuAdmission().outstanding == 0U,
+          "admission capacity is released after completion");
+    Check(orbit::jobs::BackgroundCpuAdmission().rejected > 0U,
+          "admission rejections are counted");
 
     return EXIT_SUCCESS;
 }
