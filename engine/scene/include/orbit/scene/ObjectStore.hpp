@@ -60,6 +60,14 @@ public:
     [[nodiscard]] std::vector<ObjectRecord>
     Children(ObjectId parent) const;
 
+    // Bounded, stable SQL pages for owner-thread discovery. Unlike Children()
+    // and Roots(), these do not populate/copy whole-subtree read caches.
+    // Callers must restart paging when Revision() changes.
+    [[nodiscard]] std::vector<ObjectRecord>
+    ChildrenPage(ObjectId parent, u32 limit, u32 offset = 0U) const;
+    [[nodiscard]] std::vector<ObjectRecord>
+    RootsPage(u32 limit, u32 offset = 0U) const;
+
     [[nodiscard]] std::vector<ObjectRecord>
     SearchByName(
         std::string_view query,
