@@ -1,6 +1,7 @@
 #include <orbit/terrain_bake/TerrainBakeService.hpp>
 
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/core/ThreadName.hpp>
 #include <orbit/terrain_bake/PlanetBakeFile.hpp>
 #include <orbit/terrain_impacts/ImpactField.hpp>
 
@@ -68,6 +69,8 @@ template<typename SampleTexel>
 
     const auto runWorker = [&](const u32 workerIndex)
     {
+        // The bake's nested threads must not preempt the active render loop.
+        core::SetBackgroundThreadPriority();
         terrain_impacts::ImpactQueryScratch scratch;
         try
         {
@@ -990,6 +993,8 @@ void TerrainBakeService::Launch(
     entry.worker = std::thread(
         [this, target, control, definition, desc, previousGeologyDesc, path, resolution, settings, existing, existingGeology, geologyBackend]()
         {
+            core::SetCurrentThreadName("Orbit.PlanetBake");
+            core::SetBackgroundThreadPriority();
             const auto started = std::chrono::steady_clock::now();
             BakeProducts products;
             std::string error;
