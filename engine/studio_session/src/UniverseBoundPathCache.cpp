@@ -112,7 +112,8 @@ void UniverseBoundPathCache::Store(
     corridorAuthoredSignatures_.erase(edge);
     dirtyCorridors_.erase(edge);
     rebuildErrors_.erase(edge);
-    products_[edge] = std::move(product);
+    products_[edge] = std::make_shared<const path_geometry::PathDerivedProduct>(
+        std::move(product));
     dependencySnapshots_[edge] = CaptureDependencies(edge);
 
     if (routeGeneration.has_value())
@@ -140,7 +141,17 @@ UniverseBoundPathCache::Find(
     const auto found = products_.find(edge);
     return found == products_.end()
         ? nullptr
-        : &found->second;
+        : found->second.get();
+}
+
+std::shared_ptr<const path_geometry::PathDerivedProduct>
+UniverseBoundPathCache::Snapshot(const scene::ObjectId edge) const noexcept
+{
+    if (world_ == nullptr || observedUniverseGeneration_ !=
+        world_->UniverseGeneration())
+        return {};
+    const auto found = products_.find(edge);
+    return found == products_.end() ? nullptr : found->second;
 }
 
 std::optional<u64>
@@ -420,7 +431,7 @@ UniverseBoundPathCache::Products() const
     for (const auto& [edge, product] : products_)
     {
         static_cast<void>(edge);
-        result.push_back(&product);
+        result.push_back(product.get());
     }
 
     std::sort(
