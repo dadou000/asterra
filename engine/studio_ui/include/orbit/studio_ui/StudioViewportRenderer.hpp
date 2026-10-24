@@ -602,6 +602,12 @@ private:
         terrain_debug::TerrainDebugField field{terrain_debug::TerrainDebugField::Uplift};
         u64 seamFingerprint{0};
     };
+    struct CloudBuiltProduct
+    {
+        celestial_clouds::CloudFieldProduct field;
+        f64 meanCoverage{0.0};
+        f64 meanOpticalDepth{0.0};
+    };
     struct CloudPresentation
     {
         universe::BodyId body{};
@@ -611,7 +617,9 @@ private:
         // The next field being built off the render thread: building one takes about a second (the weather noise over six faces), and the
         // simulation clock asks for a new one every simulated second, so playing at rate 1 or more used to stall the frame each time.
         // Until it lands the previous field keeps drawing.
-        std::future<celestial_clouds::CloudFieldProduct> pending;
+        std::future<CloudBuiltProduct> pending;
+        f64 meanCoverage{0.0};
+        f64 meanOpticalDepth{0.0};
         bool hasPending{false};
         u64 pendingFingerprint{0};
         universe::BodyId pendingBody{};
@@ -957,7 +965,7 @@ private:
     // std::async futures must not be destroyed while still running on the
     // render thread: their destructors can join the asynchronous worker.
     // Retired work stays owned until a zero-time readiness poll completes.
-    std::vector<std::future<celestial_clouds::CloudFieldProduct>> retiredCloudBuilds_;
+    std::vector<std::future<CloudBuiltProduct>> retiredCloudBuilds_;
     void RetireCloudPresentation(const std::string& viewportId);
     void CollectRetiredCloudJobs();
     std::map<std::string, CloudPresentation, std::less<>> cloudPresentations_;
