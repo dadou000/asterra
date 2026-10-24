@@ -835,6 +835,9 @@ private:
     // Vulkan pipeline caches require explicit external synchronization when
     // multiple threads compile pipelines or the cache is serialized.
     VkPipelineCache pipelineCache_{VK_NULL_HANDLE};
+    // A separate cache prevents a cold worker vkCreate*Pipelines call from
+    // locking render-thread pipeline creation for seconds. Merge at shutdown.
+    VkPipelineCache pipelineWorkerCache_{VK_NULL_HANDLE};
     std::mutex pipelineCacheMutex_;
     std::filesystem::path pipelineCachePath_;
     void InitializePipelineCache() noexcept;
