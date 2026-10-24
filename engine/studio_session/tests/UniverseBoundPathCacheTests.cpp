@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <chrono>
+#include <thread>
 
 namespace
 {
@@ -132,6 +134,24 @@ int main()
             return req;
         }, 1U);
         Check(built == 1U);
+        // Background corridor derivation is non-blocking; consume the future
+        // through repeated owner-thread ticks before checking publication.
+        const auto rebuildDeadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds(5);
+        while (cache.IsDirty(edge) && std::chrono::steady_clock::now() < rebuildDeadline)
+        {
+            static_cast<void>(cache.RebuildDirty([&](const orbit::scene::ObjectId id)
+                -> std::optional<orbit::studio_session::UniverseBoundPathCache::RebuildRequest> {
+                if (id != edge) return std::nullopt;
+                orbit::studio_session::UniverseBoundPathCache::RebuildRequest req{};
+                req.authoredSignature = 103U;
+                req.centerline = centerline;
+                req.profile = roadProfile;
+                req.corridor = roadSection;
+                return req;
+            }, 1U));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
         Check(cache.DirtyCount() == 0U);
         cache.MarkDirty(edge);
         Check(cache.RebuildDirty([](const orbit::scene::ObjectId)
