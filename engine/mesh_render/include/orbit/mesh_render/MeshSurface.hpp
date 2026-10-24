@@ -12,6 +12,7 @@
 
 #include <array>
 #include <memory>
+#include <future>
 #include <span>
 #include <vector>
 
@@ -79,6 +80,13 @@ public:
         const SdfExtraGeometry* sdfExtra = nullptr);
 
 private:
+    struct CompiledShaders
+    {
+        shader::Binary vertex;
+        shader::Binary pixel;
+    };
+    [[nodiscard]] bool PipelineReady();
+    std::future<CompiledShaders> pendingShaders_;
     struct RetiredRecords
     {
         std::unique_ptr<rhi::Buffer> buffer;
