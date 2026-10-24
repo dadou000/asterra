@@ -1736,6 +1736,38 @@ private:
     std::vector<u32> patchVertexCounts_;
 };
 
+void TerrainPreviewRenderer::PrewarmShaders(const shader::Compiler& compiler)
+{
+    static_cast<void>(compiler.Compile({
+        .source = kVertexShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Vertex,
+        .debug = false
+    }));
+    const std::string pixelSource = BuildSurfaceEffectPixelShader(
+        BuildClipmapBedPixelShader(kPixelShader));
+    static_cast<void>(compiler.Compile({
+        .source = pixelSource,
+        .entryPoint = "main",
+        .stage = shader::Stage::Pixel,
+        .debug = false
+    }));
+    const std::string waterVertex = BuildClipmapWaterVertexShader(kVertexShader);
+    static_cast<void>(compiler.Compile({
+        .source = waterVertex,
+        .entryPoint = "main",
+        .stage = shader::Stage::Vertex,
+        .debug = false
+    }));
+    const std::string waterPixel = BuildClipmapWaterPixelShader(waterVertex);
+    static_cast<void>(compiler.Compile({
+        .source = waterPixel,
+        .entryPoint = "main",
+        .stage = shader::Stage::Pixel,
+        .debug = false
+    }));
+}
+
 TerrainPreviewRenderer::TerrainPreviewRenderer(
     rhi::Device& device,
     const shader::Compiler& shaderCompiler,
