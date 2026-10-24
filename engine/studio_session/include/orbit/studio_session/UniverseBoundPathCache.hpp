@@ -6,6 +6,8 @@
 #include <orbit/scene/ObjectStore.hpp>
 
 #include <functional>
+#include <future>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -78,9 +80,11 @@ public:
     };
     using RebuildResolver =
         std::function<std::optional<RebuildRequest>(scene::ObjectId)>;
-    // Resolver must snapshot current authoritative inputs, not reuse stale meshes.
-    // Processes at most budget dirty edges in stable ID order. Failed edges
-    // stay dirty with a diagnostic; they are not retried until explicitly requested.
+    // Resolver snapshots only authoritative inputs on the caller thread.
+    // CPU-heavy BuildCorridorDerived runs on the shared background pool;
+    // completed results publish here only if the binding, invalidation token
+    // and captured dependencies still match. The previous geometry remains
+    // visible while an edit is rebuilding. Budget limits launches per tick.
     [[nodiscard]] std::size_t RebuildDirty(
         const RebuildResolver& resolver, std::size_t budget = 2);
     [[nodiscard]] std::string RebuildError(scene::ObjectId edge) const;
@@ -104,6 +108,18 @@ private:
         [[nodiscard]] bool operator==(const DependencySnapshot&) const = default;
     };
     [[nodiscard]] DependencySnapshot CaptureDependencies(scene::ObjectId edge) const;
+    struct PendingCorridor
+    {
+        std::future<path_geometry::PathDerivedProduct> result;
+        DependencySnapshot sourceDependencies;
+        u64 authoredSignature{0};
+        u64 bindingGeneration{0};
+        u64 dirtyToken{0};
+        std::optional<u64> routeGeneration;
+    };
+    std::unordered_map<scene::ObjectId, PendingCorridor> pendingCorridors_;
+    std::unordered_map<scene::ObjectId, u64> dirtyTokens_;
+    u64 nextDirtyToken_{0};
     std::unordered_map<scene::ObjectId, DependencySnapshot> dependencySnapshots_;
     u64 observedSceneRevision_{~u64{0}};
     editor_session::EditorWorldSession* world_{nullptr};
