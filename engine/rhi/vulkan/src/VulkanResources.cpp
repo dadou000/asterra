@@ -151,24 +151,46 @@ void ScheduleInitialImageTransition(
     submitInfo.commandBufferInfoCount = 1;
     submitInfo.pCommandBufferInfos = &commandBufferInfo;
 
+    // Assign an exact serial to this initialization submission. Retirement
+    // must not depend on a later frame being produced: windows can minimize,
+    // rendering can pause, or the viewport may close after this submit.
+    u64 initialLayoutSerial = 0U;
+    VkSemaphoreSubmitInfo completionSignal{};
+    if (progress != nullptr)
+    {
+        initialLayoutSerial = progress->BeginSubmit();
+        completionSignal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        completionSignal.semaphore = progress->Timeline();
+        completionSignal.value = initialLayoutSerial;
+        completionSignal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        submitInfo.signalSemaphoreInfoCount = 1U;
+        submitInfo.pSignalSemaphoreInfos = &completionSignal;
+    }
+
     // This command is submitted on the SAME graphics queue as ordinary
     // frame commands. Queue order and the barrier dependency establish the
     // initial layout before later uses, without an on-frame GPU idle wait.
     if (vkQueueSubmit2(queue, 1U, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS)
     {
+        // This is an exceptional GPU submission failure. Drain any earlier
+        // queue work before unblocking timeline waiters by host signal.
+        if (progress != nullptr)
+        {
+            static_cast<void>(vkQueueWaitIdle(queue));
+            progress->SignalFromHost(initialLayoutSerial);
+        }
         vkDestroyCommandPool(device, pool, nullptr);
         throw std::runtime_error("Orbit could not enqueue initial image layout.");
     }
 
-    // A later frame's graphics submission signals the GPU timeline only
-    // after the above initialization command has executed. Retire the pool
-    // against that serial; it is never destroyed while its command buffer
-    // could still be in flight. Shutdown Flush() handles no-next-frame cases.
+    // This submission signals its own timeline serial after completion.
+    // Retire the command pool precisely against that serial, without relying
+    // on a subsequent frame or a whole-queue wait.
     if (progress != nullptr)
     {
         try
         {
-            progress->Retire(progress->NextSerial(), [device, pool] {
+            progress->Retire(initialLayoutSerial, [device, pool] {
                 vkDestroyCommandPool(device, pool, nullptr);
             });
             return;
