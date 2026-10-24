@@ -848,6 +848,7 @@ private:
             state.pending.contains(id) ||
             retiredPatchBuilds_.size() >= kMaximumRetiredPatchJobs ||
             state.authority.source == nullptr ||
+            state.authority.owner == nullptr ||
             device_ == nullptr)
         {
             return;
