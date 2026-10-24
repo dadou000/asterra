@@ -875,7 +875,10 @@ bool VulkanDevice::TryQueuePipelineCompile(std::function<void()> work)
     if (pipelineQueueStopping_ || !pipelineCompileThread_.joinable() ||
         pipelineQueue_.size() + pipelineCompilesInProgress_ >=
             kMaxOutstandingPipelineCompiles)
+    {
+        ++pipelineCompilesRejected_;
         return false;
+    }
     pipelineQueue_.push_back(std::move(work));
     pipelineQueueCv_.notify_one();
     return true;
@@ -908,8 +911,20 @@ void VulkanDevice::PipelineCompileLoop() noexcept
         {
             std::scoped_lock lock(pipelineQueueMutex_);
             --pipelineCompilesInProgress_;
+            ++pipelineCompilesCompleted_;
         }
     }
+}
+
+PipelineCompilationStats VulkanDevice::PipelineCompilation() noexcept
+{
+    std::scoped_lock lock(pipelineQueueMutex_);
+    return {
+        .queued = static_cast<u64>(pipelineQueue_.size()),
+        .compiling = static_cast<u64>(pipelineCompilesInProgress_),
+        .completed = pipelineCompilesCompleted_,
+        .rejected = pipelineCompilesRejected_
+    };
 }
 
 VulkanDevice::VulkanDevice(
