@@ -416,12 +416,9 @@ BuildPhysicalRenderPages(
             {
                 if (pendingSurfaces.size() < 12U)
                 {
-                    pendingSurfaces.push_back({
-                        .key = key,
-                        .source = snapshot,
-                        .result = jobs::SubmitBackgroundCpu(
+                    auto admitted = jobs::TrySubmitBackgroundCpu(
                             [snapshot, seaLevelMeters] {
-                                core::SetCurrentThreadName("Orbit.SurfacePrepare");
+                                // Keep the shared background worker identity.
                                 const u32 resolution = snapshot->material->Resolution();
                                 std::vector<terrain_gpu::GpuPhysicalSurfaceTexel> texels(
                                     static_cast<std::size_t>(resolution) * resolution);
@@ -450,9 +447,14 @@ BuildPhysicalRenderPages(
                                         };
                                     }
                                 return texels;
-                            }),
-                        .lastSeen = surfaceTick
-                    });
+                            }, jobs::JobPriority::Normal);
+                    if (admitted)
+                        pendingSurfaces.push_back({
+                            .key = key,
+                            .source = snapshot,
+                            .result = std::move(*admitted),
+                            .lastSeen = surfaceTick
+                        });
                 }
                 continue;
             }
