@@ -89,6 +89,15 @@ int main()
         Check(cache.Size() == 1U);
         Check(cache.Find(edge) != nullptr);
         Check(cache.Find(edge)->buildSignature == 1234U);
+        const auto retained = cache.Snapshot(edge);
+        Check(retained && retained->buildSignature == 1234U);
+        // The old product remains immutable and owned across a new
+        // publication, including deletion/rebinding of the owning world.
+        auto replacement = product;
+        replacement.buildSignature = 2345U;
+        cache.Store(std::move(replacement), 7U);
+        Check(retained->buildSignature == 1234U);
+        Check(cache.Find(edge)->buildSignature == 2345U);
         Check(cache.RouteGeneration(edge).value_or(0U) == 7U);
         Check(cache.Products().size() == 1U);
 
