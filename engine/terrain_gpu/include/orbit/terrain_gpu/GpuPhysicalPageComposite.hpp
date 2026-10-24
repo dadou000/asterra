@@ -39,6 +39,8 @@ public:
         const shader::Compiler& compiler);
     ~GpuPhysicalPageComposite();
 
+    static void PrewarmShaders(const shader::Compiler& compiler);
+
     GpuPhysicalPageComposite(
         const GpuPhysicalPageComposite&) = delete;
     GpuPhysicalPageComposite& operator=(
