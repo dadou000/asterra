@@ -1977,8 +1977,11 @@ StudioViewportRenderer::ComposeBase(
                         // Do not waste GPU upload time on a replaced body or
                         // an obsolete time bucket. Stage GPU objects first,
                         // retaining the previous presentation if upload fails.
-                        if (cloudPresentation.pendingBody == logicalTarget->target->body &&
-                            cloudPresentation.pendingFingerprint == cloudFingerprint)
+                        // Time can advance while a cloud worker is running.
+                        // Accept a previous time bucket for the same body,
+                        // then request its newer revision asynchronously;
+                        // otherwise live weather may never draw at all.
+                        if (cloudPresentation.pendingBody == logicalTarget->target->body)
                         {
                             auto newField = std::make_unique<celestial_clouds::CloudFieldProduct>(std::move(built.field));
                             auto newGpu = std::make_unique<celestial_clouds::GpuCloudFieldProduct>(*device_, *newField);
