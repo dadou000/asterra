@@ -1,5 +1,6 @@
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/terrain_render/SurfaceEffectShader.hpp>
+#include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
 #include <orbit/terrain_render/WaterVolumeShader.hpp>
 
 #include "../src/ClipmapVertexShader.hpp"
@@ -107,5 +108,8 @@ int main()
     std::cout
         << "Orbit terrain base, M38 effect, bed and separate water pass shaders compiled successfully.\n";
 
+    // The constructor and prewarm worker must use identical DXC requests.
+    // This requires no Vulkan device, so it runs in headless CI.
+    orbit::terrain_render::TerrainPreviewRenderer::PrewarmShaders(compiler);
     return EXIT_SUCCESS;
 }
