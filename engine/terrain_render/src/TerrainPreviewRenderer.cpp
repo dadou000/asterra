@@ -785,7 +785,8 @@ public:
             return;
         // The GPU compute shader may still be compiling on the driver
         // worker. Never generate incomplete terrain patches in this case.
-        if (!gpuFieldGenerator_.Ready() || !physicalPageComposite_.Ready())
+        if (!gpuFieldGenerator_.Ready() || !physicalPageComposite_.Ready() ||
+            (regionDeltaComposite_ != nullptr && !regionDeltaComposite_->Ready()))
             return;
 
         const math::Mat4 mvp =
