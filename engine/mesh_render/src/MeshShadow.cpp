@@ -872,7 +872,8 @@ MeshShadowMapRenderer::MeshShadowMapRenderer(
         {3U, rhi::VertexFormat::Float2,
          offsetof(mesh_import::MeshVertex, uv)}}};
 
-    pipeline_ = device.CreateGraphicsPipeline({
+    pipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(device,
+        rhi::GraphicsPipelineDesc{
         .vertexShader = {.data = vs.bytecode.data(), .size = vs.bytecode.size()},
         .pixelShader = {.data = ps.bytecode.data(), .size = ps.bytecode.size()},
         .vertexAttributes = attributes,
@@ -913,8 +914,12 @@ void MeshShadowMapRenderer::DrawViews(
             return tick_ >= records.retireAtTick;
         });
 
-    if (pipeline_ == nullptr)
+    // The shadow map must be a well-defined fully-lit fallback during cold
+    // driver compilation. Do not sample uninitialized shadow atlas pixels.
+    if (pipeline_ == nullptr || pipeline_->Poll() == nullptr)
     {
+        commands.ClearColorTarget(colorMap, {1.0e9F, 1.0e9F, 1.0e9F, 1.0e9F});
+        commands.ClearDepthTarget(depthMap, 1.0F);
         return;
     }
 
@@ -946,7 +951,7 @@ void MeshShadowMapRenderer::DrawViews(
         .top = 0,
         .right = static_cast<i32>(width),
         .bottom = static_cast<i32>(height)});
-    commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsPipeline(*pipeline_->Poll());
 
     for (const View& view : views)
     {
@@ -1058,7 +1063,8 @@ MeshSunShadowRenderer::MeshSunShadowRenderer(
         .stage = shader::Stage::Compute,
         .debug = false});
 
-    pipeline_ = device.CreateComputePipeline({
+    pipeline_ = std::make_unique<rhi::DeferredComputePipeline>(device,
+        rhi::ComputePipelineDesc{
         .computeShader = {
             .data = compute.bytecode.data(),
             .size = compute.bytecode.size()},
@@ -1084,7 +1090,8 @@ void MeshSunShadowRenderer::Draw(
     const bool initialize,
     const u32 temporalIndex)
 {
-    if (pipeline_ == nullptr || width == 0U || height == 0U)
+    if (pipeline_ == nullptr || pipeline_->Poll() == nullptr ||
+        width == 0U || height == 0U)
     {
         return;
     }
@@ -1138,7 +1145,7 @@ void MeshSunShadowRenderer::Draw(
         AsBits(frame.center[2]), AsBits(frame.sunTanHalfAngle),
         temporalIndex};
 
-    commands.SetComputePipeline(*pipeline_);
+    commands.SetComputePipeline(*pipeline_->Poll());
     commands.SetComputeConstants(constants);
     commands.SetComputeBuffer(0U, *buffer);
     commands.SetComputeStorageTexture(0U, target);
