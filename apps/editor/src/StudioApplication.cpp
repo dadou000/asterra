@@ -2792,12 +2792,24 @@ int orbit::editor_app::StudioApplication::Run(
                 lastIterationStart = Clock::now();
             }
 
-            // Frame timing starts after the idle-pacing wait so an intentional
-            // sleep is never reported as a hitch.
-            orbit::profiler::BeginFrame();
-            const auto loopStarted = Clock::now();
+            // Do not let an outstanding GPU frame turn the editor thread into
+            // an unbounded vkWaitSemaphores waiter. Keep displaying the last
+            // completed swapchain image and pump OS/RPC events on the next
+            // iteration. GPU backpressure must drop frames, not freeze input.
             const orbit::u32 lightingFrameSlot = nextFrameSlot;
             auto& frame = inFlightFrames[lightingFrameSlot];
+            if (frame.fenceValue != 0U &&
+                fence->CompletedValue() < frame.fenceValue)
+            {
+                window.WaitForActivity(1U);
+                continue;
+            }
+
+            // Frame timing starts after pacing and GPU availability checks;
+            // neither intentional sleep nor incomplete GPU work count as a
+            // completed CPU frame.
+            orbit::profiler::BeginFrame();
+            const auto loopStarted = Clock::now();
             if (frame.fenceValue != 0U)
             {
                 const auto fenceWaitStarted = Clock::now();
