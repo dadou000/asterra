@@ -905,17 +905,25 @@ private:
                 continue;
             }
             const PlanetPatchId id = it->first;
+            std::optional<BuiltPatch> built;
             try
             {
-                BuiltPatch built = it->second.get();
-                it = state.pending.erase(it);
-                Upload(state, id, built);
+                built = it->second.get();
+            }
+            catch (const std::exception& error)
+            {
+                log::Warning(std::string("Orbital patch generation failed: ") + error.what());
+            }
+            it = state.pending.erase(it);
+            if (!built.has_value()) continue;
+            try
+            {
+                Upload(state, id, *built);
                 ++uploaded;
             }
             catch (const std::exception& error)
             {
-                log::Warning(std::string("Orbital patch preparation failed: ") + error.what());
-                it = state.pending.erase(it);
+                log::Warning(std::string("Orbital patch upload failed: ") + error.what());
             }
         }
     }
