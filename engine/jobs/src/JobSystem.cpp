@@ -595,4 +595,11 @@ JobSystemTelemetry JobSystem::Telemetry() const noexcept
 {
     return impl_->Telemetry();
 }
+JobSystem& BackgroundCpuPool()
+{
+    static JobSystem pool(
+        PoolWorkerCount("ORBIT_BACKGROUND_CPU_WORKERS", 4U),
+        "BackgroundCpu");
+    return pool;
+}
 } // namespace orbit::jobs
