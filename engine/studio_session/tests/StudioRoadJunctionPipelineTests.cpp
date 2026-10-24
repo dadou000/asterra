@@ -246,6 +246,31 @@ int main()
             centre.id,studio.PathProducts());
         CHECK(afterContact!=nullptr);
         CHECK(afterContact->packetSignature!=beforeSignature);
+
+        // Build a scene much larger than one discovery tick. The prior
+        // contact must be retired immediately, and the junction must be
+        // republished only after all 96-record discovery slices complete.
+        for (int i = 0; i < 150; ++i)
+            static_cast<void>(paths.CreateNode(network.id,
+                "Unused " + std::to_string(i),
+                paths::FramePointAnchor{.frame=frame,
+                    .localMeters={0.0, 0.0, 100.0 + i}}));
+        static_cast<void>(studio.Tick(false));
+        CHECK(studio.RoadJunctions().ActiveContactScenes()==0U);
+        CHECK(studio.RoadJunctions().CurrentContact(
+            centre.id,studio.PathProducts())==nullptr);
+        const auto discoveryDeadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < discoveryDeadline)
+        {
+            static_cast<void>(studio.Tick(false));
+            if (studio.RoadJunctions().CurrentContact(
+                    centre.id,studio.PathProducts()) != nullptr)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        CHECK(studio.RoadJunctions().CurrentContact(
+            centre.id,studio.PathProducts())!=nullptr);
         // The previous temporary vehicle remains explicit but cannot step
         // using the new geometry until re-bound (which clears old actors).
         CHECK(studio.Vehicles().Find(runtimeVehicle)!=nullptr);
