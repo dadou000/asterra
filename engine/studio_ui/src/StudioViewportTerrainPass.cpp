@@ -1,5 +1,6 @@
 #include "StudioViewportInternals.hpp"
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/terrain_gpu/GpuRegionDelta.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/core/Log.hpp>
 #include <chrono>
