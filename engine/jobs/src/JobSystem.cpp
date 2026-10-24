@@ -69,6 +69,11 @@ constexpr std::array<JobPriority, 3> kPriorityOrder{
     JobPriority::Normal,
     JobPriority::Low
 };
+
+// The editor and render thread must never steal arbitrary procedural work
+// when an API calls Wait() during frame preparation. Only worker threads
+// may help process nested job groups to avoid pool starvation.
+thread_local bool gOrbitJobWorker = false;
 } // namespace
 
 JobGroup::JobGroup()
@@ -237,7 +242,7 @@ public:
 
         while (group->remaining.load(std::memory_order_acquire) != 0)
         {
-            if (TryExecuteOne(kExternalThread))
+            if (gOrbitJobWorker && TryExecuteOne(kExternalThread))
             {
                 continue;
             }
@@ -270,7 +275,7 @@ public:
     {
         while (outstandingJobs_.load(std::memory_order_acquire) != 0)
         {
-            if (TryExecuteOne(kExternalThread))
+            if (gOrbitJobWorker && TryExecuteOne(kExternalThread))
             {
                 continue;
             }
@@ -501,6 +506,7 @@ private:
 
     void WorkerLoop(const u32 workerIndex)
     {
+        gOrbitJobWorker = true;
         core::SetCurrentThreadName(
             std::format("Orbit.{}.{}", name_, workerIndex));
 
