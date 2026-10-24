@@ -274,7 +274,8 @@ EmissiveLightRenderer::EmissiveLightRenderer(
         .entryPoint = "main",
         .stage = shader::Stage::Compute,
         .debug = false});
-    lightPipeline_ = device.CreateComputePipeline({
+    lightPipeline_ = std::make_unique<rhi::DeferredComputePipeline>(device,
+        rhi::ComputePipelineDesc{
         .computeShader = {.data = cs.bytecode.data(), .size = cs.bytecode.size()},
         .pushConstantDwords = 28U,
         .shaderResourceBuffers = 5U,
@@ -291,7 +292,8 @@ EmissiveLightRenderer::EmissiveLightRenderer(
         .entryPoint = "main",
         .stage = shader::Stage::Pixel,
         .debug = false});
-    compositePipeline_ = device.CreateGraphicsPipeline({
+    compositePipeline_ = std::make_unique<rhi::DeferredGraphicsPipeline>(device,
+        rhi::GraphicsPipelineDesc{
         .vertexShader = {.data = vs.bytecode.data(), .size = vs.bytecode.size()},
         .pixelShader = {.data = ps.bytecode.data(), .size = ps.bytecode.size()},
         .shaderResourceBuffers = 0U,
@@ -335,7 +337,8 @@ void EmissiveLightRenderer::Light(
             return tick_ >= buffer.retireAtTick;
         });
 
-    if (lightPipeline_ == nullptr || width == 0U || height == 0U)
+    if (lightPipeline_ == nullptr || lightPipeline_->Poll() == nullptr ||
+        width == 0U || height == 0U)
     {
         return;
     }
@@ -393,7 +396,7 @@ void EmissiveLightRenderer::Light(
         bits(sdfAvailable ? 1.0F : 0.0F),
         0U, 0U, 0U, 0U};
 
-    commands.SetComputePipeline(*lightPipeline_);
+    commands.SetComputePipeline(*lightPipeline_->Poll());
     commands.SetComputeConstants(constants);
     commands.SetComputeBuffer(0U, *buffer);
     commands.SetComputeBuffer(1U, sdfAvailable ? *sdf->distance : *dummySdf_);
@@ -417,7 +420,8 @@ void EmissiveLightRenderer::Composite(
     const u32 width,
     const u32 height)
 {
-    if (compositePipeline_ == nullptr || width == 0U || height == 0U)
+    if (compositePipeline_ == nullptr || compositePipeline_->Poll() == nullptr ||
+        width == 0U || height == 0U)
     {
         return;
     }
@@ -434,7 +438,7 @@ void EmissiveLightRenderer::Composite(
         .top = 0,
         .right = static_cast<i32>(width),
         .bottom = static_cast<i32>(height)});
-    commands.SetGraphicsPipeline(*compositePipeline_);
+    commands.SetGraphicsPipeline(*compositePipeline_->Poll());
     commands.SetGraphicsTexture(0U, lighting);
     commands.Draw(3U);
 }
