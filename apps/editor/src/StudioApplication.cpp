@@ -2646,6 +2646,7 @@ int orbit::editor_app::StudioApplication::Run(
         bool terrainUiSmokeValidated = false;
         orbit::u32 terrainUiSmokeAttempts = 0U;
         orbit::u32 terrainUiSmokeRenderedFrames = 0U;
+        const auto terrainUiSmokeStarted = Clock::now();
         const std::filesystem::path
             terrainUiSmokeCapture =
                 terrainUiSmokeRoot /
@@ -4216,7 +4217,7 @@ int orbit::editor_app::StudioApplication::Run(
                 // fallback while driver pipelines compile asynchronously.
                 // Test actual terrain draws, not merely frame submissions.
                 if (!studioViewportRenderer.HasDrawnProductionTerrain() &&
-                    terrainUiSmokeRenderedFrames > 1800U)
+                    Clock::now() - terrainUiSmokeStarted > std::chrono::seconds(90))
                     throw std::runtime_error(
                         "Terrain UI smoke: asynchronous Vulkan pipelines never became drawable.");
 
