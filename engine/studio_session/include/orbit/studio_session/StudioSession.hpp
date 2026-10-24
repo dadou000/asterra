@@ -229,6 +229,10 @@ private:
     // processes a bounded number of records rather than the entire world.
     std::vector<scene::ObjectId> infrastructureDiscoveryParents_;
     std::vector<scene::ObjectRecord> infrastructureDiscoveryChildren_;
+    std::optional<scene::ObjectId> infrastructureDiscoveryActiveParent_;
+    u32 infrastructureDiscoveryChildOffset_{0U};
+    u32 infrastructureDiscoveryRootOffset_{0U};
+    bool infrastructureDiscoveryRootsExhausted_{false};
     std::size_t infrastructureDiscoveryChildCursor_{0U};
     editor_rpc::EditorSessionRpcHost rpc_;
 };
