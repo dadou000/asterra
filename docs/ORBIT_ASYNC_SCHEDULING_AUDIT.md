@@ -6,23 +6,25 @@ Base: `0.1.1-Harmony` at `e96d400b697898b0e2e4f634c576bb0329bfb612`.
 
 * Rendering must not synchronously wait for procedural CPU products. Keep the most recently published compatible product, or display a deliberate fallback.
 * Generated products capture immutable inputs and have revision/body identity; only finished and current products may publish.
-* A `std::async(std::launch::async)` future must **never** be destroyed unfinished in a frame path: its destructor can join the task.
+* Do not launch independent `std::async` threads from render-path code. Use `jobs::SubmitBackgroundCpu` (packaged tasks in a shared bounded pool). A legacy `std::async` future must never be destroyed unfinished in a frame path because its destructor can join.
 * GPU upload/presentation remains render-owned, bounded, and independently profiled. Background CPU work must never access the graphics command context.
 
 ## Repairs in this change
 
 1. First planetary bake: `StudioTerrainBakeController::Tick` requests `StartBake` instead of running `BakeNow` inside the frame.
 2. Cloud fields: first-use and refresh builds launch in a background task. A retired viewport future is kept until ready, with bounded admission and an explicit celestial grant abandon.
-3. Atmosphere: static LUT and sky-view calculations run on background tasks. A sky request retains immutable shared LUT inputs; completion checks body/fingerprint; stale futures retire without joining and stale scheduler grants are abandoned.
+3. Atmosphere: static LUT and sky-view calculations run on shared bounded background workers (no nested unrestricted parallel-for). A sky request retains immutable shared LUT inputs; completion checks body/fingerprint; stale futures retire without joining and stale scheduler grants are abandoned.
 4. Orbital patches: changing terrain source/authority moves pending futures into retired storage before dropping the old state. No synchronous fallback patch sampling when the terrain source lacks shared lifetime.
 5. Physical terrain rendering: texel packing, river depth, and lake sampling happen in bounded asynchronous CPU tasks tied to exact immutable page snapshots. GPU buffer publication consumes ready payloads only and maintains existing byte/count caps.
+
+6. Centralized the above CPU jobs (including the terrain sun-shadow builder) through `jobs::BackgroundCpuPool` with configurable `ORBIT_BACKGROUND_CPU_WORKERS` (default approximately hardware threads / 4); Studio prewarms the pool before its first frame.
 
 ## Not yet guaranteed by this patch
 
 * `StudioSession::Tick` still does synchronous corridor and road-junction work and scene processing. A job-count budget is not a wall-time budget.
 * `GpuFieldGenerator` and `TerrainPreviewRenderer` can still construct/compile shader and driver pipelines inline when terrain identity changes. Shader binaries should be cached/precompiled, with GPU pipeline installation deferred.
 * `StudioApplication` still shares its main thread across editor update, viewport composition, command recording, and submission. Frame-slot fences, swapchain resize and presentation may block for GPU/OS reasons.
-* Independent pools plus `std::async` do not yet enforce a process-wide CPU admission/affinity/deadline budget.
+* Legacy independent pools are still present, and `BackgroundCpuPool` is not yet a process-wide admission/affinity/deadline budget for **all** engine subsystems.
 * CPU-to-GPU promotion of completed cloud/atmosphere products is currently bounded by one product per view on completion, not a measured microsecond budget.
 * Canceling/clearing an entire terrain bake service can still join its long-running worker during project teardown.
 
