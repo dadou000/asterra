@@ -29,6 +29,7 @@ Base: `0.1.1-Harmony` at `e96d400b697898b0e2e4f634c576bb0329bfb612`.
 
 14. Added process-wide, nonblocking CPU admission for the new background workload family. `TrySubmitBackgroundCpu` reserves a slot atomically for both running and queued jobs; low and normal priorities have smaller ceilings so high-priority work retains admission headroom. Terrain, cloud, atmosphere, sun-shadow, shader-prewarm, corridor and junction tasks now defer on rejection and retry later, rather than accumulating an unbounded queue. Includes saturation/priority regression tests and queue telemetry (`BackgroundCpuAdmission`). The legacy `SubmitBackgroundCpu` entry point remains available and is **not** admission-bounded.
 15. Cancelled whole-world bake services now retire after cooperative worker completion instead of joining inside Studio's world-close or project-switch frame. Explicit rebake during an in-flight bake coalesces a replacement, cancels the prior worker, and publishes only the newest result. Cancel/retire and deferred restart regressions were added to `Orbit.TerrainBake`.
+16. Default geology, tectonic and river bake worker counts now use a share of hardware concurrency rather than all available logical threads. Overrides: `ORBIT_GEOLOGY_BAKE_WORKERS`, `ORBIT_TECTONIC_BAKE_WORKERS`, and `ORBIT_RIVER_BAKE_WORKERS`. Explicit per-bake `workerThreads` options continue to override tectonic/river defaults.
 
 ## Not yet guaranteed by this patch
 
