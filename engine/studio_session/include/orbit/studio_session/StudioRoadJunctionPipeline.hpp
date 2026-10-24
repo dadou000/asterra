@@ -82,6 +82,20 @@ private:
     // Task futures are packaged by Orbit::Jobs, not std::async: erasing an
     // obsolete pending build cannot synchronously join the render thread.
     std::optional<PendingBuild> pendingBuild_;
+    struct DiscoveredEdge
+    {
+        scene::ObjectId id{}, start{}, end{};
+        bool rail{false};
+    };
+    // Invalidation-aware, bounded main-thread capture. The worker receives
+    // an immutable copy only after the scene traversal has completed.
+    std::vector<DiscoveredEdge> discoveredEdges_;
+    std::vector<scene::ObjectId> discoveryParents_;
+    std::vector<scene::ObjectRecord> discoveryChildren_;
+    std::size_t discoveryNextChild_{0U};
+    std::size_t discoveryScanned_{0U};
+    u64 discoveryFingerprint_{0U};
+    bool discoveryInProgress_{false};
     std::map<frames::FrameId,path_geometry::RoadJunctionScenePublisher> frames_;
     std::map<frames::FrameId,path_geometry::RoadContactSceneOwner> contactScenes_;
     [[nodiscard]] bool PacketCurrent(
