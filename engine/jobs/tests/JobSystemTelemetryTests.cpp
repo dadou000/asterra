@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <thread>
 
 namespace
@@ -71,5 +72,21 @@ int main()
     Check(idle.outstanding == 0U, "idle outstanding count returns to zero");
     Check(idle.queued == 0U, "idle queued count returns to zero");
     Check(idle.running == 0U, "idle running count returns to zero");
+
+    // Background futures come from packaged tasks in the shared bounded pool,
+    // rather than std::async, and errors are delivered to the consumer.
+    auto answer = orbit::jobs::SubmitBackgroundCpu([] { return 42; });
+    Check(answer.get() == 42, "background CPU task delivers its value");
+    auto broken = orbit::jobs::SubmitBackgroundCpu([]() -> int {
+        throw std::runtime_error("worker failure");
+    });
+    bool propagated = false;
+    try { static_cast<void>(broken.get()); }
+    catch (const std::runtime_error&) { propagated = true; }
+    Check(propagated, "background CPU task propagates exceptions");
+    Check(orbit::jobs::BackgroundCpuPool().Telemetry().workers >= 2U,
+          "background CPU pool has bounded named workers");
+    orbit::jobs::BackgroundCpuPool().WaitIdle();
+
     return EXIT_SUCCESS;
 }
