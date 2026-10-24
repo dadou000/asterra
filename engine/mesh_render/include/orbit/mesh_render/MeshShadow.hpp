@@ -7,6 +7,7 @@
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/rhi/DeferredPipeline.hpp>
+#include <orbit/rhi/FrameBufferPool.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <array>
@@ -87,6 +88,11 @@ public:
         rhi::Device& device,
         const shader::Compiler& compiler);
 
+    void BeginFrame(u32 completedSlot, u32 framesInFlight)
+    {
+        recordUploads_.BeginFrame(completedSlot, framesInFlight);
+    }
+
     // `colorMap` (R32_Float) and `depthMap` (D32_Float) must be mapSize
     // square. Clears both and draws every part of every instance.
     void Draw(
@@ -132,16 +138,9 @@ private:
         u32 width,
         u32 height);
 
-    struct RetiredRecords
-    {
-        std::unique_ptr<rhi::Buffer> buffer;
-        u64 retireAtTick{0U};
-    };
-
     rhi::Device& device_;
     std::unique_ptr<rhi::DeferredGraphicsPipeline> pipeline_;
-    std::vector<RetiredRecords> records_;
-    u64 tick_{0U};
+    rhi::FrameBufferPool recordUploads_;
 };
 
 // Inputs of the sky fill written for mesh pixels.
@@ -164,6 +163,11 @@ public:
     MeshSunShadowRenderer(
         rhi::Device& device,
         const shader::Compiler& compiler);
+
+    void BeginFrame(u32 completedSlot, u32 framesInFlight)
+    {
+        parameterUploads_.BeginFrame(completedSlot, framesInFlight);
+    }
 
     // `target` in UnorderedAccess; the sampled inputs in ShaderResource
     // (`depth` in DepthRead).
@@ -188,12 +192,6 @@ public:
 private:
     rhi::Device& device_;
     std::unique_ptr<rhi::DeferredComputePipeline> pipeline_;
-    struct RetiredBuffer
-    {
-        std::unique_ptr<rhi::Buffer> buffer;
-        u64 retireAtTick{0U};
-    };
-    std::vector<RetiredBuffer> parameters_;
-    u64 tick_{0U};
+    rhi::FrameBufferPool parameterUploads_;
 };
 } // namespace orbit::mesh_render
