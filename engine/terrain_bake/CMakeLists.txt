@@ -15,6 +15,7 @@ target_include_directories(OrbitTerrainBake
 target_link_libraries(OrbitTerrainBake
     PUBLIC
         Orbit::Core
+        Orbit::Jobs
         Orbit::Math
         Orbit::Terrain
         Orbit::TerrainMacroGeology
