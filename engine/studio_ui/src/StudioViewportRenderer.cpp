@@ -1,3 +1,4 @@
+#include <orbit/jobs/JobSystem.hpp>
 #include "StudioViewportInternals.hpp"
 #include "StudioViewportPrimitives.hpp"
 
@@ -2020,8 +2021,7 @@ StudioViewportRenderer::ComposeBase(
                   {
                     std::shared_ptr<const terrain::TerrainSource> climateHold =
                         macroGlobeSurface != nullptr ? macroGlobeSurface->terrain : nullptr;
-                    cloudPresentation.pending = std::async(
-                        std::launch::async,
+                    cloudPresentation.pending = jobs::SubmitBackgroundCpu(
                         [climateHold, referenceRadius, parameters = cloudParameters, atTime, cloudConfig]() {
                             return celestial_clouds::BuildCloudField(climateHold.get(), nullptr, referenceRadius, parameters, atTime, cloudConfig);
                         });
@@ -2674,7 +2674,7 @@ StudioViewportRenderer::ComposeBase(
                     4U, 90, true))
             {
                 const auto params = resolvedAtmosphere->parameters;
-                presentation.pendingStatic = std::async(std::launch::async,
+                presentation.pendingStatic = jobs::SubmitBackgroundCpu(
                     [params, atmosphereConfig] {
                         return celestial_atmosphere::BuildStaticLuts(params, atmosphereConfig);
                     });
@@ -2796,7 +2796,7 @@ StudioViewportRenderer::ComposeBase(
             {
                 const auto params = resolvedAtmosphere->parameters;
                 const auto luts = presentation.staticLuts;
-                presentation.pendingSky = std::async(std::launch::async,
+                presentation.pendingSky = jobs::SubmitBackgroundCpu(
                     [params, luts, skyInput, atmosphereConfig] {
                         return celestial_atmosphere::BuildSkyView(params, *luts, skyInput, atmosphereConfig);
                     });
