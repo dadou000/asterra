@@ -67,7 +67,22 @@ int main()
     Check(active.queued >= 1U, "queued work is reported");
     Check(active.outstanding >= 2U, "outstanding includes queued and running work");
 
-    releaseFirst.store(true, std::memory_order_release);
+    // External waiter must never act as an implicit compute worker.
+    orbit::jobs::JobGroup renderWaitGroup;
+    const auto callerThread = std::this_thread::get_id();
+    std::atomic<bool> ranOnCaller{false};
+    jobs.Submit(renderWaitGroup, [&] {
+        ranOnCaller.store(std::this_thread::get_id() == callerThread,
+            std::memory_order_relaxed);
+    });
+    std::thread releaseOnOtherThread([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        releaseFirst.store(true, std::memory_order_release);
+    });
+    jobs.Wait(renderWaitGroup);
+    releaseOnOtherThread.join();
+    Check(!ranOnCaller.load(std::memory_order_relaxed),
+        "external waiting thread must not execute background jobs");
     jobs.WaitIdle();
 
     const auto idle = jobs.Telemetry();
