@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <future>
+#include <memory>
 #include <chrono>
 #include <optional>
 #include <string>
@@ -57,6 +58,11 @@ public:
 
     [[nodiscard]] const path_geometry::PathDerivedProduct*
     Find(scene::ObjectId edge) const noexcept;
+
+    // Worker-safe immutable ownership of a published corridor. Retiring an
+    // old universe cannot free a mesh still being read by junction workers.
+    [[nodiscard]] std::shared_ptr<const path_geometry::PathDerivedProduct>
+    Snapshot(scene::ObjectId edge) const noexcept;
 
     [[nodiscard]] std::optional<u64>
     RouteGeneration(scene::ObjectId edge) const noexcept;
@@ -125,7 +131,7 @@ private:
     editor_session::EditorWorldSession* world_{nullptr};
     std::unordered_map<
         scene::ObjectId,
-        path_geometry::PathDerivedProduct>
+        std::shared_ptr<const path_geometry::PathDerivedProduct>>
         products_;
     std::unordered_map<scene::ObjectId, u64>
         routeGenerations_;
