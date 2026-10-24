@@ -2676,6 +2676,10 @@ int orbit::editor_app::StudioApplication::Run(
         bool fullscreenKeyWasDown = false;
         auto fullscreenLastFrame = Clock::now();
 
+        // Construct the shared background CPU pool before measuring frames.
+        // Thread creation must not become an on-demand viewport hitch.
+        static_cast<void>(orbit::jobs::BackgroundCpuPool());
+
         while (window.PumpEvents())
         {
             {
