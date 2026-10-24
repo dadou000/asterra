@@ -442,10 +442,15 @@ bool ServiceBakesRebakesAndKeepsTheRunningBakeOnFailure()
         service.Observe(planet.id, planet, desc, {.resolution = 1024, .autoRebake = true});
         service.Tick(1.0);
         ok &= Check(service.Status(planet.id).state == terrain_bake::BakeState::Baking, "a large bake runs in the background");
+        ok &= Check(!service.WorkersQuiescent(),
+            "active world bake must not be retired while worker runs");
         service.Cancel(planet.id);
+        service.RequestCancelAll(); // cooperative shutdown without a blocking join
         ok &= Check(Pump(service, [&] { return service.Status(planet.id).state == terrain_bake::BakeState::Failed; }),
             "a cancelled bake stops");
         ok &= Check(service.Active(planet.id) == nullptr, "and installs nothing");
+        ok &= Check(service.WorkersQuiescent(),
+            "cancelled bake can be retired after worker completion");
     }
     return ok;
 }
