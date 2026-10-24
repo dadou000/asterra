@@ -35,7 +35,7 @@ public:
 
     void BeginFrame(const u32 completedSlot, const u32 framesInFlight)
     {
-        if (framesInFlight == 0U || framesInFlight > 8U ||
+        if (framesInFlight == 0U || framesInFlight > 64U ||
             completedSlot >= framesInFlight)
             throw std::invalid_argument("Invalid completed upload buffer slot.");
         if (slots_.size() != framesInFlight)
