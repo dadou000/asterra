@@ -11,14 +11,6 @@
 
 namespace orbit::terrain::detail
 {
-struct PhacelleErosionSettings
-{
-    double strength{0.0};       // 0 preserves legacy terrain; 0.85 is the HTML preset
-    double scale{1.0};          // frequency multiplier
-    std::uint32_t octaves{4};   // 1..5, filtered against sample footprint
-    double lowlandFadeMeters{2500.0};
-};
-
 namespace phacelle
 {
 struct V2 { float x, y; };
@@ -131,9 +123,10 @@ inline float Chart(V2 p,float footprint,float scale,float erosionStrength,std::u
 
 // Stable world-space charts and smooth triplanar weights avoid face seams.
 // Input is unit direction, radius and spatial footprint (metres).
+template <typename ErosionRecipe>
 inline double PhacelleErosionDeltaMeters(
     const std::array<double,3>& direction,double planetRadiusMeters,
-    double footprintMeters,const PhacelleErosionSettings& recipe) noexcept
+    double footprintMeters,const ErosionRecipe& recipe) noexcept
 {
     if(recipe.strength<=0.0||recipe.octaves==0)return 0.0;
     namespace p=phacelle;
