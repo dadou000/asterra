@@ -38,7 +38,8 @@ f64 Elevation(const TerrainSunShadowField& f, const math::Double3 p)
 }
 
 TerrainSunShadowField BuildTerrainSunShadowField(const terrain::TerrainSource& source,
-    const f64 radiusMeters, const u32 width, const u32 height)
+    const f64 radiusMeters, const u32 width, const u32 height,
+    const std::stop_token cancellation)
 {
     if (!std::isfinite(radiusMeters) || radiusMeters <= 0.0 || width < 4U || height < 2U)
         throw std::invalid_argument("Invalid terrain sun shadow field dimensions/radius.");
@@ -55,7 +56,8 @@ TerrainSunShadowField BuildTerrainSunShadowField(const terrain::TerrainSource& s
     {
         // Terminate superseded generations before wasting a full field bake.
         // The final revision check below still guards publication.
-        if ((y & 15U) == 0U && source.Revision() != field.sourceRevision)
+        if ((y & 15U) == 0U && (cancellation.stop_requested() ||
+            source.Revision() != field.sourceRevision))
             throw std::runtime_error("Terrain changed during sun shadow candidate generation.");
         const f64 latitude = ((static_cast<f64>(y) + 0.5) / height - 0.5) * kPi;
         for (u32 x = 0; x < width; ++x)
