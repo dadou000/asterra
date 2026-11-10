@@ -1,6 +1,7 @@
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 
 #include "ProceduralNoise.hpp"
+#include "PhacelleErosion.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -119,6 +120,17 @@ AnalyticTerrainSource::AnalyticTerrainSource(
         {
             throw std::invalid_argument("Orbit terrain amplitudes must be finite and nonnegative.");
         }
+    }
+
+    if (!std::isfinite(desc.phacelle.strength) ||
+        !std::isfinite(desc.phacelle.scale) ||
+        !std::isfinite(desc.phacelle.lowlandFadeMeters) ||
+        desc.phacelle.strength < 0.0 || desc.phacelle.strength > 2.0 ||
+        desc.phacelle.scale <= 0.0 || desc.phacelle.scale > 8.0 ||
+        desc.phacelle.lowlandFadeMeters < 0.0 ||
+        desc.phacelle.octaves > 5U)
+    {
+        throw std::invalid_argument("Orbit Phacelle erosion recipe is invalid.");
     }
     if (desc.detailOctaves > detailBands_.size() ||
         desc.mountains.octaves > mountainBands_.size())
@@ -245,6 +257,7 @@ AnalyticTerrainSource::AnalyticTerrainSource(
     mix(desc.craters.enabled ? 1U : 0U);
     mix(desc.craters.count);
     mix(desc.craters.localLevels);
+    mix(desc.phacelle.octaves);
     for (const f64 value : {planet.radiusMeters, desc.macroAmplitudeMeters,
              desc.macroWavelengthMeters, desc.detailAmplitudeMeters, desc.detailWavelengthMeters,
              desc.mountains.reliefMeters, desc.mountains.wavelengthMeters,
@@ -271,6 +284,11 @@ AnalyticTerrainSource::AnalyticTerrainSource(
         {
             throw std::invalid_argument("Orbit terrain recipe must contain finite values.");
         }
+        mix(std::bit_cast<u64>(value));
+    }
+    for (const f64 value : {desc.phacelle.strength,
+             desc.phacelle.scale, desc.phacelle.lowlandFadeMeters})
+    {
         mix(std::bit_cast<u64>(value));
     }
     for (const f64 value : {desc.craters.minimumRadiusMeters,
@@ -561,6 +579,27 @@ TerrainSample AnalyticTerrainSource::Sample(
         CraterHeightDelta(direction, query.footprintMeters) +
         LocalCraterHeightDelta(direction, query.footprintMeters);
     elevation += craterDelta;
+    // Opt-in v153 Phacelle: use the existing tectonic mountain mask and one
+    // canonical body-fixed field for the map, physics and GPU clipmap.
+    // The procedural frequency is footprint-filtered; no per-frame erosion.
+    if (desc_.phacelle.strength > 0.0 && desc_.phacelle.octaves > 0U &&
+        mountainMask > 1.0e-4)
+    {
+        const f64 heightAboveSea = std::max(0.0,
+            elevation - desc_.global.seaLevelMeters);
+        const f64 fade = desc_.phacelle.lowlandFadeMeters <= 0.0 ? 1.0 :
+            detail::Smooth(heightAboveSea / desc_.phacelle.lowlandFadeMeters);
+        if (fade > 0.0)
+        {
+            const f64 proceduralDelta = detail::PhacelleErosionDeltaMeters(
+                {direction.x, direction.y, direction.z},
+                planet_.radiusMeters, query.footprintMeters, desc_.phacelle);
+            // Retain negative valley carving without flattening all peaks.
+            const f64 positiveHeadroom = std::max(0.0, ceiling - elevation);
+            elevation += mountainMask * fade * std::clamp(
+                proceduralDelta, -1000.0, std::min(1000.0, positiveHeadroom));
+        }
+    }
     const f64 coarseElevation = elevation;
     // The full signed fBm sum is bounded by twice its initial amplitude.
     // Reserve that headroom before adding detail instead of flattening peaks
