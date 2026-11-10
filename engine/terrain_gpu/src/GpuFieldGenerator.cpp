@@ -17,7 +17,7 @@ namespace orbit::terrain_gpu
 namespace
 {
 // Must match FieldGenerationCompute.hpp's kParam* indices exactly.
-constexpr u32 kParamCount = 54;
+constexpr u32 kParamCount = 58;
 
 constexpr u32 kPlateStrideFloats = 9;
 constexpr u32 kHotspotStrideFloats = 34;
@@ -105,6 +105,10 @@ constexpr u32 kPushConstantDwords = 40;
     storeUint(51, desc.craters.enabled ? desc.craters.localLevels : 0U);
     storeFloat(52, desc.craters.localBaseSpacingMeters);
     storeFloat(53, desc.craters.localDensity);
+    storeFloat(54, desc.phacelle.strength);
+    storeFloat(55, desc.phacelle.scale);
+    storeUint(56, desc.phacelle.octaves);
+    storeFloat(57, desc.phacelle.lowlandFadeMeters);
 
     return result;
 }
