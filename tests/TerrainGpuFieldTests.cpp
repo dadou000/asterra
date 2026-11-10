@@ -54,8 +54,8 @@ int main()
     terrain_gpu::GpuFieldGenerator generator(*device, compiler, planet, source);
 
     // A modest, mid-detail clipmap-like level: 17x17 logical grid, 50m
-    // spacing/footprint, centered near the sandbox's own default spawn
-    // direction so the survey lands somewhere with real relief. No
+    // spacing/footprint, centered on a nonzero Phacelle erosion probe
+    // direction so the survey exercises genuine mountain relief. No
     // morph (morphToCoarser = false) -- keeps this first real test to
     // the core noise/tectonics/climate/biome path.
     constexpr u32 kResolution = 17;
@@ -84,7 +84,7 @@ int main()
     }
     if (strongestEffect < 1.0)
     {
-        std::cerr << "GPU Phacelle parity test found no active erosion sample.\\n";
+        std::cerr << "GPU Phacelle parity test found no active erosion sample.\n";
         return 1;
     }
     const world::SurfaceFrame frame = world::MakeSurfaceFrame(probeDirection);
