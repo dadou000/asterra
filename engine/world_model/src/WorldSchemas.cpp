@@ -310,6 +310,13 @@ void RegisterSchemas(
                 .unit = "m",
                 .defaultValue = 2'500.0,
                 .range = {.minimum = 0.0}
+            },
+            schema::PropertySchema{
+                .id = kTerrainPhacelleNonMountainWeight,
+                .name = "Phacelle Non-Mountain Weight",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.5,
+                .range = {.minimum = 0.0, .maximum = 1.0}
             }
         }
     });

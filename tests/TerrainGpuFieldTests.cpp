@@ -46,6 +46,7 @@ int main()
     terrain::AnalyticTerrainDesc desc{.seed = 0xA57E22AULL};
     desc.phacelle.strength = 0.85;
     desc.phacelle.lowlandFadeMeters = 0.0;
+    desc.phacelle.nonMountainWeight = 0.5;
     const terrain::AnalyticTerrainSource source(planet, desc);
 
     const auto device = rhi::vulkan::CreateDevice({.enableValidation = true});

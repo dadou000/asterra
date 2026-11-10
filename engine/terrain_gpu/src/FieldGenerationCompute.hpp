@@ -95,6 +95,7 @@ static const uint kParamPhacelleStrength = 54;
 static const uint kParamPhacelleScale = 55;
 static const uint kParamPhacelleOctaves = 56;
 static const uint kParamPhacelleLowlandFade = 57;
+static const uint kParamPhacelleNonMountainWeight = 58;
 
 static const uint kMaxHotspotAgeSteps = 6u;
 static const uint kPlateStrideBytes = 36u;
@@ -1151,8 +1152,10 @@ FullSample GenerateSample(float3 direction, float footprintMeters)
 
     // Identical CPU/GPU recipe, applied to the canonical heightfield before
     // the normal and material passes. Never evaluate this in the draw shader.
+    float erosionMask = max(mountainMask,
+        ParamFloat(kParamPhacelleNonMountainWeight));
     if (ParamFloat(kParamPhacelleStrength) > 0.0 &&
-        ParamUint(kParamPhacelleOctaves) > 0u && mountainMask > 1.0e-4)
+        ParamUint(kParamPhacelleOctaves) > 0u && erosionMask > 1.0e-4)
     {
         float fadeRange = ParamFloat(kParamPhacelleLowlandFade);
         float altitude = max(0.0, elevation - seaLevel);
@@ -1161,7 +1164,7 @@ FullSample GenerateSample(float3 direction, float footprintMeters)
         {
             float delta = PhacelleErosionDeltaMeters(direction, footprintMeters);
             float headroom = max(0.0, ceiling - elevation);
-            elevation += mountainMask * fade *
+            elevation += erosionMask * fade *
                 clamp(delta, -1000.0, min(1000.0, headroom));
         }
     }

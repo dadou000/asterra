@@ -55,6 +55,9 @@ struct PhacelleErosionDesc
     f64 scale{1.0};          // Frequency multiplier; v153 uses 1.0.
     u32 octaves{4};          // Maximum 5; each filtered by spatial footprint.
     f64 lowlandFadeMeters{2'500.0};
+    // Erosion weight away from tectonic mountains: mask = max(mountainMask,
+    // nonMountainWeight). 0 keeps gullies on mountains only.
+    f64 nonMountainWeight{0.0};
 };
 
 struct AnalyticTerrainDesc

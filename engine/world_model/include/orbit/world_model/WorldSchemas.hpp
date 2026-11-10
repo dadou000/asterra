@@ -325,6 +325,11 @@ inline constexpr schema::PropertyId kTerrainPhacelleOctaves{
     .low = 0x504841434f435456ULL
 };
 
+inline constexpr schema::PropertyId kTerrainPhacelleNonMountainWeight{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x504841434e4f4e4dULL
+};
+
 inline constexpr schema::PropertyId kTerrainPhacelleLowlandFadeMeters{
     .high = 0x4f52424954544552ULL,
     .low = 0x5048414346414445ULL

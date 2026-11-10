@@ -128,6 +128,9 @@ AnalyticTerrainSource::AnalyticTerrainSource(
         desc.phacelle.strength < 0.0 || desc.phacelle.strength > 2.0 ||
         desc.phacelle.scale <= 0.0 || desc.phacelle.scale > 8.0 ||
         desc.phacelle.lowlandFadeMeters < 0.0 ||
+        !std::isfinite(desc.phacelle.nonMountainWeight) ||
+        desc.phacelle.nonMountainWeight < 0.0 ||
+        desc.phacelle.nonMountainWeight > 1.0 ||
         desc.phacelle.octaves > 5U)
     {
         throw std::invalid_argument("Orbit Phacelle erosion recipe is invalid.");
@@ -287,7 +290,8 @@ AnalyticTerrainSource::AnalyticTerrainSource(
         mix(std::bit_cast<u64>(value));
     }
     for (const f64 value : {desc.phacelle.strength,
-             desc.phacelle.scale, desc.phacelle.lowlandFadeMeters})
+             desc.phacelle.scale, desc.phacelle.lowlandFadeMeters,
+             desc.phacelle.nonMountainWeight})
     {
         mix(std::bit_cast<u64>(value));
     }
@@ -582,8 +586,10 @@ TerrainSample AnalyticTerrainSource::Sample(
     // Opt-in v153 Phacelle: use the existing tectonic mountain mask and one
     // canonical body-fixed field for the map, physics and GPU clipmap.
     // The procedural frequency is footprint-filtered; no per-frame erosion.
+    const f64 erosionMask = std::max<f64>(
+        mountainMask, desc_.phacelle.nonMountainWeight);
     if (desc_.phacelle.strength > 0.0 && desc_.phacelle.octaves > 0U &&
-        mountainMask > 1.0e-4)
+        erosionMask > 1.0e-4)
     {
         const f64 heightAboveSea = std::max(0.0,
             elevation - desc_.global.seaLevelMeters);
@@ -596,7 +602,7 @@ TerrainSample AnalyticTerrainSource::Sample(
                 planet_.radiusMeters, query.footprintMeters, desc_.phacelle);
             // Retain negative valley carving without flattening all peaks.
             const f64 positiveHeadroom = std::max(0.0, ceiling - elevation);
-            elevation += mountainMask * fade * std::clamp(
+            elevation += erosionMask * fade * std::clamp(
                 proceduralDelta, -1000.0, std::min(1000.0, positiveHeadroom));
         }
     }
