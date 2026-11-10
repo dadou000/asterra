@@ -66,7 +66,8 @@ inline V2 Phacelle(V2 p,V2 dir) noexcept
     for(int dy=-1;dy<=2;dy++)for(int dx=-1;dx<=2;dx++)
     {
         auto h=Hash2(ix+dx,iy+dy);
-        float x=fx-dx-h.x*.5f,y=fy-dy-h.y*.5f;
+        float x=fx-static_cast<float>(dx)-h.x*.5f,
+              y=fy-static_cast<float>(dy)-h.y*.5f;
         float weight=std::max(0.f,std::exp(-2.f*(x*x+y*y))-.01111f);
         if(weight<1e-8f)continue;
         float phase=x*transverse.x+y*transverse.y+.25f*tau;
