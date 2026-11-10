@@ -1,6 +1,13 @@
 #include "StudioViewportInternals.hpp"
 #include <orbit/core/Log.hpp>
 
+#include <chrono>
+#include <exception>
+#include <future>
+#include <memory>
+#include <string>
+#include <utility>
+
 namespace orbit::studio_ui
 {
 std::shared_ptr<rhi::Buffer> StudioViewportRenderer::EnsureTerrainSunShadow(
@@ -9,47 +16,132 @@ std::shared_ptr<rhi::Buffer> StudioViewportRenderer::EnsureTerrainSunShadow(
 {
     auto& cache = terrainSunShadowPresentations_[std::string(viewportId)];
     const auto revision = source->Revision();
+
+    // A promise-backed future does not join its worker on destruction.
+    // Poll with zero timeout; the render thread never waits for terrain CPU
+    // generation and can continue showing an already published generation.
     if (cache.pending.valid() &&
         cache.pending.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
     {
         try
         {
-            const auto field = cache.pending.get();
-            // A world/body/recipe change may have overtaken the worker.
+            auto field = cache.pending.get();
             if (cache.pendingBody == body && cache.pendingSource == source &&
                 cache.pendingRadius == radius && field.sourceRevision == revision)
             {
-                auto candidate = lighting::UploadTerrainSunShadowField(*device_, field);
-                cache.buffer = std::move(candidate);
-                cache.body = body;
-                cache.source = source;
-                cache.radius = radius;
-                cache.revision = revision;
-                orbit::log::Info("Body-fixed terrain sun shadow field activated.");
+                // Keep CPU storage alive until every chunk has been transferred.
+                // The incomplete GPU buffer is deliberately never published.
+                cache.stagedField = std::make_unique<lighting::TerrainSunShadowField>(
+                    std::move(field));
+                cache.stagedBuffer.reset();
+                cache.uploadedSamples = 0U;
             }
         }
         catch (const std::exception& e)
         {
-            orbit::log::Warning(std::string("Terrain sun shadow candidate failed; keeping active field: ") + e.what());
+            orbit::log::Warning(std::string("Terrain sun shadow generation failed: ") + e.what());
             cache.retryAfter = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         }
-        cache.pendingSource.reset();
+        if (!cache.stagedField)
+            cache.pendingSource.reset();
     }
-    if (!cache.pending.valid() && std::chrono::steady_clock::now() >= cache.retryAfter &&
-        (cache.source != source || cache.body != body || cache.radius != radius || cache.revision != revision))
+
+    if (cache.stagedField)
     {
+        // The source may have changed while the job was running or uploading.
+        // Never attach an obsolete world-fixed shadow to the current planet.
+        if (cache.pendingBody != body || cache.pendingSource != source ||
+            cache.pendingRadius != radius || cache.stagedField->sourceRevision != revision)
+        {
+            cache.stagedField.reset();
+            cache.stagedBuffer.reset();
+            cache.uploadedSamples = 0U;
+            cache.pendingSource.reset();
+        }
+        else
+        {
+            try
+            {
+                if (!cache.stagedBuffer)
+                    cache.stagedBuffer = lighting::AllocateTerrainSunShadowFieldBuffer(
+                        *device_, *cache.stagedField);
+
+                // 256 KiB of height data per frame at most. A 1024x512 field
+                // needs eight visits; only the final completed buffer is used
+                // by the render graph. Buffer creation remains an RHI call.
+                constexpr std::size_t kMaximumSamplesPerFrame = 65'536U;
+                cache.uploadedSamples = lighting::UploadTerrainSunShadowFieldChunk(
+                    *cache.stagedBuffer, *cache.stagedField,
+                    cache.uploadedSamples, kMaximumSamplesPerFrame);
+
+                if (cache.uploadedSamples == cache.stagedField->elevations.size() &&
+                    source->Revision() == revision)
+                {
+                    cache.buffer = std::move(cache.stagedBuffer);
+                    cache.body = body;
+                    cache.source = source;
+                    cache.radius = radius;
+                    cache.revision = revision;
+                    cache.stagedField.reset();
+                    cache.pendingSource.reset();
+                    cache.uploadedSamples = 0U;
+                    orbit::log::Info("Body-fixed terrain sun shadow field activated.");
+                }
+            }
+            catch (const std::exception& e)
+            {
+                orbit::log::Warning(std::string("Terrain sun shadow upload failed: ") + e.what());
+                cache.stagedField.reset();
+                cache.stagedBuffer.reset();
+                cache.pendingSource.reset();
+                cache.uploadedSamples = 0U;
+                cache.retryAfter = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            }
+        }
+    }
+
+    const bool activeMatches = cache.body == body && cache.radius == radius &&
+        cache.source == source && cache.revision == revision;
+    if (!activeMatches && !cache.pending.valid() && !cache.stagedField &&
+        std::chrono::steady_clock::now() >= cache.retryAfter)
+    {
+        // One bounded low-priority background worker per viewport renderer,
+        // rather than spawning an unbounded std::async thread per request.
+        if (!terrainSunShadowPool_)
+            terrainSunShadowPool_ = std::make_unique<jobs::JobSystem>(1U, "TerrainSunShadow");
+        auto completion = std::make_shared<std::promise<lighting::TerrainSunShadowField>>();
+        cache.pending = completion->get_future();
         cache.pendingSource = source;
         cache.pendingBody = body;
         cache.pendingRadius = radius;
-        cache.pending = std::async(std::launch::async, [source, radius]
+        try
         {
-            return lighting::BuildTerrainSunShadowField(*source, radius);
-        });
+            terrainSunShadowPool_->Submit(jobs::JobPriority::Low,
+                [source, radius, completion]
+                {
+                    try
+                    {
+                        completion->set_value(
+                            lighting::BuildTerrainSunShadowField(*source, radius));
+                    }
+                    catch (...)
+                    {
+                        completion->set_exception(std::current_exception());
+                    }
+                });
+        }
+        catch (const std::exception& e)
+        {
+            cache.pending = {};
+            cache.pendingSource.reset();
+            cache.retryAfter = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            orbit::log::Warning(std::string("Terrain sun shadow scheduling failed: ") + e.what());
+        }
     }
-    // Old same-body data remains usable while a new recipe builds. A field
-    // from another body/radius is never applied to the replacement target.
-    // Changed terrain revisions must not re-use old mountain shadows.
-    return cache.body == body && cache.radius == radius &&
-        cache.source == source && cache.revision == revision ? cache.buffer : nullptr;
+
+    // This must be the *complete* candidate for this exact terrain revision.
+    // A different body, source or revision receives the analytic fallback,
+    // never stale terrain self-shadowing.
+    return activeMatches ? cache.buffer : nullptr;
 }
 } // namespace orbit::studio_ui
