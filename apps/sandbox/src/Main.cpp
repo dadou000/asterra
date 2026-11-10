@@ -241,9 +241,18 @@ int main()
                 orbit::world::MakeSurfaceFrame(
                     observerDirection);
 
+        // v153 erosion validation preset: this is intentionally enabled
+        // only in the sandbox. The core default remains fully backwards
+        // compatible (strength = 0) for authored projects and saved worlds.
         const orbit::terrain::AnalyticTerrainDesc
             terrainDescription{
-                .seed = 0xA57E22AULL
+                .seed = 0xA57E22AULL,
+                .phacelle = {
+                    .strength = 0.85,
+                    .scale = 1.0,
+                    .octaves = 4,
+                    .lowlandFadeMeters = 2'500.0
+                }
             };
 
         const auto authoritativeTerrain =
