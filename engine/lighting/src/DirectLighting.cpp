@@ -152,6 +152,7 @@ struct Constants
     float4 cameraFrameAndParticleGrid;
     float4 extra; // x: cloud shadow bound, y: proxy sun shadow bound, z: radiance level count, w: sky cache strength
     float4 planetShadow; // x planet radius, y stellar angular radius, z audit method, w audit debug
+    float4 skyIrradiance; // rgb current sky irradiance summary (coarse ambient fallback)
 };
 [[vk::push_constant]] Constants g;
 
@@ -165,7 +166,9 @@ struct VSOutput
 // cell at `position` (camera-relative); zero when no level covers it. Same
 // addressing as the cache sampler: the level's window is
 // [-axis/2, axis/2 - 1] cells around its centre.
-float3 CacheSkyIrradiance(float3 position, float3 normal, uint levelCount)
+// `w` is 1 when a valid cell was found; 0 means no level holds a valid cell here
+// (not yet estimated, or outside every level) and the caller must not read rgb.
+float4 CacheSkyIrradiance(float3 position, float3 normal, uint levelCount)
 {
     [loop]
     for (uint levelIndex = 0u; levelIndex < levelCount; ++levelIndex)
@@ -213,13 +216,13 @@ float3 CacheSkyIrradiance(float3 position, float3 normal, uint levelCount)
         // old, brighter or dimmer sky). 0 = unknown, use as stored.
         const float bakedSky = cell.skyIrradiance.w;
         const float rescale = bakedSky > 1.0e-6 ? 1.0 / bakedSky : 1.0;
-        return max(
+        return float4(max(
             cell.skyIrradiance.rgb * rescale *
                 (1.0 + dot(cell.skyGradient.xyz, normal)),
-            0.0);
+            0.0), 1.0);
     }
 
-    return 0.0;
+    return float4(0.0, 0.0, 0.0, 0.0);
 }
 
 )"
@@ -693,11 +696,35 @@ float4 main(VSOutput input) : SV_Target0
         const float3 skyPosition =
             ReconstructSurfacePosition(depth, cameraRay, cameraForward);
 
-        const float3 skyContribution =
-            baseColor *
-            (1.0 - metallic) *
-            CacheSkyIrradiance(skyPosition, n, skyLevelCount) *
-            (g.extra.w / 3.14159265);
+        const float4 skySample =
+            CacheSkyIrradiance(skyPosition, n, skyLevelCount);
+        float3 skyContribution;
+
+        if (skySample.w > 0.5)
+        {
+            skyContribution =
+                baseColor *
+                (1.0 - metallic) *
+                skySample.rgb *
+                (g.extra.w / 3.14159265);
+        }
+        else
+        {
+            // No valid cell yet (the cache fills in budgeted chunks, and only
+            // covers its levels): a coarse analytic ambient is far better than
+            // none. Half the current sky irradiance weighted by the
+            // surface's openness to the sky above, with a flat 70% open
+            // fraction standing in for terrain occlusion the cells would add.
+            const float3 bodyUp =
+                normalize(skyPosition + g.cameraFrameAndParticleGrid.xyz);
+            const float open = 0.7;
+            skyContribution =
+                baseColor *
+                (1.0 - metallic) *
+                max(g.skyIrradiance.rgb, 0.0) *
+                (0.5 * open * (1.0 + dot(bodyUp, n)) / 3.14159265);
+        }
+
         sunAuditSky += skyContribution;
         sceneLinear += skyContribution;
     }
@@ -862,7 +889,7 @@ DirectLightingRenderer::DirectLightingRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 36U,
+            .pushConstantDwords = 40U,
             .shaderResourceBuffers = 7U,
             .sampledTextures = 6U,
             .topology =
@@ -929,7 +956,7 @@ void DirectLightingRenderer::Draw(
     constexpr f32 kPhotopicLuminousEfficacy =
         683.0F;
 
-    const std::array<u32, 36> constants{
+    const std::array<u32, 40> constants{
         bits(light.directionToLight.x),
         bits(light.directionToLight.y),
         bits(light.directionToLight.z),
@@ -987,7 +1014,12 @@ void DirectLightingRenderer::Draw(
         bits(std::max(settings.planetRadiusMeters, 0.0F)),
         bits(std::max(settings.stellarAngularRadiusRadians, 0.0F)),
         bits(static_cast<f32>(std::min<u8>(settings.sunAuditMethod, 3U))),
-        bits(settings.sunAuditDebug ? 1.0F : 0.0F)
+        bits(settings.sunAuditDebug ? 1.0F : 0.0F),
+
+        bits(std::max(settings.skyIrradianceLinear.x, 0.0F)),
+        bits(std::max(settings.skyIrradianceLinear.y, 0.0F)),
+        bits(std::max(settings.skyIrradianceLinear.z, 0.0F)),
+        bits(0.0F)
     };
 
     commands.SetRenderTarget(targetSceneColor);

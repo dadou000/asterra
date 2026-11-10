@@ -33,6 +33,10 @@ struct DirectLightingSettings
     u8 sunAuditMethod{0U};
     bool sunAuditDebug{false};
     rhi::Buffer* sunAuditTerrain{nullptr};
+    // Current sky irradiance summary (scene-linear, normalized by the solar
+    // reference). Drives the coarse analytic ambient used where the radiance
+    // cache has no valid cell yet.
+    math::Float3 skyIrradianceLinear{};
 };
 
 class DirectLightingRenderer

@@ -2140,6 +2140,7 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
          radianceCellsHandle,
          radianceLevelsHandle,
          radianceLevelCount,
+         currentSkyIrradiance = radianceEstimateSettings.skyIrradianceLinear,
          currentSkyLuminance =
              0.2126F * radianceEstimateSettings.skyIrradianceLinear.x +
              0.7152F * radianceEstimateSettings.skyIrradianceLinear.y +
@@ -2214,7 +2215,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                         studioDirectLight.sunAngularRadiusRadians,
                     .sunAuditMethod = auditInputsOnly ? 0U : auditMethod,
                     .sunAuditDebug = sunAuditDebug,
-                    .sunAuditTerrain = terrainSunShadow.get()
+                    .sunAuditTerrain = terrainSunShadow.get(),
+                    .skyIrradianceLinear = currentSkyIrradiance
                 });
 
             if (lightingTimestamps != nullptr)
