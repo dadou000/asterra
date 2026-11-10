@@ -251,6 +251,9 @@ int main()
         std::fabs(channelSky.sky.l0.x - 0.05F) > 1.0e-6F ||
         std::fabs(channelSky.sky.l0.y - 0.10F) > 1.0e-6F ||
         std::fabs(channelSky.sky.l0.z - 0.25F) > 1.0e-6F ||
+        // Luminance (Rec.709) of the sky the cell was baked with, so shading
+        // can rescale a stale cell to the current sky.
+        std::fabs(channelSky.sky.referenceLuminance - 0.2004F) > 1.0e-5F ||
         std::fabs(gradientLength - 1.0F) > 1.0e-4F)
     {
         return 20;

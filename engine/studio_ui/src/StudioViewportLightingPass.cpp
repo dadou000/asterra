@@ -2106,6 +2106,10 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
          radianceCellsHandle,
          radianceLevelsHandle,
          radianceLevelCount,
+         currentSkyLuminance =
+             0.2126F * radianceEstimateSettings.skyIrradianceLinear.x +
+             0.7152F * radianceEstimateSettings.skyIrradianceLinear.y +
+             0.0722F * radianceEstimateSettings.skyIrradianceLinear.z,
          lightingTimestamps,
          frameIndex,
          nearFieldIndirect,
@@ -2155,7 +2159,9 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                     ? &resources.Buffer(radianceLevelsHandle)
                     : nullptr,
                 skyCacheFill ? radianceLevelCount : 0U,
-                kSkyCacheStrength,
+                // The cache stores each cell's sky at its bake-time
+                // brightness; shading rescales it to the current sky.
+                kSkyCacheStrength * currentSkyLuminance,
                 // The sky/ground fill floor tracks the stellar
                 // irradiance actually reaching this body, so distant
                 // planets are not washed flat by a fixed 3.5% floor.

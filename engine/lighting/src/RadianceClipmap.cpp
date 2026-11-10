@@ -177,7 +177,7 @@ GpuRadianceCell EncodeGpuRadianceCell(
             FiniteNonNegative(cell.sky.l0.x),
             FiniteNonNegative(cell.sky.l0.y),
             FiniteNonNegative(cell.sky.l0.z),
-            0.0F
+            FiniteNonNegative(cell.sky.referenceLuminance)
         },
         .skyGradient = {
             finite(cell.sky.gradient.x),

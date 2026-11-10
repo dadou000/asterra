@@ -137,7 +137,8 @@ int main()
         .irradiance = irradiance,
         .sky = {
             .l0 = {0.25F, 0.5F, 1.0F},
-            .gradient = {0.0F, 1.0F, 0.0F}
+            .gradient = {0.0F, 1.0F, 0.0F},
+            .referenceLuminance = 0.75F
         },
         .skyTransport = 0.18F,
         .revision = 0x123456U,
@@ -153,6 +154,7 @@ int main()
         gpu.skyIrradiance.x != 0.25F ||
         gpu.skyIrradiance.z != 1.0F ||
         gpu.skyGradient.y != 1.0F ||
+        gpu.skyIrradiance.w != 0.75F ||
         gpu.skyGradient.w != 0.18F ||
         gpu.irradiance0.w != 1.0F ||
         gpu.irradianceX.w != 2.5F ||

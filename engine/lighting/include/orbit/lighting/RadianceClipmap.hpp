@@ -41,6 +41,13 @@ struct SkyIrradianceL1
 {
     math::Float3 l0{};
     math::Float3 gradient{};
+    // Luminance of the sky irradiance summary this cell was estimated with.
+    // The cell is re-estimated in budgeted chunks, so when the sun or sky
+    // changes (day to night, cloud cover) un-refreshed cells still hold the
+    // old sky. Shading rescales l0 by current / referenceLuminance so a stale
+    // cell can never show the previous sky; only its occlusion (geometry) is
+    // trusted. Zero means unknown: use l0 as stored.
+    f32 referenceLuminance{0.0F};
 };
 
 [[nodiscard]] math::Float3 EvaluateSkyIrradiance(
@@ -72,7 +79,8 @@ struct RadianceCellKey
 // irradianceZ.w   = revision encoded as float-compatible low 24 bits.
 //
 // skyIrradiance.rgb = sky-only L0 (see SkyIrradianceL1)
-// skyIrradiance.w   = reserved
+// skyIrradiance.w   = luminance of the sky summary l0 was estimated with
+//                     (SkyIrradianceL1::referenceLuminance), 0 = unknown
 // skyGradient.xyz   = sky-only gradient direction
 // skyGradient.w     = one-bounce transport the cell's L1 was estimated with,
 //                     so the reflection shaders can reproduce the sky the L1

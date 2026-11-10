@@ -207,8 +207,14 @@ float3 CacheSkyIrradiance(float3 position, float3 normal, uint levelCount)
             continue;
         }
 
+        // skyIrradiance.w is the sky luminance the cell was baked with; divide
+        // it out so the caller's current-sky scale replaces it (a cell that
+        // has not been re-estimated since the sky changed must not keep the
+        // old, brighter or dimmer sky). 0 = unknown, use as stored.
+        const float bakedSky = cell.skyIrradiance.w;
+        const float rescale = bakedSky > 1.0e-6 ? 1.0 / bakedSky : 1.0;
         return max(
-            cell.skyIrradiance.rgb *
+            cell.skyIrradiance.rgb * rescale *
                 (1.0 + dot(cell.skyGradient.xyz, normal)),
             0.0);
     }
