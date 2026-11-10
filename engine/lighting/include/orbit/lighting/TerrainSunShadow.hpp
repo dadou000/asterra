@@ -5,6 +5,7 @@
 #include <orbit/terrain/TerrainSource.hpp>
 
 #include <memory>
+#include <stop_token>
 #include <vector>
 
 namespace orbit::lighting
@@ -25,7 +26,7 @@ struct TerrainSunShadowField
 
 [[nodiscard]] TerrainSunShadowField BuildTerrainSunShadowField(
     const terrain::TerrainSource& source, f64 radiusMeters,
-    u32 width = 1024U, u32 height = 512U);
+    u32 width = 1024U, u32 height = 512U, std::stop_token cancellation = {});
 
 // CPU reference for the shared GPU traversal, including longitude wrapping.
 [[nodiscard]] f64 TerrainSunVisibility(const TerrainSunShadowField& field,
