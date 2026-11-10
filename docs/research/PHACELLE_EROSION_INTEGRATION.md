@@ -39,7 +39,7 @@ independent height authority, or a shader-side decoration.
 The native `AnalyticTerrainDesc` default is **0** strength. The integrated
 Studio world enables the v153 preset through the schema properties
 `Phacelle Erosion Strength/Scale/Octaves` and `Phacelle Lowland Fade`
-(defaults 0.85 / 1.0 / 4 / 2500 m, `WorldSchemas.cpp`), read in
+(defaults 0.85 / 1.0 / 4 / 100 m, non-mountain weight 1.0, `WorldSchemas.cpp`), read in
 `SurfaceComposition.cpp`. Set strength to 0 on a terrain object to disable.
 The sandbox preset in `apps/sandbox/src/Main.cpp` is unchanged.
 The modifier is multiplied by the native tectonic mountain mask,

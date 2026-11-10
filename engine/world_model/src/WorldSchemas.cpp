@@ -308,14 +308,14 @@ void RegisterSchemas(
                 .name = "Phacelle Lowland Fade",
                 .kind = schema::PropertyKind::Float,
                 .unit = "m",
-                .defaultValue = 2'500.0,
+                .defaultValue = 100.0,
                 .range = {.minimum = 0.0}
             },
             schema::PropertySchema{
                 .id = kTerrainPhacelleNonMountainWeight,
                 .name = "Phacelle Non-Mountain Weight",
                 .kind = schema::PropertyKind::Float,
-                .defaultValue = 0.5,
+                .defaultValue = 1.0,
                 .range = {.minimum = 0.0, .maximum = 1.0}
             }
         }

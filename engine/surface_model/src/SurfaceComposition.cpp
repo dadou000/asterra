@@ -1233,9 +1233,9 @@ ConstraintSetFor(
     result.phacelle.octaves = static_cast<u32>(phacelleOctaves);
     result.phacelle.lowlandFadeMeters = PropertyOr<f64>(
         objects, object, world_model::kTerrainPhacelleLowlandFadeMeters,
-        2'500.0);
+        100.0);
     result.phacelle.nonMountainWeight = PropertyOr<f64>(
-        objects, object, world_model::kTerrainPhacelleNonMountainWeight, 0.5);
+        objects, object, world_model::kTerrainPhacelleNonMountainWeight, 1.0);
 
     if (result.macroAmplitudeMeters < 0.0 ||
         result.detailAmplitudeMeters < 0.0 ||
