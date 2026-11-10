@@ -1,4 +1,5 @@
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/terrain/TerrainAmbientLayout.hpp>
 #include <orbit/lighting/SunVisibilityShader.hpp>
 #include <orbit/lighting/TerrainSunShadow.hpp>
 #include <string>
@@ -93,53 +94,56 @@ StructuredBuffer<GpuRadianceCell> g_radianceCells;
 [[vk::binding(5, 0)]]
 StructuredBuffer<GpuRadianceLevelInfo> g_radianceLevels;
 
-[[vk::binding(7, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_baseRoughness;
-[[vk::binding(7, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_baseSampler;
 
-[[vk::binding(8, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_normalMetallic;
-[[vk::binding(8, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_normalSampler;
 
-[[vk::binding(9, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_emissionClass;
-[[vk::binding(9, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_emissionSampler;
 
-[[vk::binding(10, 0)]]
+[[vk::binding(12, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth;
-[[vk::binding(10, 0)]]
+[[vk::binding(12, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler;
 
 // Sun transmittance through the cloud layer (red), reduced resolution.
-[[vk::binding(11, 0)]]
+[[vk::binding(13, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_cloudShadow;
-[[vk::binding(11, 0)]]
+[[vk::binding(13, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_cloudShadowSampler;
 
 // Lighting from authored Visibility Proxies at full resolution (red = sun
 // visibility, 1 = lit; gba = sky irradiance x open hemisphere); written by
 // ProxySunShadowRenderer.
-[[vk::binding(12, 0)]]
+[[vk::binding(14, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_proxySunShadow;
-[[vk::binding(12, 0)]]
+[[vk::binding(14, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_proxySunShadowSampler;
 
 [[vk::binding(6, 0)]] ByteAddressBuffer g_sunAuditTerrain;
+// Terrain sky visibility carried by the toroidal clipmap (see TerrainAmbientLayout.hpp).
+[[vk::binding(7, 0)]] ByteAddressBuffer g_terrainAmbient;
+[[vk::binding(8, 0)]] ByteAddressBuffer g_terrainAmbientLevels;
 
 struct Constants
 {
@@ -152,7 +156,7 @@ struct Constants
     float4 cameraFrameAndParticleGrid;
     float4 extra; // x: cloud shadow bound, y: proxy sun shadow bound, z: radiance level count, w: sky cache strength
     float4 planetShadow; // x planet radius, y stellar angular radius, z audit method, w audit debug
-    float4 skyIrradiance; // rgb current sky irradiance summary (coarse ambient fallback)
+    float4 skyIrradiance; // rgb current sky irradiance summary, w terrain ambient level count
 };
 [[vk::push_constant]] Constants g;
 
@@ -686,18 +690,27 @@ float4 main(VSOutput input) : SV_Target0
     // above instead.
     const uint skyLevelCount =
         uint(g.extra.z + 0.5);
+    const uint terrainAmbientLevels = uint(g.skyIrradiance.w + 0.5);
 
     if (g.planetShadow.z < 2.5 &&
         depth > 0.0 &&
-        skyLevelCount > 0u &&
+        (skyLevelCount > 0u || terrainAmbientLevels > 0u) &&
         g.extra.w > 0.0 &&
         floor(emissionClass.a + 0.01) != 3.0)
     {
         const float3 skyPosition =
             ReconstructSurfacePosition(depth, cameraRay, cameraForward);
 
-        const float4 skySample =
-            CacheSkyIrradiance(skyPosition, n, skyLevelCount);
+        // The 3D cache is exact near the camera (it also sees authored
+        // structures) but dense only within about a kilometre. Beyond its fine
+        // levels the clipmap's own sky-visibility channel covers the terrain at
+        // the resolution of the level that draws it; with that available the
+        // cache's coarse levels are not consulted for the sky.
+        const uint cacheSkyLevels = terrainAmbientLevels > 0u
+            ? min(skyLevelCount, 3u) : skyLevelCount;
+        const float4 skySample = cacheSkyLevels > 0u
+            ? CacheSkyIrradiance(skyPosition, n, cacheSkyLevels)
+            : float4(0.0, 0.0, 0.0, 0.0);
         float3 skyContribution;
 
         if (skySample.w > 0.5)
@@ -710,19 +723,24 @@ float4 main(VSOutput input) : SV_Target0
         }
         else
         {
-            // No valid cell yet (the cache fills in budgeted chunks, and only
-            // covers its levels): a coarse analytic ambient is far better than
-            // none. Half the current sky irradiance weighted by the
-            // surface's openness to the sky above, with a flat 70% open
-            // fraction standing in for terrain occlusion the cells would add.
-            const float3 bodyUp =
-                normalize(skyPosition + g.cameraFrameAndParticleGrid.xyz);
-            const float open = 0.7;
+            const float3 bodyPosition =
+                skyPosition + g.cameraFrameAndParticleGrid.xyz;
+            const float3 bodyUp = normalize(bodyPosition);
+            // Terrain sky visibility from the finest clipmap level covering
+            // this point: geometry only, so the current sky scales it here.
+            const float4 terrainSky = terrainAmbientLevels > 0u
+                ? TerrainAmbientLookup(g_terrainAmbientLevels, g_terrainAmbient,
+                    terrainAmbientLevels, bodyPosition)
+                : float4(-1.0, 0.0, 0.0, 0.0);
+            // Where nothing covers the point a coarse analytic ambient is far
+            // better than none: a flat 70% open fraction and the local up.
+            const float openness = terrainSky.x >= 0.0 ? terrainSky.x : 0.7;
+            const float3 lean = terrainSky.x >= 0.0 ? terrainSky.yzw : bodyUp;
             skyContribution =
                 baseColor *
                 (1.0 - metallic) *
                 max(g.skyIrradiance.rgb, 0.0) *
-                (0.5 * open * (1.0 + dot(bodyUp, n)) / 3.14159265);
+                (0.5 * openness * (1.0 + dot(lean, n)) / 3.14159265);
         }
 
         sunAuditSky += skyContribution;
@@ -868,6 +886,8 @@ DirectLightingRenderer::DirectLightingRenderer(
     const auto entry = pixelSource.find("float4 main(VSOutput input) : SV_Target0");
     if (entry == std::string::npos)
         throw std::logic_error("Direct lighting pixel entry point not found.");
+    pixelSource.insert(entry, std::string("#define TA_BUFFER ByteAddressBuffer\n") +
+        terrain::kTerrainAmbientCommonShader + terrain::kTerrainAmbientLookupShader);
     pixelSource.insert(entry, kSunVisibilityShader);
     const auto ps =
         compiler.Compile({
@@ -890,7 +910,7 @@ DirectLightingRenderer::DirectLightingRenderer(
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
             .pushConstantDwords = 40U,
-            .shaderResourceBuffers = 7U,
+            .shaderResourceBuffers = 9U,
             .sampledTextures = 6U,
             .topology =
                 rhi::PrimitiveTopology::TriangleList,
@@ -1019,7 +1039,8 @@ void DirectLightingRenderer::Draw(
         bits(std::max(settings.skyIrradianceLinear.x, 0.0F)),
         bits(std::max(settings.skyIrradianceLinear.y, 0.0F)),
         bits(std::max(settings.skyIrradianceLinear.z, 0.0F)),
-        bits(0.0F)
+        bits(settings.terrainAmbient != nullptr && settings.terrainAmbientLevels != nullptr
+                ? static_cast<f32>(settings.terrainAmbientLevelCount) : 0.0F)
     };
 
     commands.SetRenderTarget(targetSceneColor);
@@ -1071,6 +1092,14 @@ void DirectLightingRenderer::Draw(
     commands.SetGraphicsBuffer(6U,
         settings.sunAuditTerrain != nullptr
             ? *settings.sunAuditTerrain : *emptySunAuditTerrain_);
+    // Without the terrain ambient channel (count 0) the shader never reads
+    // these, but both slots still need a buffer.
+    commands.SetGraphicsBuffer(7U,
+        settings.terrainAmbient != nullptr
+            ? *settings.terrainAmbient : *emptySunAuditTerrain_);
+    commands.SetGraphicsBuffer(8U,
+        settings.terrainAmbientLevels != nullptr
+            ? *settings.terrainAmbientLevels : *emptySunAuditTerrain_);
 
     commands.SetGraphicsTexture(
         0U,

@@ -340,6 +340,7 @@ void StudioPropertiesPanel::Register()
                         drawBypass("Cloud Shadows", layers.bypassCloudShadow);
                         drawBypass("Proxy Sun Shadows", layers.bypassProxySunShadow);
                         drawBypass("Sky Cache Fill", layers.bypassSkyCache);
+                        drawBypass("Terrain Ambient", layers.bypassTerrainAmbient);
                         drawBypass("Visibility Proxy Surfaces", layers.bypassProxySurfaces);
                         drawBypass("Imported Mesh Surfaces", layers.bypassMeshSurfaces);
                     }

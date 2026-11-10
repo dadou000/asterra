@@ -8,6 +8,7 @@ add_library(OrbitTerrainGpu STATIC
     src/GpuPhysicalPageComposite.cpp
     src/PersistentGpuTerrainCache.cpp
     src/GpuRegionDelta.cpp
+    src/GpuTerrainAmbient.cpp
 )
 
 add_library(Orbit::TerrainGpu ALIAS OrbitTerrainGpu)

@@ -329,6 +329,7 @@ def orbit_view_terrain_layers_set(
     bypass_sdf_terrain: bool | None = None,
     bypass_sdf_proxies: bool | None = None,
     bypass_sky_cache: bool | None = None,
+    bypass_terrain_ambient: bool | None = None,
     bypass_indirect_lighting: bool | None = None,
     bypass_near_field_water: bool | None = None,
     bypass_atmosphere: bool | None = None,
@@ -402,6 +403,7 @@ def orbit_view_terrain_layers_set(
     bypass_proxy_sun_shadow (the hardware-ray-query sun shadow cast by authored Visibility Proxies),
     bypass_proxy_surfaces (draw authored Visibility Proxies as lit geometry; true leaves them invisible occluders),
     bypass_sky_cache (the radiance cache's sky-only fill: sky irradiance occluded by terrain and proxies, applied to every near-field surface),
+    bypass_terrain_ambient (the terrain sky-visibility channel carried by the toroidal clipmap; the fill falls back to a flat analytic ambient),
     bypass_indirect_lighting (final gather + hybrid reflections), bypass_hybrid_reflections (only the reflections stage, to tell the two apart), bypass_radiance_cache (only the radiance-cache fallback of the final gather), bypass_near_field_water and
     bypass_atmosphere (also skips the clouds drawn after it) each skip one stage of the frame
     for this view, to bisect a rendering artefact (default false). indirect_coverage_view
@@ -474,6 +476,7 @@ def orbit_view_terrain_layers_set(
         "bypass_sdf_terrain": bypass_sdf_terrain,
         "bypass_sdf_proxies": bypass_sdf_proxies,
         "bypass_sky_cache": bypass_sky_cache,
+        "bypass_terrain_ambient": bypass_terrain_ambient,
         "bypass_indirect_lighting": bypass_indirect_lighting,
         "bypass_near_field_water": bypass_near_field_water,
         "bypass_hybrid_reflections": bypass_hybrid_reflections,

@@ -196,6 +196,18 @@ add_custom_command(TARGET OrbitTerrainSunShadowGpuTests POST_BUILD
 add_test(NAME Orbit.TerrainSunShadowGpu COMMAND OrbitTerrainSunShadowGpuTests)
 set_tests_properties(Orbit.TerrainSunShadowGpu PROPERTIES LABELS "gpu")
 
+add_executable(OrbitTerrainAmbientGpuTests TerrainAmbientGpuTests.cpp)
+target_link_libraries(OrbitTerrainAmbientGpuTests PRIVATE
+    Orbit::TerrainGpu Orbit::RhiVulkan Orbit::ShaderDxc)
+target_compile_features(OrbitTerrainAmbientGpuTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainAmbientGpuTests)
+add_custom_command(TARGET OrbitTerrainAmbientGpuTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitTerrainAmbientGpuTests>")
+add_test(NAME Orbit.TerrainAmbientGpu COMMAND OrbitTerrainAmbientGpuTests)
+set_tests_properties(Orbit.TerrainAmbientGpu PROPERTIES LABELS "gpu")
+
+
 target_link_libraries(OrbitCloudLightVolumeTests
     PRIVATE
         Orbit::CelestialClouds

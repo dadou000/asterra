@@ -37,6 +37,12 @@ struct DirectLightingSettings
     // reference). Drives the coarse analytic ambient used where the radiance
     // cache has no valid cell yet.
     math::Float3 skyIrradianceLinear{};
+    // Terrain sky-visibility channel carried by the toroidal clipmap (see
+    // orbit/terrain/TerrainAmbientLayout.hpp): the ambient texels of every
+    // level and the per-frame level table. Null or zero levels turn it off.
+    rhi::Buffer* terrainAmbient{nullptr};
+    rhi::Buffer* terrainAmbientLevels{nullptr};
+    u32 terrainAmbientLevelCount{0U};
 };
 
 class DirectLightingRenderer

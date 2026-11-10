@@ -22,6 +22,9 @@ invariants = [
   "GpuRadianceCell is exactly 96 bytes (static_assert): skyIrradiance.rgb = L0, skyGradient.xyz = direction toward the open sky, skyGradient.w = the one-bounce transport the L1 used.",
   "The sky channel is not scaled by the 0.18 one-bounce transport that the old L1 sky used.",
   "The fill is albedo / pi * E(n) with E(n) = l0 * (1 + dot(gradient, n)), applied on every near-field surface independent of how confident the screen-space gather is.",
+  "A cell stores the luminance of the sky summary it was baked with (SkyIrradianceL1::referenceLuminance, packed in skyIrradiance.w); shading divides it out and applies the current sky luminance, so a cell not yet re-estimated after the sun or sky changed never shows the old sky.",
+  "The cache holds its last one-bounce L1 for dirty cells while a refresh converges, except that DropHeldValues zeroes every resident cell's L1 (cells stay valid and scheduled) when the sun drops below the camera's horizon (about -3 degrees, hysteresis), so daylight bounce does not linger.",
+  "Sky lookup order in direct lighting: the three finest 3D levels (cells up to 32 m, they also see authored proxies), then the clipmap terrain ambient channel (see /rendering/terrain/clipmaps/ambient), then a flat 70% open analytic ambient using the current sky irradiance. The fill therefore never shows nothing where a surface exists.",
   "The fill is added to scene colour after the gather has read it and never into the gather's history, so it cannot accumulate frame to frame.",
   "Authored proxy surfaces keep their ray-traced sky fill instead of the cell fill (more accurate); they skip the cache entirely.",
   "The hybrid reflection cache fallback rebuilds the legacy one-bounce sky from this channel (2 * l0 * transport, old lobe weights); triangle hits instead shade/reuse the shared surface field (see /rendering/lighting/smooth-reflections).",
@@ -29,13 +32,13 @@ invariants = [
   "The fill is zero without sunlight (night side, space) and whenever the near-field indirect stack is off (planet seen from orbit, bypass_indirect_lighting).",
   "A cell layout change needs no content migration: a new generation starts with an empty cache that refills.",
 ]
-related = ["/rendering/lighting/proxy-sun-shadow"]
+related = ["/rendering/lighting/proxy-sun-shadow", "/rendering/terrain/clipmaps/ambient"]
 depends_on = ["/rendering/lighting"]
 verify = [
   "ctest -R Orbit.LightingRadianceEstimator.",
   "orbit_view_terrain_layers_set(bypass_sky_cache=true): shadowed and enclosed terrain areas go dark (sky fill off); back to false restores them.",
 ]
-verified = "f842a956"
+verified = "b9301364"
 
 [[diagnose]]
 symptom = "cast shadows or enclosed spaces are black instead of sky-lit"

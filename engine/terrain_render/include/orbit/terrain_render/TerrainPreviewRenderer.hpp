@@ -165,6 +165,16 @@ struct TerrainClipmapLevelSummary
     u64 drawnVertices{0U};
 };
 
+// The terrain sky-visibility channel (see orbit/terrain/TerrainAmbientLayout.hpp)
+// for the lighting pass: one buffer holding every level's ambient texels and a
+// small per-frame level table. Null buffers mean the channel is unavailable.
+struct TerrainAmbientView
+{
+    rhi::Buffer* ambient{nullptr};
+    rhi::Buffer* levels{nullptr};
+    u32 levelCount{0U};
+};
+
 class TerrainPreviewRenderer
 {
 public:
@@ -246,6 +256,9 @@ public:
     // Terrain elevation under the camera (metres above the planet radius), so the
     // planner measures distance to the actual ground.
     void SetGroundElevationHint(f64 elevationMeters) noexcept;
+    // Sky visibility per clipmap sample, toroidally addressed like the terrain
+    // itself. `frameIndex` selects the level table written for that frame slot.
+    [[nodiscard]] TerrainAmbientView AmbientVisibility(u32 frameIndex) const noexcept;
     [[nodiscard]] const terrain_view::ClipmapPlan& ClipmapPlan() const noexcept;
     [[nodiscard]] TerrainRenderedGround RenderedGround() const noexcept;
     // Every level of the current layout, finest first.

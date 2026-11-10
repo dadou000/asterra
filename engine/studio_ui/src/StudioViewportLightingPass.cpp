@@ -2141,6 +2141,18 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
          radianceLevelsHandle,
          radianceLevelCount,
          currentSkyIrradiance = radianceEstimateSettings.skyIrradianceLinear,
+         terrainAmbientView = [&]
+         {
+             terrain_render::TerrainAmbientView view{};
+             // Off with the sky fill it belongs to (orbit, bypass_sky_cache,
+             // bypass_indirect_lighting) and with its own bypass flag.
+             if (const auto found = terrainPresentations_.find(info.id);
+                 skyCacheFill && !info.layers.bypassTerrainAmbient &&
+                 found != terrainPresentations_.end() && found->second.renderer != nullptr)
+                 view = found->second.renderer->AmbientVisibility(
+                         frameIndex % framesInFlight_);
+             return view;
+         }(),
          currentSkyLuminance =
              0.2126F * radianceEstimateSettings.skyIrradianceLinear.x +
              0.7152F * radianceEstimateSettings.skyIrradianceLinear.y +
@@ -2216,7 +2228,10 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                     .sunAuditMethod = auditInputsOnly ? 0U : auditMethod,
                     .sunAuditDebug = sunAuditDebug,
                     .sunAuditTerrain = terrainSunShadow.get(),
-                    .skyIrradianceLinear = currentSkyIrradiance
+                    .skyIrradianceLinear = currentSkyIrradiance,
+                    .terrainAmbient = terrainAmbientView.ambient,
+                    .terrainAmbientLevels = terrainAmbientView.levels,
+                    .terrainAmbientLevelCount = terrainAmbientView.levelCount
                 });
 
             if (lightingTimestamps != nullptr)

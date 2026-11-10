@@ -135,6 +135,9 @@ struct StudioTerrainLayerOptions
     bool bypassMeshSurfaces{false};
     // Skips the radiance cache's sky-only fill (sky irradiance occluded by terrain and proxies, added by direct lighting).
     bool bypassSkyCache{false};
+    // Skip the terrain sky-visibility channel carried by the clipmap; the fill
+    // falls back to the flat analytic ambient.
+    bool bypassTerrainAmbient{false};
     bool bypassIndirectLighting{false};
     bool bypassNearFieldWater{false};
     bool bypassAtmosphere{false};

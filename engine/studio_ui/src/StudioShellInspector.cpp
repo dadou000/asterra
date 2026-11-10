@@ -530,6 +530,10 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
                     layers.bypassSkyCache) || layersChanged;
             layersChanged =
                 context.Checkbox(
+                    "Bypass terrain ambient (clipmap sky visibility)##bypass-terrain-ambient",
+                    layers.bypassTerrainAmbient) || layersChanged;
+            layersChanged =
+                context.Checkbox(
                     "Bypass indirect lighting (final gather + reflections)##bypass-indirect",
                     layers.bypassIndirectLighting) || layersChanged;
             layersChanged =

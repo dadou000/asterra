@@ -334,6 +334,7 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"bypass_sdf_terrain", layers.bypassSdfTerrain},
         {"bypass_sdf_proxies", layers.bypassSdfProxies},
         {"bypass_sky_cache", layers.bypassSkyCache},
+        {"bypass_terrain_ambient", layers.bypassTerrainAmbient},
         {"bypass_indirect_lighting", layers.bypassIndirectLighting},
         {"bypass_near_field_water", layers.bypassNearFieldWater},
         {"bypass_atmosphere", layers.bypassAtmosphere},
@@ -940,6 +941,7 @@ void RegisterStudioRenderViewRpc(
                 applyFlag("bypass_sdf_terrain", layers.bypassSdfTerrain);
                 applyFlag("bypass_sdf_proxies", layers.bypassSdfProxies);
                 applyFlag("bypass_sky_cache", layers.bypassSkyCache);
+                applyFlag("bypass_terrain_ambient", layers.bypassTerrainAmbient);
                 applyFlag("bypass_indirect_lighting", layers.bypassIndirectLighting);
                 applyFlag("bypass_near_field_water", layers.bypassNearFieldWater);
                 applyFlag("bypass_atmosphere", layers.bypassAtmosphere);
