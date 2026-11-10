@@ -33,7 +33,13 @@ int main()
         const shader::dxc::DxcShaderCompiler compiler;
         Ridge source;
         const auto field = lighting::BuildTerrainSunShadowField(source, 1.0e6, 2048U, 1024U);
-        auto terrain = lighting::UploadTerrainSunShadowField(*device, field);
+        // Exercise the same unpublished, incremental GPU buffer path as Studio.
+        // A partial field must never be bound into a render pass.
+        auto terrain = lighting::AllocateTerrainSunShadowFieldBuffer(*device, field);
+        std::size_t uploaded = 0U;
+        while (uploaded < field.elevations.size())
+            uploaded = lighting::UploadTerrainSunShadowFieldChunk(*terrain, field,
+                uploaded, 65'536U);
         std::array<math::Float4, count> points{};
         for (u32 i = 0U; i < count; ++i)
             points[i] = {1000500.0F + static_cast<f32>(i) * 60.0F, -200000.0F, 0.0F, 0.001F};

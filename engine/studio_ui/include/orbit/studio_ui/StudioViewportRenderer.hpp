@@ -70,6 +70,7 @@
 #include <orbit/world_model/CelestialLightingService.hpp>
 
 #include <future>
+#include <stop_token>
 #include <array>
 #include <atomic>
 #include <set>
@@ -656,16 +657,26 @@ private:
         const std::shared_ptr<const terrain::TerrainSource>& source, f64 radius);
     struct TerrainSunShadowPresentation
     {
+        // Semantic identity is independent of viewport and camera.
+        universe::BodyId keyBody{};
+        std::shared_ptr<const terrain::TerrainSource> keySource;
+        f64 keyRadius{0.0};
         universe::BodyId body{}, pendingBody{};
         std::shared_ptr<const terrain::TerrainSource> source, pendingSource;
         f64 radius{0.0}, pendingRadius{0.0};
         u64 revision{0U};
         std::shared_ptr<rhi::Buffer> buffer;
         std::future<lighting::TerrainSunShadowField> pending;
+        std::stop_source cancelBuild;
+        std::unique_ptr<lighting::TerrainSunShadowField> stagedField;
+        std::shared_ptr<rhi::Buffer> stagedBuffer;
+        std::size_t uploadedSamples{0U};
         std::chrono::steady_clock::time_point retryAfter{};
     };
-    std::map<std::string, TerrainSunShadowPresentation, std::less<>>
-        terrainSunShadowPresentations_;
+    std::vector<TerrainSunShadowPresentation> terrainSunShadowPresentations_;
+    // Bounded low-priority producer; job completion is polled, never waited on
+    // from the rendering path. Drains safely before renderer destruction.
+    std::unique_ptr<jobs::JobSystem> terrainSunShadowPool_;
 
     struct AtmospherePresentation
     {

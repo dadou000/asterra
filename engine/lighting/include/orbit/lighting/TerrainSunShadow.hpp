@@ -5,6 +5,7 @@
 #include <orbit/terrain/TerrainSource.hpp>
 
 #include <memory>
+#include <stop_token>
 #include <vector>
 
 namespace orbit::lighting
@@ -25,11 +26,20 @@ struct TerrainSunShadowField
 
 [[nodiscard]] TerrainSunShadowField BuildTerrainSunShadowField(
     const terrain::TerrainSource& source, f64 radiusMeters,
-    u32 width = 1024U, u32 height = 512U);
+    u32 width = 1024U, u32 height = 512U, std::stop_token cancellation = {});
 
 // CPU reference for the shared GPU traversal, including longitude wrapping.
 [[nodiscard]] f64 TerrainSunVisibility(const TerrainSunShadowField& field,
     math::Double3 position, math::Double3 sun, f64 sunAngularRadiusRadians = 0.0);
+
+// Allocate a private, unpublished GPU candidate. Upload samples in bounded
+// chunks on successive frames; only publish the buffer once fully populated.
+// The caller must not bind the incomplete buffer into a render graph.
+[[nodiscard]] std::shared_ptr<rhi::Buffer> AllocateTerrainSunShadowFieldBuffer(
+    rhi::Device& device, const TerrainSunShadowField& field);
+[[nodiscard]] std::size_t UploadTerrainSunShadowFieldChunk(
+    rhi::Buffer& buffer, const TerrainSunShadowField& field,
+    std::size_t firstSample, std::size_t maximumSamples);
 
 [[nodiscard]] std::shared_ptr<rhi::Buffer> UploadTerrainSunShadowField(
     rhi::Device& device, const TerrainSunShadowField& field);

@@ -38,7 +38,8 @@ f64 Elevation(const TerrainSunShadowField& f, const math::Double3 p)
 }
 
 TerrainSunShadowField BuildTerrainSunShadowField(const terrain::TerrainSource& source,
-    const f64 radiusMeters, const u32 width, const u32 height)
+    const f64 radiusMeters, const u32 width, const u32 height,
+    const std::stop_token cancellation)
 {
     if (!std::isfinite(radiusMeters) || radiusMeters <= 0.0 || width < 4U || height < 2U)
         throw std::invalid_argument("Invalid terrain sun shadow field dimensions/radius.");
@@ -53,6 +54,11 @@ TerrainSunShadowField BuildTerrainSunShadowField(const terrain::TerrainSource& s
     field.elevations.resize(static_cast<std::size_t>(width) * height);
     for (u32 y = 0; y < height; ++y)
     {
+        // Terminate superseded generations before wasting a full field bake.
+        // The final revision check below still guards publication.
+        if ((y & 15U) == 0U && (cancellation.stop_requested() ||
+            source.Revision() != field.sourceRevision))
+            throw std::runtime_error("Terrain changed during sun shadow candidate generation.");
         const f64 latitude = ((static_cast<f64>(y) + 0.5) / height - 0.5) * kPi;
         for (u32 x = 0; x < width; ++x)
         {
@@ -84,6 +90,11 @@ f64 TerrainSunVisibility(const TerrainSunShadowField& field, const math::Double3
     const f64 bias = std::max(0.5, field.radiusMeters * 2.0e-7);
     const f64 inner = field.radiusMeters + field.minimumElevationMeters - bias;
     f64 visibility = 1.0;
+    // Both solar-limb contact envelopes share the same heightfield ray.
+    // The limiting horizon angle is monotone in disc area, so evaluate the
+    // expensive overlap integral only once after the traversal.
+    f64 minimumClearanceSlope = std::numeric_limits<f64>::infinity();
+    const f64 fullOcclusionSlope = -std::tan(angularRadius);
     if (angularRadius > 0.0)
     {
         constexpr f64 sourceDistance = 1.0e15;
@@ -113,31 +124,56 @@ f64 TerrainSunVisibility(const TerrainSunShadowField& field, const math::Double3
         }
         else if (t > bias * 4.0)
         {
-            visibility = std::min(visibility, celestial_lighting::DiscHorizonVisibleFraction(
-                std::atan2(clearance, t), angularRadius));
-            if (visibility <= 0.0) return 0.0;
+            // atan2(clearance, t) = atan(clearance/t) for positive t.
+            // Compare slopes and avoid an inverse trig call at every sample.
+            minimumClearanceSlope = std::min(minimumClearanceSlope, clearance / t);
+            if (minimumClearanceSlope <= fullOcclusionSlope) return 0.0;
         }
     }
+    if (angularRadius > 0.0 && std::isfinite(minimumClearanceSlope))
+        visibility = std::min(visibility, celestial_lighting::DiscHorizonVisibleFraction(
+            std::atan(minimumClearanceSlope), angularRadius));
     return visibility;
 }
 
-std::shared_ptr<rhi::Buffer> UploadTerrainSunShadowField(rhi::Device& device,
-    const TerrainSunShadowField& field)
+std::shared_ptr<rhi::Buffer> AllocateTerrainSunShadowFieldBuffer(
+    rhi::Device& device, const TerrainSunShadowField& field)
 {
+    auto buffer = device.CreateBuffer({
+        .sizeBytes = 32U + field.elevations.size() * sizeof(f32),
+        .usage = rhi::BufferUsage::Structured, .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::ShaderResource});
+    return std::shared_ptr<rhi::Buffer>(std::move(buffer));
+}
+
+std::size_t UploadTerrainSunShadowFieldChunk(rhi::Buffer& buffer,
+    const TerrainSunShadowField& field, const std::size_t firstSample,
+    const std::size_t maximumSamples)
+{
+    if (firstSample >= field.elevations.size() || maximumSamples == 0U)
+        return firstSample;
+    const std::size_t count = std::min(maximumSamples, field.elevations.size() - firstSample);
     const std::array<u32, 8> header{
         std::bit_cast<u32>(static_cast<f32>(field.radiusMeters)),
         std::bit_cast<u32>(static_cast<f32>(field.minimumElevationMeters)),
         std::bit_cast<u32>(static_cast<f32>(field.maximumElevationMeters)), field.width,
         field.height, std::bit_cast<u32>(static_cast<f32>(field.spacingMeters)), 0U, 0U};
-    auto buffer = device.CreateBuffer({
-        .sizeBytes = sizeof(header) + field.elevations.size() * sizeof(f32),
-        .usage = rhi::BufferUsage::Structured, .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::ShaderResource});
-    auto* bytes = reinterpret_cast<std::byte*>(buffer->Map());
-    std::memcpy(bytes, header.data(), sizeof(header));
-    std::memcpy(bytes + sizeof(header), field.elevations.data(), field.elevations.size() * sizeof(f32));
-    buffer->Unmap();
-    return std::shared_ptr<rhi::Buffer>(std::move(buffer));
+    auto* bytes = reinterpret_cast<std::byte*>(buffer.Map());
+    if (firstSample == 0U)
+        std::memcpy(bytes, header.data(), sizeof(header));
+    std::memcpy(bytes + sizeof(header) + firstSample * sizeof(f32),
+        field.elevations.data() + firstSample, count * sizeof(f32));
+    buffer.Unmap();
+    return firstSample + count;
+}
+
+std::shared_ptr<rhi::Buffer> UploadTerrainSunShadowField(rhi::Device& device,
+    const TerrainSunShadowField& field)
+{
+    auto buffer = AllocateTerrainSunShadowFieldBuffer(device, field);
+    static_cast<void>(UploadTerrainSunShadowFieldChunk(*buffer, field, 0U,
+        field.elevations.size()));
+    return buffer;
 }
 
 std::unique_ptr<rhi::Buffer> CreateEmptyTerrainSunShadowBuffer(rhi::Device& device)

@@ -111,6 +111,10 @@ float TerrainSunVisibility(ByteAddressBuffer field, float3 position, float3 sun,
     const float perpendicular2 = dot(perpendicular, perpendicular);
     const float inner = radius + minimumElevation - bias;
     float visibility = angularRadius > 0.0 ? SphereStellarVisibility(position, sun, inner, angularRadius) : 1.0;
+    // Find the terrain envelope for both stellar limbs along one body-fixed
+    // ray, then integrate the visible disc exactly once.
+    float minimumClearanceSlope = 1.0e20;
+    const float fullOcclusionSlope = -tan(angularRadius);
     if (visibility <= 0.0) return 0.0;
     if (angularRadius <= 0.0 && along < 0.0 && perpendicular2 < inner * inner) return 0.0;
     const float outer = radius + maximumElevation + bias + length(position) * sin(angularRadius);
@@ -135,10 +139,12 @@ float TerrainSunVisibility(ByteAddressBuffer field, float3 position, float3 sun,
         }
         else if (t > bias * 4.0)
         {
-            visibility = min(visibility, StellarDiscFraction(atan2(clearance, t), angularRadius));
-            if (visibility <= 0.0) return 0.0;
+            minimumClearanceSlope = min(minimumClearanceSlope, clearance / t);
+            if (minimumClearanceSlope <= fullOcclusionSlope) return 0.0;
         }
     }
+    if (angularRadius > 0.0 && minimumClearanceSlope < 1.0e19)
+        visibility = min(visibility, StellarDiscFraction(atan(minimumClearanceSlope), angularRadius));
     return visibility;
 }
 
