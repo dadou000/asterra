@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <stop_token>
 
 namespace
 {
@@ -94,6 +95,33 @@ int main()
     catch (const std::runtime_error&) {}
     if (source.sampleCount >= 128U * 64U) return 18;
     source.changeRevisionDuringBake = false;
+
+    // Slopes order horizon candidates identically to atan2, provided the
+    // traversal's ray distance is positive. The finite disc's two contact
+    // limits can therefore be tested without per-sample inverse trig.
+    for (double alpha : {0.001, 0.005, 0.05})
+    {
+        double slow = std::numeric_limits<double>::infinity();
+        double fast = std::numeric_limits<double>::infinity();
+        for (unsigned i = 1U; i <= 1024U; ++i)
+        {
+            const double distance = 2.0 + 0.25 * i;
+            const double clearance = 3.0 * std::sin(i * 0.077) - 1.0;
+            slow = std::min(slow, std::atan2(clearance, distance));
+            fast = std::min(fast, clearance / distance);
+        }
+        if (std::abs(slow - std::atan(fast)) > 1.0e-14 ||
+            (slow <= -alpha) != (fast <= -std::tan(alpha))) return 19;
+    }
+    std::stop_source canceled;
+    canceled.request_stop();
+    try
+    {
+        static_cast<void>(BuildTerrainSunShadowField(source, 1000.0,
+            128U, 64U, canceled.get_token()));
+        return 20;
+    }
+    catch (const std::runtime_error&) {}
 
     source.invalid = true;
     try
