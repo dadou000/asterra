@@ -739,7 +739,7 @@ float ErosionChart(float2 p,float footprint,float scale,float erosionStrength,ui
     float baseScale=.15*scale;
     float frequency=1.0/max(1e-4,baseScale*.7);
     float strength=.22*baseScale*erosionStrength;
-    float magnitude=0.0,roundingMultiplier=1.0;
+    float roundingMultiplier=1.0;
     [loop] for(uint k=0u;k<5u;k++)
     {
         if(k>=octaves)break;
@@ -753,13 +753,14 @@ float ErosionChart(float2 p,float footprint,float scale,float erosionStrength,ui
         slope+=signCell*side*strength*.5;
         float faded=lerp(fade,cell.x*.5,combi);
         height+=faded*strength*w;
-        magnitude+=strength*w;
         fade=faded;
         float rounding=.1*saturate(cell.x+.5)*roundingMultiplier;
         combi=ErosionPowInv(combi,1.5)*ErosionEaseOut(ErosionSmoothStart(abs(cell.y)*1.25,rounding*1.25));
         strength*=.5;frequency*=2.0;roundingMultiplier*=2.0;
     }
-    return (height-initialHeight-.65*magnitude)*85000.0*.45;
+    // The native source already provides mountain relief: only add the
+    // signed gully displacement, not v153's replacement-terrain baseline.
+    return (height-initialHeight)*85000.0*.45;
 }
 float PhacelleErosionDeltaMeters(float3 direction,float footprint)
 {
