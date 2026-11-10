@@ -172,6 +172,8 @@ save shader
 
 Embedding large shader sources as C++ string literals should be avoided when it prevents independent shader compilation/reload.
 
+First engine-owned shader on this path (2026-10-12): `engine/weather_gpu/shaders/storm.hlsl`. The classifier gives it the change kind `engine-shader`, the hot-iteration service publishes it directly (no generation refresh), Studio's handler queues a reload and the render thread recompiles all kernels, swaps the pipelines only if every one compiles and keeps the running ones otherwise; reflected in 0.1 to 0.4 s with the simulation state kept (`/world/weather-lab/gpu-port`). The cloud shaders are still C++ string literals and still take the generation refresh.
+
 ## 11. Content iteration is service-driven
 
 Materials, textures, LUTs, decals, meshes, import metadata and similar resources are not native-code rebuild events.

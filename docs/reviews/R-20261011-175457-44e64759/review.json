@@ -1,0 +1,574 @@
+{
+ "id": "R-20261011-175457-44e64759",
+ "rubric": "v1",
+ "council": {
+  "title": "Cloud march sampling: thin-layer jitter fix and in-cloud step scale",
+  "question": "Does clamping the sample jitter to the step's own interval (jitter_fix), or changing the in-cloud step length (fine 0.6x, coarse 1.6x, coarse_fix = both), give a visible gain or a real saving over the shipped march?",
+  "chosen": "baseline",
+  "verdict": "Keep the shipped march. No variant is visibly different in these four scenes: the jitter fix changes as many pixels as a repeat launch of the baseline does (213/63/136/0 vs noise 212/39/149/0), fine and coarse change somewhat more pixels but at the edge of the cloud only and invisibly at 2x zoom. The jitter fix adds a second ColumnData evaluation per march step and measured +2.0/+2.2 ms in the two cumulus scenes against a launch-to-launch drift of 1.4/1.2 ms, so its cost is probably real but not resolved. Step scale moves frame time by less than the drift in every scene, which means the march step count is not what these scenes spend their GPU time on, so 'coarse' is not a saving worth any softening. Keep the ORBIT_CLOUD_DEFINES hook and the ThinLayerStepCap helper (defaults unchanged), do not make the jitter fix the default until a thin-layer scene (a lab anvil or cirrus sheet) shows banding that it removes.",
+  "lenses": [
+   {
+    "name": "Ruthless Shader Artist",
+    "findings": "I cannot tell the five apart at sheet scale or at 2x zoom on the near cumulus. 'fine' has a marginally crisper right flank; 'coarse' and 'coarse_fix' are marginally softer on the lower-left billow. Nothing a player sees. This world has no thin high layer in view, so the one place the jitter fix is meant to help (a banded cirrus or anvil sheet) was never on screen: I judged an untested claim as unproven, not as disproven.",
+    "ratings": {
+     "baseline": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "soft, convincing cumulus silhouette, no reference to anchor against"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "clean self-shadow and bright top"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "natural white against the sky"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "no banding or grain visible"
+      ],
+      "scale_depth": [
+       7,
+       "low",
+       "private aerial perspective not checked"
+      ]
+     },
+     "jitter_fix": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "indistinguishable from baseline"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "same"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "same; the thin-layer case it targets is not in frame"
+      ],
+      "scale_depth": [
+       7,
+       "low",
+       "same"
+      ]
+     },
+     "fine": {
+      "shape_fidelity": [
+       8,
+       "low",
+       "right flank maybe a hair crisper"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "same"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "same"
+      ],
+      "scale_depth": [
+       7,
+       "low",
+       "same"
+      ]
+     },
+     "coarse": {
+      "shape_fidelity": [
+       7,
+       "low",
+       "lower-left billow maybe a hair softer"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "same"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "no new banding at 1.6x"
+      ],
+      "scale_depth": [
+       7,
+       "low",
+       "same"
+      ]
+     },
+     "coarse_fix": {
+      "shape_fidelity": [
+       7,
+       "low",
+       "as coarse"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "same"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "no new banding"
+      ],
+      "scale_depth": [
+       7,
+       "low",
+       "same"
+      ]
+     }
+    }
+   },
+   {
+    "name": "Perceptual Realist / Color Scientist",
+    "findings": "Mean absolute differences against the baseline are 0.02 to 0.10 out of 255, inside or just above the 0.03 to 0.06 repeat-launch noise; exposure and colour are unchanged in every scene. A still cannot show temporal stability, so shimmer and crawl are not assessed, and without a reference photograph none of these scores is anchored to the real thing.",
+    "ratings": {
+     "baseline": {
+      "colour_exposure": [
+       8,
+       "medium",
+       "unchanged by any variant"
+      ],
+      "artifacts": [
+       null,
+       "n/a",
+       "temporal behaviour needs a sequence"
+      ]
+     },
+     "jitter_fix": {
+      "colour_exposure": [
+       8,
+       "medium",
+       "unchanged"
+      ]
+     },
+     "fine": {
+      "colour_exposure": [
+       8,
+       "medium",
+       "unchanged"
+      ]
+     },
+     "coarse": {
+      "colour_exposure": [
+       8,
+       "medium",
+       "unchanged"
+      ]
+     },
+     "coarse_fix": {
+      "colour_exposure": [
+       8,
+       "medium",
+       "unchanged"
+      ]
+     }
+    }
+   },
+   {
+    "name": "GPU Engineer",
+    "findings": "The jitter fix evaluates ColumnData a second time per march step, so it is the only variant with a structural cost; measured +2.0 and +2.2 ms in the cumulus scenes against 1.4 and 1.2 ms of drift for the same build, so about +0.6 to +1.0 ms is plausible but is not separated from the noise by one repeat. The step scale (0.6 to 1.6, a 2.7x range) moves frame time by under 1 ms, below the drift, which says the in-cloud step count is not the bottleneck in these scenes (the far cascade, the light volume and the composite are candidates)."
+   },
+   {
+    "name": "Architectural Skeptic",
+    "findings": "The thin-layer cap now lives in one function, ThinLayerStepCap, used by both the march step and the jitter fix, instead of an inline block; the defaults reproduce the shipped path (refactored default matches the previous build to 0.09/255 at 400 km, noise 0.04). The ORBIT_CLOUD_DEFINES hook adds no second renderer or state, only #define lines, so it is acceptable as a developer tool."
+   },
+   {
+    "name": "Minimalist / Anti-Overengineering Guardian",
+    "findings": "The jitter fix answers a defect that was never observed on screen, costs an extra column lookup per step and produced no visible change; shipping it by default is unjustified. 'fine' pays about a millisecond for an invisible gain; 'coarse' saves nothing measurable and risks softness. Doing nothing is the best result here, and the only worthwhile follow-up is one scene that can falsify the jitter hypothesis."
+   }
+  ],
+  "disagreements": [
+   "Artist vs Minimalist on 'fine': the Artist would take any free crispness, the Minimalist sees +1 ms (about the drift) for no visible gain. Resolved against 'fine': no visible gain was demonstrated.",
+   "GPU Engineer vs Minimalist on the jitter fix: the GPU Engineer says its cost is plausible but unresolved, the Minimalist wants it rejected now. Resolved as: not default until a thin-layer scene shows a benefit, and then re-measure cost with repeats."
+  ],
+  "hypotheses": [
+   "The sample is chosen before the step cap is known, so capped steps in a thin layer jitter their sample past the end of their own interval (untested: no thin layer in these scenes).",
+   "The +2 ms of the jitter fix is the extra ColumnData per step (untested: one repeat, drift 1.2 to 1.4 ms)."
+  ],
+  "verified_facts": [
+   "All four scenes, five variants and one baseline repeat were captured at converged frames on one build (Release, RTX 4090).",
+   "Mean difference against the baseline is within about 0.05/255 of the repeat-launch noise in every scene.",
+   "jitter_fix changed-pixel counts equal the baseline repeat's noise; fine, coarse and coarse_fix exceed it at cumulus_far and cumulus_near only.",
+   "Launch-to-launch frame-time drift of the same build is 1.43 ms (cumulus_far) and 1.16 ms (cumulus_near)."
+  ],
+  "open_issues": [
+   "No thin high layer (cirrus or anvil) in these scenes, so the jitter fix's intended case is untested; use the cloud lab for an anvil scene.",
+   "Frame time needs several repeats with randomised launch order; one control is not enough to resolve +1 ms.",
+   "No reference photograph, so scores are relative, and stills cannot show temporal stability."
+  ],
+  "recommended_changes": [
+   "Keep the shipped march and the defaults (CLOUD_JITTER_FIX=0, CLOUD_INCLOUD_STEP_SCALE=1.0).",
+   "Add a cloud-lab anvil scene to tools/ab_specs/cloud_march.json and re-run before deciding on the jitter fix.",
+   "Randomise launch order and repeat controls in tools/orbit_ab.py for frame-time claims."
+  ],
+  "completed_changes": [
+   "ThinLayerStepCap helper and the CLOUD_JITTER_FIX / CLOUD_INCLOUD_STEP_SCALE tunables in CloudRenderer.cpp (defaults unchanged).",
+   "ORBIT_CLOUD_DEFINES developer hook.",
+   "tools/orbit_ab.py (run, council, history), docs/reviews/RUBRIC.md."
+  ]
+ },
+ "run": {
+  "baseline": "baseline",
+  "seconds": 2.6,
+  "provenance": {
+   "commit": "44e64759e600b8ac73da612234b41f66d024bdbe",
+   "branch": "0.1.1-Harmony",
+   "dirty_files": [
+    "ngine/celestial_clouds/src/CloudRenderer.cpp",
+    "docs/reviews/",
+    "tools/ab_specs/",
+    "tools/orbit_ab.py"
+   ],
+   "exe": "C:\\Users\\david\\Documents\\GitHub\\asterra\\Orbit.exe",
+   "exe_sha256": "a73ba18a8d042dd516c10145e82249a444775f00ba88dc7f1ef7f29ac2cfb268",
+   "exe_mtime": "2026-10-11 17:45:37",
+   "gpu": "NVIDIA GeForce RTX 4090",
+   "date": "2026-10-11 17:54:16"
+  },
+  "variants": {
+   "baseline": {},
+   "jitter_fix": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_JITTER_FIX=1"
+   },
+   "fine": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_INCLOUD_STEP_SCALE=0.6"
+   },
+   "coarse": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_INCLOUD_STEP_SCALE=1.6"
+   },
+   "coarse_fix": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_INCLOUD_STEP_SCALE=1.6;CLOUD_JITTER_FIX=1"
+   }
+  },
+  "spec": {
+   "_comment": "Five cloud-march sampling variants judged by the council. Needs a build that has CLOUD_JITTER_FIX / CLOUD_INCLOUD_STEP_SCALE and the ORBIT_CLOUD_DEFINES hook. Scenes use the Earth system's Main world at a pinned sim time.",
+   "world": "Worlds/Main.orbitworld",
+   "body": "Earth",
+   "baseline": "baseline",
+   "controls": 1,
+   "variants": {
+    "baseline": {
+     "env": {}
+    },
+    "jitter_fix": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_JITTER_FIX=1"
+     }
+    },
+    "fine": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_INCLOUD_STEP_SCALE=0.6"
+     }
+    },
+    "coarse": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_INCLOUD_STEP_SCALE=1.6"
+     }
+    },
+    "coarse_fix": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_INCLOUD_STEP_SCALE=1.6;CLOUD_JITTER_FIX=1"
+     }
+    }
+   },
+   "scenes": [
+    {
+     "name": "cumulus_far",
+     "time_microseconds": 18070405751,
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 1200,
+      "yaw_deg": 0,
+      "pitch_deg": 8
+     }
+    },
+    {
+     "name": "cumulus_near",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.05157,
+      "lon_deg": 0.03666,
+      "alt_m": 2600,
+      "yaw_deg": 35.3,
+      "pitch_deg": 21.74
+     }
+    },
+    {
+     "name": "orbit_400km",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "approach",
+      "target": {
+       "lat_deg": 5.3045,
+       "lon_deg": 0.0
+      },
+      "origin": {
+       "lat_deg": 0,
+       "lon_deg": 0,
+       "alt_km": 1590.95
+      },
+      "alt_km": 400
+     }
+    },
+    {
+     "name": "cumulus_lowsun",
+     "local_time_seconds": 63600,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 1200,
+      "yaw_deg": 40,
+      "pitch_deg": 8
+     }
+    }
+   ],
+   "project": "C:/Users/david/AppData/Local/Temp/claude/C--Users-david-Documents-GitHub-asterra/8929e869-7edf-4e5e-9d35-85da2894e8c6/scratchpad/proj"
+  },
+  "scenes": {
+   "cumulus_far": {
+    "noise": [
+     {
+      "mean": 0.0559,
+      "max": 29.0,
+      "px_over": 212
+     }
+    ],
+    "variants": {
+     "jitter_fix": {
+      "mean": 0.0568,
+      "max": 23.0,
+      "px_over": 213
+     },
+     "fine": {
+      "mean": 0.0732,
+      "max": 50.0,
+      "px_over": 1417
+     },
+     "coarse": {
+      "mean": 0.0911,
+      "max": 59.0,
+      "px_over": 4796
+     },
+     "coarse_fix": {
+      "mean": 0.0955,
+      "max": 57.0,
+      "px_over": 4782
+     }
+    },
+    "frame_ms": {
+     "baseline": 13.53,
+     "jitter_fix": 15.57,
+     "fine": 14.56,
+     "coarse": 14.01,
+     "coarse_fix": 15.86
+    },
+    "frame_ms_drift": [
+     1.43
+    ],
+    "image_sha256": {
+     "baseline": "0eaccd3a71b8c3a2ecbcd3504e761c78f33b8864241fd9925a9268f6e5e32252",
+     "jitter_fix": "33d6f05775f1e1ff46315f0d1f7b674cd4c95b71d817369f693e020aed9c636e",
+     "fine": "dd5d02c9ce998b0c80f712fec3cdd1b35e032602ebc8084894bb4ff73d48bce9",
+     "coarse": "b5fb8d36bf4e8e8df8b5de0051ff8012e6b96dd538aeb4e1431c2fc7c70400b7",
+     "coarse_fix": "69c206cac830632b5b67ac22549a27f4f195a9da5f6a580162d8b45aef64e315"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_near": {
+    "noise": [
+     {
+      "mean": 0.0344,
+      "max": 25.0,
+      "px_over": 39
+     }
+    ],
+    "variants": {
+     "jitter_fix": {
+      "mean": 0.0384,
+      "max": 31.0,
+      "px_over": 63
+     },
+     "fine": {
+      "mean": 0.0545,
+      "max": 28.0,
+      "px_over": 294
+     },
+     "coarse": {
+      "mean": 0.0405,
+      "max": 78.0,
+      "px_over": 613
+     },
+     "coarse_fix": {
+      "mean": 0.046,
+      "max": 80.0,
+      "px_over": 624
+     }
+    },
+    "frame_ms": {
+     "baseline": 17.06,
+     "jitter_fix": 19.29,
+     "fine": 18.21,
+     "coarse": 17.36,
+     "coarse_fix": 19.41
+    },
+    "frame_ms_drift": [
+     1.16
+    ],
+    "image_sha256": {
+     "baseline": "d2589c7b3d0fb3ccac3ad3c2520c1f47e29cc6180fca2e817ad0e33056dd1c9a",
+     "jitter_fix": "81c301577b5e74bd7be7d263236c7193a87115936e1a575ad4064c6f0d9a6846",
+     "fine": "c2ee4845d0953c64b39039f97ff07b4e7cffc041038cd28223a4963c335bb512",
+     "coarse": "0a58c2c6cc75a183d0ce7efee55da91fcef7d64363fef912a1c25f9ed7d59e12",
+     "coarse_fix": "70dad93f6f8145b90ce7eb206346b1e4d79898cbcb413f464d276f8965adea9c"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "orbit_400km": {
+    "noise": [
+     {
+      "mean": 0.0431,
+      "max": 33.0,
+      "px_over": 149
+     }
+    ],
+    "variants": {
+     "jitter_fix": {
+      "mean": 0.076,
+      "max": 33.0,
+      "px_over": 136
+     },
+     "fine": {
+      "mean": 0.0383,
+      "max": 28.0,
+      "px_over": 54
+     },
+     "coarse": {
+      "mean": 0.0423,
+      "max": 24.0,
+      "px_over": 81
+     },
+     "coarse_fix": {
+      "mean": 0.0582,
+      "max": 22.0,
+      "px_over": 16
+     }
+    },
+    "frame_ms": {
+     "baseline": 13.49,
+     "jitter_fix": 13.53,
+     "fine": 13.34,
+     "coarse": 13.33,
+     "coarse_fix": 14.42
+    },
+    "frame_ms_drift": [
+     0.97
+    ],
+    "image_sha256": {
+     "baseline": "d043a277fc4dfa78829a300907a6a997a686d80353344d8f32778ce33d97b999",
+     "jitter_fix": "e17d805ea01c7fcfffcbcd27157c5d81b8c93267f8fcd93dfe3cd8ba1cc202b2",
+     "fine": "5f88a81cc19d97e82c0e55bd4ef6c1d55c2d60e029e848f8a6acdf8324923b06",
+     "coarse": "f66c3e09412284ce7992520b97152736333dce54e6f047eada09d0c104cd72ec",
+     "coarse_fix": "24eba319eba677aee76aaf5a0a8680afd10db2cc2492bfc422c442a2700f33ba"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_lowsun": {
+    "noise": [
+     {
+      "mean": 0.0639,
+      "max": 2.0,
+      "px_over": 0
+     }
+    ],
+    "variants": {
+     "jitter_fix": {
+      "mean": 0.0221,
+      "max": 2.0,
+      "px_over": 0
+     },
+     "fine": {
+      "mean": 0.0716,
+      "max": 4.0,
+      "px_over": 0
+     },
+     "coarse": {
+      "mean": 0.0684,
+      "max": 3.0,
+      "px_over": 0
+     },
+     "coarse_fix": {
+      "mean": 0.0664,
+      "max": 3.0,
+      "px_over": 0
+     }
+    },
+    "frame_ms": {
+     "baseline": 11.56,
+     "jitter_fix": 12.36,
+     "fine": 12.93,
+     "coarse": 12.14,
+     "coarse_fix": 12.74
+    },
+    "frame_ms_drift": [
+     0.97
+    ],
+    "image_sha256": {
+     "baseline": "f3cbf47fc25c02bb6c8294496c37ab04df418cd9f777107aa301ae6ba132bece",
+     "jitter_fix": "4397c84c4eea6a5a02a351dbc2ce383ed4408d08f4569422248da19bfbe82785",
+     "fine": "3855612e40ae050c386bde111f896743768d87811b73c5348592d12efe7a50ed",
+     "coarse": "9272406d66826b3deeec07a50474347f29d4fc934cbc96ef048854c2e40f7f82",
+     "coarse_fix": "6c4f5a81877b4999b11d6abfe1a5446965ba88f3437e7c96f1bf032beea1fa70"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   }
+  }
+ },
+ "images": "full-resolution PNGs stay outside git (see run.scenes[*].image_sha256 and the capture folder at C:\\Users\\david\\AppData\\Local\\Temp\\claude\\C--Users-david-Documents-GitHub-asterra\\8929e869-7edf-4e5e-9d35-85da2894e8c6\\scratchpad\\ab_march); sheet.png here is a downscaled contact sheet (top row variants, bottom row 5x difference vs baseline)"
+}

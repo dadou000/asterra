@@ -623,6 +623,426 @@ void TestCrossPageBoundaryExchange()
         "exchange.");
 }
 
+// Two pages that meet at a seam with a closed basin straddling it. The page
+// service rebuilds each page whenever its neighbour's exported boundary
+// changes, so the exchange must reach a fixed point instead of ping-ponging
+// (conditioned heights creeping by the minimum drop and accumulated area
+// re-imported through its own echo).
+struct SeamExchange
+{
+    std::vector<DrainageBoundaryCell> leftEast;
+    std::vector<DrainageBoundaryCell> rightWest;
+    f64 totalOutflowArea{0.0};
+    u32 iterations{0U};
+    bool converged{false};
+};
+
+bool SameBoundary(
+    const std::vector<DrainageBoundaryCell>& a,
+    const std::vector<DrainageBoundaryCell>& b)
+{
+    if (a.size() != b.size())
+    {
+        return false;
+    }
+    for (std::size_t i = 0U; i < a.size(); ++i)
+    {
+        if (a[i].conditionedHeightMeters != b[i].conditionedHeightMeters ||
+            a[i].drainageAreaSquareMeters != b[i].drainageAreaSquareMeters ||
+            a[i].dischargeCubicMetersPerSecond != b[i].dischargeCubicMetersPerSecond ||
+            a[i].flowDx != b[i].flowDx || a[i].flowDy != b[i].flowDy ||
+            a[i].outlet != b[i].outlet ||
+            a[i].basinTerminalFingerprint != b[i].basinTerminalFingerprint)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+SeamExchange RunSeamExchange(
+    const bool simultaneous,
+    const f32 centerHeight,
+    const bool westOutlet = true,
+    const bool eastOutlet = false,
+    const f32 tilt = 0.0F)
+{
+    constexpr u32 resolution = 8U;
+    constexpr u32 maxIterations = 40U;
+
+    MaterialColumnPage left(resolution, 1.0);
+    MaterialColumnPage right(resolution, 1.0);
+    for (u32 y = 0; y < resolution; ++y)
+    {
+        for (u32 x = 0; x < resolution; ++x)
+        {
+            // Adjacent physical pages share their edge column (left x=7 is the
+            // same physical point as right x=0), and the neighbour's copy of
+            // that column is the halo. A bowl is centred on that shared column.
+            const f32 leftDx = 7.0F - static_cast<f32>(x);
+            const f32 rightDx = static_cast<f32>(x);
+            const f32 dy = std::abs(static_cast<f32>(y) - 3.5F);
+            left.SetCell(x, y, MakeCell(
+                centerHeight + 0.6F * std::sqrt(leftDx * leftDx + dy * dy) - tilt * leftDx));
+            right.SetCell(x, y, MakeCell(
+                centerHeight + 0.6F * std::sqrt(rightDx * rightDx + dy * dy) + tilt * rightDx));
+        }
+    }
+
+    const auto inputs = UniformInputs(resolution, 1.0F);
+    DrainageRoutingConfig config{};
+    config.minimumDrainageDropMeters = 0.01F;
+
+    // Left page drains west over its rim to a low neighbour; everything else is
+    // a wall, so the only way out of the joint basin is the left page's west edge.
+    DrainagePageHalo leftHalo = MakeHalo(resolution, 100.0F, 100.0F, 100.0F, westOutlet ? -50.0F : 100.0F, 1U);
+    DrainagePageHalo rightHalo = MakeHalo(resolution, 100.0F, eastOutlet ? -50.0F : 100.0F, 100.0F, 100.0F, 1U);
+
+    std::vector<DrainageBoundaryCell> leftEast;
+    std::vector<DrainageBoundaryCell> rightWest;
+    SeamExchange result{};
+
+    DrainagePage leftPage = BuildDrainagePage(left, MakeKey(resolution, 30U), inputs, leftHalo, config);
+    DrainagePage rightPage = BuildDrainagePage(right, MakeKey(resolution, 30U), inputs, rightHalo, config);
+
+    for (u32 iteration = 1U; iteration <= maxIterations; ++iteration)
+    {
+        // Neighbour boundary as published by the previous build, in the
+        // receiving page's frame (both pages share an orientation here).
+        std::vector<DrainageBoundaryCell> nextLeftEast;
+        std::vector<DrainageBoundaryCell> nextRightWest;
+        for (u32 i = 0U; i < resolution; ++i)
+        {
+            nextLeftEast.push_back(leftPage.BoundaryCell(DrainageBoundarySide::East, i));
+            nextRightWest.push_back(rightPage.BoundaryCell(DrainageBoundarySide::West, i));
+        }
+
+        if (iteration > 1U &&
+            SameBoundary(nextLeftEast, leftEast) &&
+            SameBoundary(nextRightWest, rightWest))
+        {
+            result.converged = true;
+            result.iterations = iteration;
+            break;
+        }
+        leftEast = nextLeftEast;
+        rightWest = nextRightWest;
+        result.iterations = iteration;
+
+        leftHalo.east = rightWest;
+        leftHalo.revision = 1000U + iteration;
+        DrainagePage nextLeft = BuildDrainagePage(left, MakeKey(resolution, 30U), inputs, leftHalo, config);
+
+        rightHalo.west = simultaneous ? leftEast : std::vector<DrainageBoundaryCell>{};
+        if (!simultaneous)
+        {
+            for (u32 i = 0U; i < resolution; ++i)
+            {
+                rightHalo.west.push_back(nextLeft.BoundaryCell(DrainageBoundarySide::East, i));
+            }
+        }
+        rightHalo.revision = 2000U + iteration;
+        DrainagePage nextRight = BuildDrainagePage(right, MakeKey(resolution, 30U), inputs, rightHalo, config);
+
+        leftPage = std::move(nextLeft);
+        rightPage = std::move(nextRight);
+    }
+
+    for (u32 y = 0U; y < resolution; ++y)
+    {
+        const DrainageCell& cell = leftPage.At(0U, y);
+        if (cell.flow.exitsPage && cell.flow.dx < 0)
+        {
+            result.totalOutflowArea += cell.drainageAreaSquareMeters;
+        }
+    }
+    result.leftEast = leftEast;
+    result.rightWest = rightWest;
+    return result;
+}
+
+void TestSeamBasinExchangeConverges()
+{
+    // Each page accumulates all 64 of its own 1 m cells (the shared column is
+    // rained on by both copies), so nothing can legitimately exceed 128 m2.
+    constexpr f64 totalArea = 2.0 * 8.0 * 8.0;
+
+    for (const bool simultaneous : {true, false})
+    {
+        const SeamExchange exchange = RunSeamExchange(simultaneous, 5.0F);
+        Require(
+            exchange.converged,
+            simultaneous
+                ? "Simultaneous seam exchange around a joint basin never reached a fixed point."
+                : "Sequential seam exchange around a joint basin never reached a fixed point.");
+        Require(
+            exchange.iterations <= 12U,
+            "Seam exchange needed too many rebuild rounds to converge.");
+        Require(
+            exchange.totalOutflowArea <= totalArea + 1.0e-6,
+            "The outlet received more area than both pages' cells hold: a "
+            "seam contribution was counted again through its own echo.");
+        Require(
+            exchange.totalOutflowArea >= 64.0 - 1.0e-6,
+            "The outlet must receive at least the outlet page's own rain.");
+    }
+}
+
+
+// ---- 2x2 grid of seam-sharing pages with seeded random terrain ----------
+struct GridExchange
+{
+    bool converged{false};
+    u32 rounds{0U};
+    // Accumulated area leaving the whole 2x2 domain through its outer edges.
+    // Every page cell receives 1 m2 of rain, so a lossless exchange of the
+    // four 9x9 pages exports 4 * 81 = 324 m2.
+    f64 exitedArea{0.0};
+};
+
+f32 GridHeight(const u64 seed, const u32 gx, const u32 gy)
+{
+    // Smooth deterministic terrain on the global lattice, so shared columns
+    // and corners carry identical raw heights in every page that has them.
+    f64 h = 0.0;
+    u64 state = seed * 0x9E3779B97F4A7C15ULL + 12345ULL;
+    const auto next = [&state]()
+    {
+        state ^= state << 13U;
+        state ^= state >> 7U;
+        state ^= state << 17U;
+        return static_cast<f64>(state % 100000ULL) / 100000.0;
+    };
+    for (u32 k = 0U; k < 5U; ++k)
+    {
+        const f64 a = 2.0 + 6.0 * next();
+        const f64 fx = 0.15 + 0.5 * next();
+        const f64 fy = 0.15 + 0.5 * next();
+        const f64 px = 6.28 * next();
+        const f64 py = 6.28 * next();
+        h += a * std::sin(fx * gx + px) * std::sin(fy * gy + py);
+    }
+    return static_cast<f32>(20.0 + h);
+}
+
+GridExchange RunGridExchange(
+    const u64 seed,
+    const bool simultaneous)
+{
+    constexpr u32 resolution = 9U;
+    constexpr u32 side = 2U;
+    constexpr u32 maxRounds = 60U;
+
+    struct Page
+    {
+        MaterialColumnPage material;
+        DrainagePage drainage;
+    };
+
+    DrainageRoutingConfig config{};
+    config.minimumDrainageDropMeters = 0.01F;
+    const auto inputs = UniformInputs(resolution, 1.0F);
+
+    std::vector<MaterialColumnPage> materials;
+    materials.reserve(side * side);
+    for (u32 py = 0U; py < side; ++py)
+    {
+        for (u32 px = 0U; px < side; ++px)
+        {
+            MaterialColumnPage material(resolution, 1.0);
+            for (u32 y = 0U; y < resolution; ++y)
+            {
+                for (u32 x = 0U; x < resolution; ++x)
+                {
+                    material.SetCell(x, y, MakeCell(GridHeight(
+                        seed, px * (resolution - 1U) + x, py * (resolution - 1U) + y)));
+                }
+            }
+            materials.push_back(std::move(material));
+        }
+    }
+
+    const auto outlet = []()
+    {
+        DrainageBoundaryCell cell = Boundary(-50.0F);
+        return cell;
+    };
+
+    std::vector<std::optional<DrainagePage>> pages(side * side);
+    const auto build = [&](const u32 px, const u32 py, const u64 revision)
+    {
+        // Shared-edge halo. Pages share their edge row/column, so the halo
+        // holds the neighbour's cell one step BEYOND the shared edge
+        // (north/east/south/west) and the neighbour's copy of the shared edge
+        // itself (twin*). Sides with no neighbour are outlets.
+        DrainagePageHalo halo{};
+        halo.revision = revision;
+        halo.north.assign(resolution, outlet());
+        halo.east.assign(resolution, outlet());
+        halo.south.assign(resolution, outlet());
+        halo.west.assign(resolution, outlet());
+        halo.twinNorth.assign(resolution, outlet());
+        halo.twinEast.assign(resolution, outlet());
+        halo.twinSouth.assign(resolution, outlet());
+        halo.twinWest.assign(resolution, outlet());
+        // Diagonal pages are not consulted (the Studio service cannot resolve
+        // them across cube-face corners): corner ring cells are walls.
+        const auto wall = []()
+        {
+            return Boundary(1.0e6F);
+        };
+        halo.corners = {wall(), wall(), wall(), wall()};
+        halo.twinCorners = {outlet(), outlet(), outlet(), outlet()};
+
+        const auto at = [&](const i32 qx, const i32 qy) -> const DrainagePage*
+        {
+            if (qx < 0 || qy < 0 || qx >= static_cast<i32>(side) || qy >= static_cast<i32>(side))
+            {
+                return nullptr;
+            }
+            const auto& page = pages[static_cast<std::size_t>(qy) * side + static_cast<u32>(qx)];
+            return page.has_value() ? &*page : nullptr;
+        };
+        const i32 ix = static_cast<i32>(px);
+        const i32 iy = static_cast<i32>(py);
+        const u32 last = resolution - 1U;
+        if (const auto* n = at(ix, iy - 1))
+            for (u32 i = 0U; i < resolution; ++i)
+            {
+                halo.north[i] = n->CellAsBoundary(i, last - 1U);
+                halo.twinNorth[i] = n->CellAsBoundary(i, last);
+            }
+        if (const auto* e = at(ix + 1, iy))
+            for (u32 i = 0U; i < resolution; ++i)
+            {
+                halo.east[i] = e->CellAsBoundary(1U, i);
+                halo.twinEast[i] = e->CellAsBoundary(0U, i);
+            }
+        if (const auto* so = at(ix, iy + 1))
+            for (u32 i = 0U; i < resolution; ++i)
+            {
+                halo.south[i] = so->CellAsBoundary(i, 1U);
+                halo.twinSouth[i] = so->CellAsBoundary(i, 0U);
+            }
+        if (const auto* w = at(ix - 1, iy))
+            for (u32 i = 0U; i < resolution; ++i)
+            {
+                halo.west[i] = w->CellAsBoundary(last - 1U, i);
+                halo.twinWest[i] = w->CellAsBoundary(last, i);
+            }
+
+        return BuildDrainagePage(
+            materials[static_cast<std::size_t>(py) * side + px],
+            MakeKey(resolution, 40U),
+            inputs,
+            halo,
+            config);
+    };
+
+    const auto fingerprint = [&]()
+    {
+        std::vector<DrainageBoundaryCell> all;
+        for (const auto& page : pages)
+        {
+            for (const auto sideId : {DrainageBoundarySide::North, DrainageBoundarySide::East,
+                                      DrainageBoundarySide::South, DrainageBoundarySide::West})
+            {
+                for (u32 i = 0U; i < resolution; ++i)
+                {
+                    all.push_back(page->BoundaryCell(sideId, i));
+                }
+            }
+        }
+        return all;
+    };
+
+    // Initial independent build of every page.
+    for (u32 py = 0U; py < side; ++py)
+        for (u32 px = 0U; px < side; ++px)
+            pages[py * side + px] = build(px, py, 1U);
+
+    GridExchange result{};
+    auto previous = fingerprint();
+    for (u32 round = 1U; round <= maxRounds; ++round)
+    {
+        if (simultaneous)
+        {
+            std::vector<std::optional<DrainagePage>> next(side * side);
+            for (u32 py = 0U; py < side; ++py)
+                for (u32 px = 0U; px < side; ++px)
+                    next[py * side + px] = build(px, py, 100U + round);
+            pages = std::move(next);
+        }
+        else
+        {
+            for (u32 py = 0U; py < side; ++py)
+                for (u32 px = 0U; px < side; ++px)
+                    pages[py * side + px] = build(px, py, 100U + round);
+        }
+
+        const auto now = fingerprint();
+        result.rounds = round;
+        result.exitedArea = 0.0;
+        for (u32 py = 0U; py < side; ++py)
+        {
+            for (u32 px = 0U; px < side; ++px)
+            {
+                const DrainagePage& page = *pages[py * side + px];
+                for (u32 y = 0U; y < resolution; ++y)
+                {
+                    for (u32 x = 0U; x < resolution; ++x)
+                    {
+                        const DrainageCell& cell = page.At(x, y);
+                        const i32 gx = static_cast<i32>(px * (resolution - 1U) + x) + cell.flow.dx;
+                        const i32 gy = static_cast<i32>(py * (resolution - 1U) + y) + cell.flow.dy;
+                        constexpr i32 last = static_cast<i32>(side * (resolution - 1U));
+                        if (cell.flow.exitsPage && (gx < 0 || gy < 0 || gx > last || gy > last))
+                        {
+                            result.exitedArea += cell.drainageAreaSquareMeters;
+                        }
+                    }
+                }
+            }
+        }
+        if (SameBoundary(now, previous))
+        {
+            result.converged = true;
+            break;
+        }
+        previous = now;
+    }
+    return result;
+}
+
+// The cross-page seam exchange over a 2x2 grid of seam-sharing pages with
+// seeded random terrain. Pages are rebuilt from each other's published
+// boundaries until the exported boundaries stop changing.
+//
+// The rebuilds are sequential, matching StudioTerrainRebuildScheduler's page
+// gate, which never builds two edge-adjacent pages at once. Rebuilding
+// adjacent pages simultaneously from the same stale snapshot can still swap
+// states forever (the exchange is bistable around lakes that span a seam), so
+// the sequential order is part of the contract, not an implementation detail.
+// The exchange must reach a fixed point and be lossless: every page cell
+// receives 1 m2 of rain and all of it must leave the domain.
+void TestGridSeamExchangeConverges()
+{
+    constexpr u32 seeds = 60U;
+    for (u32 seed = 1U; seed <= seeds; ++seed)
+    {
+        const GridExchange exchange = RunGridExchange(seed, false);
+        Require(
+            exchange.converged,
+            "Sequential seam exchange over a random 2x2 page grid never reached a fixed point.");
+        RequireNear(
+            exchange.exitedArea,
+            324.0,
+            1.0e-6,
+            "Seam exchange lost or invented drainage area: all rain on the 2x2 page "
+            "grid must leave through its outer edges exactly once.");
+    }
+}
+
 void TestFillRejectsMissingHalo()
 {
     constexpr u32 resolution = 3U;
@@ -675,6 +1095,8 @@ int main()
     TestGuidanceCannotCreateUphillFlow();
     TestDeterministicRevisionAndFlow();
     TestCrossPageBoundaryExchange();
+    TestSeamBasinExchangeConverges();
+    TestGridSeamExchangeConverges();
     TestFillRejectsMissingHalo();
 
     std::cout << "Orbit M09 drainage-page tests passed.\n";

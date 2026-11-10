@@ -242,6 +242,16 @@ void TestM09ExtractionStableIdsAndSelection()
 
     for (const auto& node : a.nodes)
     {
+        Require(
+            std::isfinite(node.waterLevelMeters) &&
+            std::isfinite(node.slope) && node.slope > 0.0F &&
+            std::isfinite(node.velocityMetersPerSecond) &&
+            node.velocityMetersPerSecond >= 0.05F &&
+            node.velocityMetersPerSecond <= 8.0F &&
+            node.manningRoughness > 0.0F &&
+            node.crossSectionAreaSquareMeters > 0.0 &&
+            node.suspendedSedimentKg >= 0.0,
+            "M16 generated invalid hydraulic readouts for a river node.");
         if (node.dischargeCubicMetersPerSecond < minimumQ)
         {
             minimumQ =
@@ -257,6 +267,18 @@ void TestM09ExtractionStableIdsAndSelection()
             widthAtMaximum =
                 node.channelWidthMeters;
         }
+    }
+
+    for (const auto& segment : a.segments)
+    {
+        Require(
+            std::isfinite(segment.slope) && segment.slope > 0.0F &&
+            std::isfinite(segment.velocityMetersPerSecond) &&
+            segment.velocityMetersPerSecond >= 0.05F &&
+            segment.manningRoughness > 0.0F &&
+            segment.suspendedSedimentKg >= 0.0 &&
+            !segment.routingPathMeters.empty(),
+            "M16 generated invalid hydraulic readouts or route for a river segment.");
     }
 
     Require(
@@ -291,6 +313,30 @@ void TestM09ExtractionStableIdsAndSelection()
     Require(
         regenerated.FindNode(node.id) != nullptr,
         "M16 Studio node identity changed only because terrain process revision changed.");
+}
+
+void TestAdaptiveGraphSpacingPreservesBasins()
+{
+    const DrainagePage drainage = MakeTwoBasinDrainage(7U);
+    auto denseConfig = NetworkConfig();
+    denseConfig.maximumNodeSpacingMeters = 10.0;
+    const RiverNetwork dense = BuildRiverNetwork(drainage, {}, denseConfig);
+
+    auto sparseConfig = denseConfig;
+    sparseConfig.maximumNodeSpacingMeters = 1'000.0;
+    const RiverNetwork sparse = BuildRiverNetwork(drainage, {}, sparseConfig);
+
+    Require(!dense.nodes.empty() && !sparse.nodes.empty(),
+        "Adaptive M16 spacing removed all river graph nodes.");
+    Require(sparse.nodes.size() < dense.nodes.size(),
+        "Larger M16 node spacing did not simplify straight reaches.");
+    Require(!sparse.segments.empty(),
+        "Adaptive M16 spacing removed directed river segments.");
+    Require(sparse.basins.size() == dense.basins.size(),
+        "Adaptive M16 spacing changed the represented watershed count.");
+    for (const auto& basin : dense.basins)
+        Require(sparse.FindBasin(basin.id) != nullptr,
+            "Adaptive M16 spacing changed a stable watershed identity.");
 }
 
 void TestBasinLocalAuthoringInvalidation()
@@ -622,6 +668,7 @@ void TestDeterminism()
 int main()
 {
     TestM09ExtractionStableIdsAndSelection();
+    TestAdaptiveGraphSpacingPreservesBasins();
     TestBasinLocalAuthoringInvalidation();
     TestMeanderConstraintMovesCenterlineAndIncisionFollows();
     TestCutoffAndOxbowEvent();

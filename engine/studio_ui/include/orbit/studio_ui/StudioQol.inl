@@ -86,26 +86,6 @@ inline void StudioViewportPanels::InstallQol(editor_ui::EditorUi* ui) noexcept
 {
     if (ui != nullptr) ui_ = ui;
 
-    try
-    {
-        GlobalInspectorProviders().Upsert({
-            .id = "orbit.selection.qol",
-            .owner = "orbit",
-            .title = "Workflow",
-            .order = 10,
-            .defaultOpen = true,
-            .relevant = [this]
-            {
-                return session_ != nullptr && session_->World().HasWorld();
-            },
-            .draw = [this](editor_ui::PanelContext& context)
-            {
-                DrawQolProperties(context);
-            }
-        });
-    }
-    catch (...) {}
-
     if (qolInstalled_) return;
     auto* shortcuts = editor_model::ShortcutRegistry::Active();
     if (shortcuts == nullptr) return;
@@ -118,6 +98,9 @@ inline void StudioViewportPanels::InstallQol(editor_ui::EditorUi* ui) noexcept
         shortcuts->RegisterCallback({.key = platform::Key::Delete}, [this] { DeleteSelection(); });
         shortcuts->RegisterCallback({.key = platform::Key::D, .control = true}, [this] { DuplicateSelection(); });
         shortcuts->RegisterCallback({.key = platform::Key::G}, [this] { RevealSelectionInWorld(); });
+        shortcuts->RegisterCallback({.key = platform::Key::F}, [this] {
+            static_cast<void>(FrameSelectedObject());
+        });
         shortcuts->RegisterCallback({.key = platform::Key::ArrowLeft, .alt = true}, [this] { NavigateSelectionHistory(-1); });
         shortcuts->RegisterCallback({.key = platform::Key::ArrowRight, .alt = true}, [this] { NavigateSelectionHistory(1); });
         shortcuts->RegisterCallback({.key = platform::Key::ArrowUp, .alt = true}, [this] { SelectParent(); });
@@ -135,6 +118,31 @@ inline void StudioViewportPanels::EnsureQolCommands()
 {
     if (session_ == nullptr || !session_->World().HasWorld()) return;
     auto& registry = session_->World().CommandRegistry();
+
+    constexpr commands::CommandId kFrameSelectedCommand{
+        .high = 0x4f5242495446524dULL,
+        .low = 0x53454c4543544544ULL};
+    if (registry.Find(kFrameSelectedCommand) == nullptr)
+    {
+        registry.Register({
+            .id = kFrameSelectedCommand,
+            .name = "Frame Selected Object",
+            .category = "Viewport",
+            .description = "Move the perspective camera to frame the selected object.",
+            .automationVisible = true,
+            .enablement = [this]() -> commands::CommandEnablement
+            {
+                if (session_ == nullptr || !session_->World().HasWorld() ||
+                    session_->World().Selection().Ordered().empty())
+                    return {.enabled = false, .reason = "Select an object first."};
+                return {};
+            },
+            .invoke = [this](const commands::CommandArguments&)
+            {
+                static_cast<void>(FrameSelectedObject());
+            }
+        });
+    }
 
     if (registry.Find(editor_model::authoring_commands::kDuplicateSelection) == nullptr)
     {
@@ -320,7 +328,7 @@ inline void StudioViewportPanels::CommitRenameSelection()
 inline void StudioViewportPanels::RevealSelectionInWorld()
 {
     if (session_ == nullptr || session_->World().Selection().Ordered().empty()) return;
-    if (ui_ != nullptr) static_cast<void>(ui_->FocusPanelByTitle("World / Assets"));
+    if (ui_ != nullptr) static_cast<void>(ui_->FocusPanelByTitle("Explorer"));
     Notify("Selection revealed", "Alt+Up/Down walks the semantic hierarchy.");
 }
 

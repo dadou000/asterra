@@ -104,6 +104,35 @@ ResolveUpProvider(
         }
     }
 
+    // Road authoring uses body-local FramePointAnchor nodes, not
+    // SurfaceAnchor nodes. They still require the body's outward normal.
+    // A world +Y fallback twists/stands the corridor on its edge away
+    // from the planet's north pole.
+    const auto* startFixed =
+        std::get_if<paths::FramePointAnchor>(&request.startNode.anchor);
+    const auto* endFixed =
+        std::get_if<paths::FramePointAnchor>(&request.endNode.anchor);
+    if(startFixed && endFixed && request.bodies &&
+       startFixed->frame == request.targetFrame &&
+       endFixed->frame == request.targetFrame)
+    {
+        for(const auto system : request.bodies->Systems())
+        {
+            for(const auto id : request.bodies->Bodies(system))
+            {
+                const auto* body=request.bodies->FindBody(id);
+                if(body && body->frame==request.targetFrame)
+                {
+                    const auto shape=body->shape;
+                    return [shape](const math::Double3& position)
+                    {
+                        return ReferenceNormal(shape,position);
+                    };
+                }
+            }
+        }
+    }
+
     return
         [](const math::Double3&)
         {
@@ -129,6 +158,9 @@ ResolveUpProvider(
             }
             return false;
         };
+
+    if(request.maximumSamples<2U || request.maximumSamples>131072U)
+        return fail("Path maximumSamples must be between 2 and 131072.");
 
     if (request.frames == nullptr ||
         request.bodies == nullptr)
@@ -215,6 +247,12 @@ BuildPathCenterline(
             request.routed->
                 dependencySignature;
 
+        if(request.routed->points.size()>request.maximumSamples)
+        {
+            if(failureReason) *failureReason =
+                "Routed path exceeds the per-edge sample budget; split or tile the route.";
+            return std::nullopt;
+        }
         centerline.samples.reserve(
             request.routed->points.size());
 
@@ -347,19 +385,20 @@ BuildPathCenterline(
             request.edge.
                 endHandleMeters);
 
-    const u32 segments =
-        std::max<u32>(
-            2U,
-            static_cast<u32>(
-                std::ceil(
-                    std::max(
-                        controlLength,
-                        math::Length(
-                            end->localMeters -
-                            start->
-                                localMeters)) /
-                    request.
-                        curveSampleSpacingMeters)));
+    // Convert to u32 only AFTER validating the floating-point estimate.
+    // A whole-planet Bezier can otherwise overflow and cause huge allocations.
+    const f64 desiredSegments = std::max(2.0, std::ceil(
+        std::max(controlLength,
+            math::Length(end->localMeters-start->localMeters)) /
+            request.curveSampleSpacingMeters));
+    if(!std::isfinite(desiredSegments) ||
+       desiredSegments+1.0>static_cast<f64>(request.maximumSamples))
+    {
+        if(failureReason) *failureReason =
+            "Bezier exceeds the per-edge sample budget; split the authored edge or increase tile spacing.";
+        return std::nullopt;
+    }
+    const u32 segments=static_cast<u32>(desiredSegments);
 
     centerline.samples.reserve(
         static_cast<std::size_t>(

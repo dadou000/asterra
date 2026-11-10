@@ -3,6 +3,7 @@
 
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/path_geometry/CorridorTerrainSource.hpp>
 #include <orbit/surface_authoring/TerrainConstraints.hpp>
 #include <orbit/surface_model/SurfaceMaterialResolver.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
@@ -11,6 +12,7 @@
 #include <orbit/terrain_erosion/GlacialErosion.hpp>
 #include <orbit/terrain_erosion/HydraulicErosion.hpp>
 #include <orbit/terrain_erosion/RiverNetwork.hpp>
+#include "BakedRiverPage.hpp"
 #include <orbit/terrain_erosion/SedimentExchange.hpp>
 #include <orbit/terrain_erosion/StreamPowerErosion.hpp>
 #include <orbit/terrain_erosion/ThermalErosion.hpp>
@@ -20,19 +22,24 @@
 #include <orbit/terrain_scatter/DeterministicScatter.hpp>
 #include <orbit/terrain_scatter/PhysicalSurface.hpp>
 #include <orbit/terrain_water/CoastalProcess.hpp>
+#include <orbit/terrain_water/LakeWater.hpp>
 #include <orbit/world/PlanetTileNeighborhood.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
 #include <any>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <tuple>
 #include <mutex>
 #include <numbers>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <utility>
 
 namespace orbit::studio_session
@@ -229,6 +236,9 @@ void IncrementRevision(
     case Kind::BiomeScatter:
         ++revisions.biome;
         break;
+    case Kind::DrainageBoundary:
+        ++revisions.hydrologyBoundary;
+        break;
     }
 }
 
@@ -238,16 +248,30 @@ struct BodyBuildInputs
     std::shared_ptr<
         const terrain::AnalyticTerrainSource>
         source;
+    // Optional immutable construction overlay captured with each worker's
+    // BodyBuildInputs. Publication must replace this snapshot, never mutate it.
+    std::shared_ptr<const path_geometry::CorridorTerrainSource>
+        corridorOverlay;
 
     terrain_geology::GeologicalMaterialLibrary geology;
     terrain_geology::RockTypeId defaultBedrock{};
+    std::shared_ptr<const terrain_geology::CompiledStratigraphyProfile> stratigraphy;
 
     surface_model::TerrainProcessService processes{};
     terrain_biome::BiomeService biomes;
     surface_authoring::TerrainConstraintSet constraints{};
+    struct AuthoredRiverConstraint
+    {
+        terrain::PhysicalTerrainPageAddress page{};
+        terrain_erosion::RiverConstraint constraint{};
+    };
+    std::vector<AuthoredRiverConstraint> riverConstraints;
 
     f64 seaLevelMeters{0.0};
     u64 surfaceSourceRevision{0U};
+    u64 semanticRevision{0U};
+    u32 seasonalRainfallBin{0U};
+    f64 seasonalRainfallFactor{1.0};
 
     explicit BodyBuildInputs(
         const universe::BodyId body)
@@ -255,6 +279,15 @@ struct BodyBuildInputs
     {
     }
 };
+
+[[nodiscard]] terrain::TerrainSample SampleConstructionTerrain(
+    const BodyBuildInputs& inputs,
+    const terrain::TerrainQuery& query) noexcept
+{
+    if (inputs.corridorOverlay)
+        return inputs.corridorOverlay->Sample(query);
+    return inputs.source->Sample(query);
+}
 
 struct SharedBodyInputs
 {
@@ -264,6 +297,13 @@ struct SharedBodyInputs
     {
         std::scoped_lock lock(mutex);
         return current;
+    }
+
+    [[nodiscard]] std::shared_ptr<const BodyBuildInputs>
+    Latest() const
+    {
+        std::scoped_lock lock(mutex);
+        return pending ? pending : current;
     }
 
     void Store(
@@ -325,6 +365,8 @@ struct PhysicalBundle
     std::shared_ptr<
         const terrain_hydrology::DrainagePage>
         drainage;
+    std::shared_ptr<const terrain_erosion::RiverNetwork> rivers;
+    std::shared_ptr<const terrain_water::LakeWaterField> lakes;
 
     std::vector<
         terrain_hydrology::DrainageCellInput>
@@ -392,8 +434,19 @@ using BundlePtr =
 [[nodiscard]] terrain_geology::RockTypeId
 ResolvedBedrock(
     const BodyBuildInputs& inputs,
-    const terrain::PlanetSurfacePosition& position)
+    const terrain::PlanetSurfacePosition& position,
+    const terrain::TerrainSample& sample)
 {
+    if (inputs.stratigraphy != nullptr)
+    {
+        terrain::PlanetSurfacePosition exposed = position;
+        exposed.radialOffsetMeters = sample.elevationMeters -
+            sample.impactProcesses.heightDeltaMeters -
+            sample.iceFractures.heightDeltaMeters -
+            sample.impactProcesses.excavationDepthMeters;
+        const auto layer = inputs.stratigraphy->SampleExposedLayer(inputs.planet, exposed);
+        if (layer.primaryMaterial.IsValid()) return layer.primaryMaterial;
+    }
     const auto authored =
         surface_authoring::
             EvaluateTerrainConstraintSet(
@@ -418,6 +471,17 @@ ResolvedBedrock(
         : inputs.defaultBedrock;
 }
 
+[[nodiscard]] terrain_macro_geology::MacroGeologyDesc
+MacroGeologyDescFor(
+    const surface_model::TerrainProcessService& processes)
+{
+    terrain_macro_geology::MacroGeologyDesc desc{};
+    desc.ageUpliftDecay = processes.streamPower.ageUpliftDecay;
+    desc.tectonicDrainageGuidance =
+        processes.streamPower.tectonicDrainageGuidance;
+    return desc;
+}
+
 [[nodiscard]] terrain_hydrology::DrainageBoundaryCell
 BoundarySample(
     const BodyBuildInputs& inputs,
@@ -426,7 +490,7 @@ BoundarySample(
     const f64 footprintMeters)
 {
     const auto sample =
-        inputs.source->Sample({
+        SampleConstructionTerrain(inputs, {
             .unitDirection =
                 position.unitDirection,
             .footprintMeters =
@@ -452,7 +516,8 @@ BoundarySample(
         .drainageAreaSquareMeters = 0.0,
         .dischargeCubicMetersPerSecond = 0.0,
         .flowDx = 0,
-        .flowDy = 0
+        .flowDy = 0,
+        .outlet = sample.elevationMeters <= inputs.seaLevelMeters
     };
 }
 
@@ -465,9 +530,18 @@ BuildDrainageHalo(
     const f64 spacingMeters,
     const u64 revision)
 {
+    // Pages are independent: the halo is the terrain source sampled just
+    // outside the page (which already carries the baked river channels), never
+    // a neighbouring page's solved drainage.
     terrain_hydrology::DrainagePageHalo halo{};
     halo.revision = revision;
+    u64 boundaryFingerprint = revision;
 
+    // Physical pages share their edge row/column, so a neighbour's edge cell
+    // is the same physical point as this page's. The halo therefore carries
+    // two layers per side: the neighbour's cell one step BEYOND the shared
+    // edge (north/east/south/west) and the neighbour's copy of the shared edge
+    // itself (twin*). See DrainagePageHalo.
     std::array<
             std::vector<
                 terrain_hydrology::DrainageBoundaryCell>*,
@@ -478,6 +552,16 @@ BuildDrainageHalo(
                 &halo.west
             };
 
+    std::array<
+            std::vector<
+                terrain_hydrology::DrainageBoundaryCell>*,
+            4U> twinSides{
+                &halo.twinNorth,
+                &halo.twinEast,
+                &halo.twinSouth,
+                &halo.twinWest
+            };
+
     constexpr std::array<world::TileEdge, 4U>
         edges{
             world::TileEdge::North,
@@ -486,20 +570,72 @@ BuildDrainageHalo(
             world::TileEdge::West
         };
 
+    const auto combine =
+        [&boundaryFingerprint](
+            const terrain_hydrology::DrainageBoundaryCell& boundary)
+        {
+            boundaryFingerprint = terrain::StableCombine64(
+                boundaryFingerprint,
+                std::bit_cast<u32>(boundary.surfaceHeightMeters));
+            boundaryFingerprint = terrain::StableCombine64(
+                boundaryFingerprint,
+                std::bit_cast<u32>(boundary.conditionedHeightMeters));
+            boundaryFingerprint = terrain::StableCombine64(
+                boundaryFingerprint,
+                std::bit_cast<u32>(boundary.authoredDrainage));
+            boundaryFingerprint = terrain::StableCombine64(
+                boundaryFingerprint,
+                std::bit_cast<u64>(boundary.drainageAreaSquareMeters));
+            boundaryFingerprint = terrain::StableCombine64(
+                boundaryFingerprint,
+                std::bit_cast<u64>(boundary.dischargeCubicMetersPerSecond));
+            boundaryFingerprint = terrain::StableCombine64(
+                boundaryFingerprint,
+                static_cast<u64>(static_cast<u8>(boundary.flowDx)) << 24U |
+                    static_cast<u64>(static_cast<u8>(boundary.flowDy)) << 16U |
+                    static_cast<u64>(boundary.outlet) << 8U |
+                    (boundary.basinTerminalFingerprint & 0xffU));
+            boundaryFingerprint = terrain::StableCombine64(
+                boundaryFingerprint,
+                boundary.basinTerminalFingerprint);
+        };
+
     for (u32 edgeIndex = 0U;
          edgeIndex < edges.size();
          ++edgeIndex)
     {
         auto& side =
             *sides[edgeIndex];
+        auto& twinSide =
+            *twinSides[edgeIndex];
 
         side.resize(
+            resolution);
+        twinSide.resize(
             resolution);
 
         const auto mapping =
             world::NeighborAcrossTileEdge(
                 address.tile,
                 edges[edgeIndex]);
+
+        const terrain::PhysicalTerrainPageAddress neighborAddress{
+            .planet = address.planet,
+            .tile = mapping.tile};
+        // The neighbour's page-local cell (x, y), in this page's frame.
+        const auto neighborCell =
+            [&](const u32 x, const u32 y)
+        {
+            return BoundarySample(
+                inputs,
+                macro,
+                PagePosition(
+                    neighborAddress,
+                    resolution,
+                    x,
+                    y),
+                spacingMeters);
+        };
 
         for (u32 sampleIndex = 0U;
              sampleIndex < resolution;
@@ -517,22 +653,36 @@ BuildDrainageHalo(
                     mapped,
                     resolution);
 
-            side[sampleIndex] =
-                BoundarySample(
-                    inputs,
-                    macro,
-                    PagePosition(
-                        {
-                            .planet =
-                                address.planet,
-                            .tile =
-                                mapping.tile
-                        },
-                        resolution,
-                        x,
-                        y),
-                    spacingMeters);
+            // One step from the shared edge into the neighbour's interior.
+            u32 innerX = x;
+            u32 innerY = y;
+            switch (mapping.edge)
+            {
+            case world::TileEdge::North: innerY = y + 1U; break;
+            case world::TileEdge::East: innerX = x - 1U; break;
+            case world::TileEdge::South: innerY = y - 1U; break;
+            case world::TileEdge::West: innerX = x + 1U; break;
+            }
+
+            twinSide[sampleIndex] = neighborCell(x, y);
+            side[sampleIndex] = neighborCell(innerX, innerY);
+            combine(twinSide[sampleIndex]);
+            combine(side[sampleIndex]);
         }
+    }
+
+    // Diagonal pages are not resolved (they may not exist across a cube
+    // corner): the corner ring cells are walls, and the copies of this page's
+    // corner points held by the diagonal pages are the terrain samples.
+    {
+        const auto wall = []()
+        {
+            terrain_hydrology::DrainageBoundaryCell cell{};
+            cell.surfaceHeightMeters = 1.0e6F;
+            cell.conditionedHeightMeters = 1.0e6F;
+            return cell;
+        };
+        halo.corners = {wall(), wall(), wall(), wall()};
     }
 
     const auto bounds =
@@ -559,7 +709,7 @@ BuildDrainageHalo(
          index < 4U;
          ++index)
     {
-        halo.corners[index] =
+        halo.twinCorners[index] =
             BoundarySample(
                 inputs,
                 macro,
@@ -577,6 +727,7 @@ BuildDrainageHalo(
                 spacingMeters);
     }
 
+    halo.revision = boundaryFingerprint;
     return halo;
 }
 
@@ -596,6 +747,7 @@ BuildDrainageHalo(
         resolution;
     result->key.revisions =
         revisions;
+
     result->physicalLod =
         address.tile.level;
 
@@ -627,7 +779,8 @@ BuildDrainageHalo(
         macro(
             inputs.planet,
             inputs.source->GlobalFields(),
-            &inputs.constraints);
+            &inputs.constraints,
+            MacroGeologyDescFor(inputs.processes));
 
     for (u32 y = 0U;
          y < resolution;
@@ -651,7 +804,7 @@ BuildDrainageHalo(
                     y);
 
             const auto sample =
-                inputs.source->Sample({
+                SampleConstructionTerrain(inputs, {
                     .unitDirection =
                         position.
                             unitDirection,
@@ -676,16 +829,19 @@ BuildDrainageHalo(
                 {
                     .bedrockHeightMeters =
                         static_cast<f32>(
-                            sample.
-                                elevationMeters),
+                            sample.elevationMeters -
+                            sample.impactProcesses.heightDeltaMeters -
+                            sample.iceFractures.heightDeltaMeters),
                     .referenceBedrockHeightMeters =
                         static_cast<f32>(
-                            sample.
-                                elevationMeters),
+                            sample.elevationMeters -
+                            sample.impactProcesses.heightDeltaMeters -
+                            sample.iceFractures.heightDeltaMeters),
                     .bedrockMaterial =
                         ResolvedBedrock(
                             inputs,
-                            position),
+                            position,
+                            sample),
                     .regolithMeters = 0.0F,
                     .soilMeters = 0.0F,
                     .sandMeters = 0.0F,
@@ -698,6 +854,25 @@ BuildDrainageHalo(
                             1.0F),
                     .temporaryScalar = 0.0F
                 });
+
+            if (sample.impactProcesses.affectingImpacts > 0U ||
+                sample.impactProcesses.ejectaThicknessMeters > 0.0 ||
+                sample.impactProcesses.meltThicknessMeters > 0.0 ||
+                sample.impactProcesses.brecciaField > 0.0 ||
+                sample.impactProcesses.resurfacedMaterialFraction > 0.0 ||
+                sample.impactProcesses.microImpactCoverage > 0.0 ||
+                sample.impactProcesses.resurfacingThicknessMeters > 0.0)
+            {
+                static_cast<void>(material->ApplyImpact(
+                    x, y, sample.impactProcesses, inputs.geology));
+            }
+            if (sample.iceFractures.damage > 0.0)
+            {
+                auto& materialCell = material->At(x, y);
+                materialCell.temporaryScalar = std::max(
+                    materialCell.temporaryScalar,
+                    static_cast<f32>(sample.iceFractures.damage));
+            }
         }
     }
 
@@ -746,6 +921,7 @@ BuildDrainageHalo(
                         inputs.processes.
                             hydraulic.
                             rainfallMetersPerSecond *
+                        inputs.seasonalRainfallFactor *
                         static_cast<f64>(
                             std::clamp(
                                 result->
@@ -759,7 +935,13 @@ BuildDrainageHalo(
                     result->
                         macroGeology[index].
                         drainageGuidance),
-            .outlet = false
+            .outlet =
+                static_cast<f64>(
+                    result->material->At(
+                        static_cast<u32>(index % resolution),
+                        static_cast<u32>(index / resolution)).
+                        SurfaceHeightMeters()) <=
+                inputs.seaLevelMeters
         };
     }
 
@@ -767,7 +949,8 @@ BuildDrainageHalo(
         macro(
             inputs.planet,
             inputs.source->GlobalFields(),
-            &inputs.constraints);
+            &inputs.constraints,
+            MacroGeologyDescFor(inputs.processes));
 
     result->drainageHalo =
         BuildDrainageHalo(
@@ -778,20 +961,24 @@ BuildDrainageHalo(
             result->spacingMeters,
             context.inputRevisionHash);
 
+    terrain_hydrology::DrainagePage page =
+        terrain_hydrology::BuildDrainagePage(
+            *result->material,
+            result->key,
+            result->drainageInputs,
+            result->drainageHalo,
+            inputs.processes.streamPower.drainage);
+
+    // Basin-scale discharge comes from the bake, not from this page's catchment.
+    if (const auto& baked = inputs.source->Description().bakedRivers;
+        baked != nullptr)
+    {
+        ApplyBakedRiverDischarge(page, *baked, result->drainageInputs);
+    }
+
     result->drainage =
-        std::make_shared<
-            terrain_hydrology::DrainagePage>(
-                terrain_hydrology::
-                    BuildDrainagePage(
-                        *result->material,
-                        result->key,
-                        result->
-                            drainageInputs,
-                        result->
-                            drainageHalo,
-                        inputs.processes.
-                            streamPower.
-                            drainage));
+        std::make_shared<const terrain_hydrology::DrainagePage>(
+            std::move(page));
 
     return result;
 }
@@ -875,10 +1062,23 @@ void MergeSediment(
         macro(
             inputs.planet,
             inputs.source->GlobalFields(),
-            &inputs.constraints);
+            &inputs.constraints,
+            MacroGeologyDescFor(inputs.processes));
+
+    // With a baked incision field the macro stream-power solve already shaped
+    // the terrain source; only pages with authored height/uplift/protection/
+    // drainage constraints (which the bake does not model) still solve locally.
+    const bool incisionBaked =
+        inputs.source->Description().bakedRivers != nullptr &&
+        inputs.source->Description().bakedRivers->HasIncision() &&
+        inputs.constraints.height.constraints.empty() &&
+        inputs.constraints.uplift.constraints.empty() &&
+        inputs.constraints.protection.constraints.empty() &&
+        inputs.constraints.drainage.constraints.empty();
 
     if (inputs.processes.
-            streamPowerEnabled)
+            streamPowerEnabled &&
+        !incisionBaked)
     {
         const auto forcing =
             terrain_erosion::
@@ -899,8 +1099,8 @@ void MergeSediment(
                     result->
                         drainageHalo,
                     forcing,
-                    inputs.processes.
-                        streamPower);
+                        inputs.processes.
+                            streamPower);
 
         static_cast<void>(
             terrain_erosion::
@@ -1145,21 +1345,43 @@ void MergeSediment(
                             spacingMeters);
         }
 
-        const auto rivers =
-            terrain_erosion::
-                BuildRiverNetwork(
+        std::vector<terrain_erosion::RiverConstraint> pageConstraints;
+        for (const auto& authored : inputs.riverConstraints)
+        {
+            if (authored.page == result->key.address)
+                pageConstraints.push_back(authored.constraint);
+        }
+        const auto& bakedRivers = inputs.source->Description().bakedRivers;
+        if (bakedRivers != nullptr && pageConstraints.empty())
+        {
+            // The graph was solved once at bake time and the channels are
+            // already cut into the terrain: clip it to the page, no routing,
+            // meandering or incision at run time.
+            result->rivers = std::make_shared<terrain_erosion::RiverNetwork>(
+                BuildBakedPageRiverNetwork(
+                    *bakedRivers,
                     *result->drainage,
-                    {},
-                    inputs.processes.
-                        rivers);
+                    inputs.processes.rivers.maximumNodeSpacingMeters));
+        }
+        else
+        {
+            // Authored river constraints steer the local route, which the baked
+            // graph does not model: those pages keep the local solve.
+            result->rivers = std::make_shared<terrain_erosion::RiverNetwork>(
+                terrain_erosion::BuildRiverNetwork(
+                    *result->drainage,
+                    pageConstraints,
+                    inputs.processes.rivers,
+                    sediment.has_value() ? &*sediment : nullptr));
 
-        static_cast<void>(
-            terrain_erosion::
-                ApplyRiverNetworkIncision(
-                    *material,
-                    inputs.geology,
-                    *sediment,
-                    rivers));
+            static_cast<void>(
+                terrain_erosion::
+                    ApplyRiverNetworkIncision(
+                        *material,
+                        inputs.geology,
+                        *sediment,
+                        *result->rivers));
+        }
     }
 
     if (inputs.processes.
@@ -1310,6 +1532,17 @@ void MergeSediment(
 
     result->key.revisions =
         revisions;
+
+    if (result->drainage != nullptr && result->material != nullptr)
+    {
+        auto lakes = result->rivers != nullptr
+            ? terrain_water::BuildLakeWaterField(
+                  *result->drainage, *result->material, *result->rivers)
+            : terrain_water::BuildLakeWaterField(
+                  *result->drainage, *result->material);
+        result->lakes = std::make_shared<terrain_water::LakeWaterField>(
+            std::move(lakes));
+    }
 
     const u32 resolution =
         result->key.resolution;
@@ -1802,6 +2035,7 @@ void MergeSediment(
     const auto inputs =
         shared->Capture();
 
+
     if (inputs == nullptr ||
         inputs->source == nullptr)
     {
@@ -1867,7 +2101,8 @@ void MergeSediment(
     const BodyBuildInputs>
 CaptureInputs(
     editor_session::EditorWorldSession& world,
-    const StudioTerrainViewportRuntimeSnapshot& runtime)
+    const StudioTerrainViewportRuntimeSnapshot& runtime,
+    const time::SimulationTime atTime)
 {
     const auto* capability =
         world.Surfaces().
@@ -1917,12 +2152,107 @@ CaptureInputs(
         services->Geology();
     result->defaultBedrock =
         services->DefaultBedrock();
+    result->stratigraphy = services->Stratigraphy();
     result->processes =
         services->Processes();
+    const auto& seasonal = result->processes.hydraulic;
+    if (seasonal.seasonalRainfallAmplitude > 0.0)
+    {
+        constexpr f64 twoPi = 2.0 * std::numbers::pi;
+        constexpr u32 binsPerCycle = 12U;
+        const f64 seconds =
+            static_cast<f64>(atTime.microsecondsFromEpoch) / 1'000'000.0;
+        const f64 cycles =
+            seconds / seasonal.seasonalRainfallPeriodSeconds +
+            seasonal.seasonalRainfallPhaseRadians / twoPi;
+        const f64 fractionalCycle = cycles - std::floor(cycles);
+        result->seasonalRainfallBin = std::min(
+            binsPerCycle - 1U,
+            static_cast<u32>(fractionalCycle * binsPerCycle));
+        result->seasonalRainfallFactor = std::max(
+            0.0,
+            1.0 + seasonal.seasonalRainfallAmplitude *
+                std::cos(twoPi * fractionalCycle));
+    }
     result->biomes =
         services->Biomes();
     result->constraints =
         *constraints;
+    for (const auto& object : world.Objects().Children(runtime.terrainObject))
+    {
+        if (object.type != world_model::kRiverBasinConstraintType)
+            continue;
+        const auto basinValue = world.Objects().GetProperty(
+            object.id, world_model::kRiverConstraintBasin);
+        const auto kindValue = world.Objects().GetProperty(
+            object.id, world_model::kRiverConstraintKind);
+        const auto centerValue = world.Objects().GetProperty(
+            object.id, world_model::kRiverConstraintCenterMeters);
+        const auto directionValue = world.Objects().GetProperty(
+            object.id, world_model::kRiverConstraintDirection);
+        const auto radiusValue = world.Objects().GetProperty(
+            object.id, world_model::kRiverConstraintRadiusMeters);
+        const auto strengthValue = world.Objects().GetProperty(
+            object.id, world_model::kRiverConstraintStrength);
+        const auto enabledValue = world.Objects().GetProperty(
+            object.id, world_model::kRiverConstraintEnabled);
+        const auto pageFaceValue = world.Objects().GetProperty(
+            object.id, world_model::kRiverConstraintPageFace);
+        const auto pageLevelValue = world.Objects().GetProperty(
+            object.id, world_model::kRiverConstraintPageLevel);
+        const auto pageXValue = world.Objects().GetProperty(
+            object.id, world_model::kRiverConstraintPageX);
+        const auto pageYValue = world.Objects().GetProperty(
+            object.id, world_model::kRiverConstraintPageY);
+        if (!basinValue || !kindValue || !centerValue || !directionValue ||
+            !radiusValue || !strengthValue || !enabledValue || !pageFaceValue ||
+            !pageLevelValue || !pageXValue || !pageYValue)
+            continue;
+
+        const auto* basinText = std::get_if<std::string>(&*basinValue);
+        const auto* kind = std::get_if<i64>(&*kindValue);
+        const auto* center = std::get_if<math::Double3>(&*centerValue);
+        const auto* direction = std::get_if<math::Double3>(&*directionValue);
+        const auto* radius = std::get_if<f64>(&*radiusValue);
+        const auto* strength = std::get_if<f64>(&*strengthValue);
+        const auto* enabled = std::get_if<bool>(&*enabledValue);
+        const auto* pageFace = std::get_if<i64>(&*pageFaceValue);
+        const auto* pageLevel = std::get_if<i64>(&*pageLevelValue);
+        const auto* pageX = std::get_if<i64>(&*pageXValue);
+        const auto* pageY = std::get_if<i64>(&*pageYValue);
+        if (basinText == nullptr || kind == nullptr || center == nullptr ||
+            direction == nullptr || radius == nullptr || strength == nullptr ||
+            enabled == nullptr || pageFace == nullptr || pageLevel == nullptr ||
+            pageX == nullptr || pageY == nullptr || !*enabled || *kind < 0 ||
+            *kind > 2 || *pageFace < 0 || *pageFace > 5 || *pageLevel < 0 ||
+            *pageLevel > 30 || *pageX < 0 || *pageY < 0)
+            continue;
+        const auto basin = terrain_erosion::RiverBasinId::Parse(*basinText);
+        if (!basin.has_value())
+            continue;
+        terrain_erosion::RiverConstraint constraint{
+            .id = {object.id.high, object.id.low},
+            .targetBasin = *basin,
+            .kind = static_cast<terrain_erosion::RiverConstraintKind>(*kind),
+            .centerMeters = {center->x, center->y},
+            .directionMeters = {direction->x, direction->y},
+            .radiusMeters = *radius,
+            .strength = *strength,
+            .revision = world.Objects().Revision(),
+            .enabled = true};
+        if (constraint.IsValid())
+        {
+            result->riverConstraints.push_back({
+                .page = {
+                    .planet = runtime.planet.id,
+                    .tile = {
+                        .face = static_cast<world::CubeFace>(*pageFace),
+                        .level = static_cast<u8>(*pageLevel),
+                        .x = static_cast<u32>(*pageX),
+                        .y = static_cast<u32>(*pageY)}} ,
+                .constraint = constraint});
+        }
+    }
     result->seaLevelMeters =
         analytic->
             Description().
@@ -1931,6 +2261,7 @@ CaptureInputs(
     result->surfaceSourceRevision =
         runtime.
             surfaceSourceRevision;
+    result->semanticRevision = world.Objects().Revision();
 
     if (result->geology.Find(
             result->defaultBedrock) ==
@@ -1959,10 +2290,11 @@ InitialRevisions(
                     Revision(),
                 1U),
         .authoring =
-            std::max<u64>(
-                inputs.
-                    surfaceSourceRevision,
-                1U),
+            inputs.corridorOverlay
+                ? terrain::StableCombine64(
+                    std::max<u64>(inputs.surfaceSourceRevision, 1U),
+                    inputs.corridorOverlay->GenerationRevisions().authoring)
+                : std::max<u64>(inputs.surfaceSourceRevision, 1U),
         .biome =
             std::max<u64>(
                 inputs.biomes.
@@ -2053,6 +2385,7 @@ public:
         terrain::TerrainGenerationRevisions
             baseRevisions{};
         u64 surfaceSourceRevision{~u64{0}};
+        u64 semanticRevision{~u64{0}};
 
         std::vector<
             terrain_dependency::TerrainInvalidationRequest>
@@ -2063,7 +2396,9 @@ public:
             PagePublication,
             AddressHash>
             publications;
+
     };
+
 
     Impl(
         editor_session::EditorWorldSession& worldIn,
@@ -2412,6 +2747,9 @@ public:
             snapshot->material =
                 bundle->
                     material;
+            snapshot->rivers = bundle->rivers;
+            snapshot->drainage = bundle->drainage;
+            snapshot->lakes = bundle->lakes;
             snapshot->debugPage =
                 debug;
 
@@ -2441,11 +2779,11 @@ public:
     StudioTerrainPhysicalPageConfig
         config{};
 
-    // Half the hardware threads, so terrain page builds leave room for the
-    // render thread, orbital patch builds and the OS. ORBIT_TERRAIN_WORKERS
-    // overrides it.
+    // Keep terrain generation to a quarter of hardware threads so it yields
+    // more CPU to Studio's render/UI work and the other background pools.
+    // ORBIT_TERRAIN_WORKERS overrides this for throughput-focused runs.
     jobs::JobSystem jobs{
-        jobs::PoolWorkerCount("ORBIT_TERRAIN_WORKERS", 2U),
+        jobs::PoolWorkerCount("ORBIT_TERRAIN_WORKERS", 4U),
         "TerrainPages"};
 
     std::unordered_map<
@@ -2491,7 +2829,10 @@ StudioTerrainPhysicalPageService::
 void StudioTerrainPhysicalPageService::Sync(
     const std::span<
         const StudioTerrainViewportRuntimeSnapshot>
-        runtimes)
+        runtimes,
+    const time::SimulationTime atTime,
+    const std::span<const terrain::PhysicalTerrainPageAddress>
+        constructionInterests)
 {
     if (impl_->world == nullptr ||
         !impl_->world->HasWorld())
@@ -2539,7 +2880,8 @@ void StudioTerrainPhysicalPageService::Sync(
         auto inputs =
             CaptureInputs(
                 *impl_->world,
-                runtime);
+                runtime,
+                atTime);
 
         if (inputs == nullptr)
         {
@@ -2588,6 +2930,7 @@ void StudioTerrainPhysicalPageService::Sync(
                 surfaceSourceRevision =
                     runtime.
                         surfaceSourceRevision;
+            body->semanticRevision = inputs->semanticRevision;
             body->scheduler.
                 SetPaused(
                     impl_->paused);
@@ -2613,19 +2956,72 @@ void StudioTerrainPhysicalPageService::Sync(
                             body)).
                     first;
         }
-        else if (found->second->
-                     surfaceSourceRevision !=
-                 runtime.
-                     surfaceSourceRevision)
+        else if (found->second->surfaceSourceRevision != runtime.surfaceSourceRevision ||
+                 found->second->semanticRevision != inputs->semanticRevision ||
+                 found->second->shared->Capture()->seasonalRainfallBin !=
+                     inputs->seasonalRainfallBin)
         {
+            const auto previousInputs = found->second->shared->Latest();
+            // Recomposition must not erase an independently published
+            // infrastructure snapshot. The terrain source may have changed;
+            // publication will refresh the overlay against the new source.
+            if (previousInputs && previousInputs->corridorOverlay)
+            {
+                // CaptureInputs publishes immutable build inputs. Preserve the
+                // independently authored corridor overlay by rebinding it on
+                // a fresh copy, never by mutating the captured snapshot.
+                // Existing worker jobs retain their original version.
+                auto rebound = std::make_shared<BodyBuildInputs>(*inputs);
+                rebound->corridorOverlay =
+                    previousInputs->corridorOverlay->Rebind(rebound->source);
+                inputs = std::move(rebound);
+            }
+            const bool riverAuthoringChanged = previousInputs != nullptr &&
+                previousInputs->semanticRevision != inputs->semanticRevision;
+            const bool seasonalRainfallChanged = previousInputs != nullptr &&
+                previousInputs->seasonalRainfallBin != inputs->seasonalRainfallBin;
             found->second->
                 shared->
                 Stage(
                     inputs);
             found->second->
                 surfaceSourceRevision =
-                    runtime.
-                        surfaceSourceRevision;
+                        runtime.
+                            surfaceSourceRevision;
+            found->second->semanticRevision = inputs->semanticRevision;
+            if (riverAuthoringChanged)
+            {
+                std::vector<terrain::PhysicalTerrainPageAddress> affectedPages;
+                const auto addPages = [&affectedPages](const auto& constraints)
+                {
+                    for (const auto& authored : constraints)
+                    {
+                        if (std::ranges::find(affectedPages, authored.page) == affectedPages.end())
+                            affectedPages.push_back(authored.page);
+                    }
+                };
+                addPages(previousInputs->riverConstraints);
+                addPages(inputs->riverConstraints);
+                for (const auto& address : affectedPages)
+                {
+                    found->second->scheduler.QueueChange({
+                        .kind = terrain_dependency::TerrainChangeKind::ProcessSettings,
+                        .scope = {
+                            .planet = address.planet,
+                            .global = false,
+                            .center = address.tile,
+                            .radiusTiles = 1U,
+                            .downstreamRadiusTiles = 3U}});
+                }
+            }
+            if (seasonalRainfallChanged)
+            {
+                found->second->scheduler.QueueChange({
+                    .kind = terrain_dependency::TerrainChangeKind::Climate,
+                    .scope = {
+                        .planet = runtime.planet.id,
+                        .global = true}});
+            }
         }
 
         auto& body =
@@ -2635,53 +3031,29 @@ void StudioTerrainPhysicalPageService::Sync(
             interests[
                 runtime.body];
 
-        bodyInterests.insert(
-            runtime.
-                observerPhysicalPage);
-
-        impl_->RegisterInterest(
-            body,
-            runtime.
-                observerPhysicalPage);
-
-        constexpr std::array<
-            world::TileEdge,
-            4U>
-            edges{
-                world::TileEdge::North,
-                world::TileEdge::East,
-                world::TileEdge::South,
-                world::TileEdge::West
-            };
-
-        for (const auto edge :
-             edges)
+        // Match the renderer's complete 3x3 physical-page neighborhood.
+        // Diagonal pages are required when crossing corner seams.
+        const auto neighborhood = world::TileNeighborhood(
+            runtime.observerPhysicalPage.tile,
+            PhysicalPageCoverageRadius(runtime));
+        for (const auto& tile : neighborhood)
         {
-            const auto neighbor =
-                world::
-                    NeighborAcrossTileEdge(
-                        runtime.
-                            observerPhysicalPage.
-                            tile,
-                        edge);
-
-            const terrain::
-                PhysicalTerrainPageAddress
-                neighborAddress{
-                    .planet =
-                        runtime.
-                            observerPhysicalPage.
-                            planet,
-                    .tile =
-                        neighbor.tile
-                };
-
-            bodyInterests.insert(
-                neighborAddress);
-
-            impl_->RegisterInterest(
-                body,
-                neighborAddress);
+            const terrain::PhysicalTerrainPageAddress address{
+                .planet = runtime.observerPhysicalPage.planet,
+                .tile = tile
+            };
+            if (bodyInterests.insert(address).second)
+                impl_->RegisterInterest(body, address);
+        }
+        // Authored infrastructure receives a separate hard-capped interest
+        // set. No surrounding empty pages are requested for these footprints.
+        for (const auto& address : constructionInterests)
+        {
+            if (address.planet != runtime.planet.id ||
+                address.tile.level != runtime.physicalPageLevel)
+                continue;
+            if (bodyInterests.insert(address).second)
+                impl_->RegisterInterest(body, address);
         }
     }
 
@@ -2730,6 +3102,181 @@ void StudioTerrainPhysicalPageService::Sync(
             }
         }
     }
+}
+
+void StudioTerrainPhysicalPageService::StageCorridorConstruction(
+    const universe::BodyId body,
+    std::shared_ptr<const path_geometry::CorridorTerrainSource> overlay,
+    const std::span<const terrain::PhysicalTerrainPageAddress> affectedPages)
+{
+    if (!body || affectedPages.empty() || affectedPages.size() > 4096U)
+        throw std::invalid_argument(
+            "Corridor publication requires a valid body and bounded old/new pages.");
+    const auto found = impl_->bodies.find(body);
+    if (found == impl_->bodies.end())
+        throw std::invalid_argument(
+            "Construction target has no physical terrain runtime.");
+    auto& runtime = *found->second;
+    const auto current = runtime.shared->Latest();
+    if (!current || !current->source)
+        throw std::logic_error("Construction target has no terrain source.");
+    for (const auto& address : affectedPages)
+    {
+        if (address.planet != current->planet.id ||
+            address.tile.level > 24U ||
+            address.tile.x >= (1U << address.tile.level) ||
+            address.tile.y >= (1U << address.tile.level))
+            throw std::invalid_argument(
+                "Corridor construction page belongs to another planet or is invalid.");
+    }
+    // Copy-on-write: currently running workers retain their original inputs.
+    // The scheduler's applied-change callback commits the pending snapshot.
+    auto next = std::make_shared<BodyBuildInputs>(*current);
+    next->corridorOverlay = overlay
+        ? overlay->Rebind(current->source)
+        : nullptr;
+    runtime.shared->Stage(std::move(next));
+    for (const auto& address : affectedPages)
+    {
+        runtime.scheduler.QueueChange({
+            .kind = terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+            .scope = {
+                .planet = address.planet,
+                .global = false,
+                .center = address.tile,
+                .radiusTiles = 0U,
+                .downstreamRadiusTiles = 0U
+            }
+        });
+    }
+}
+
+std::optional<f64>
+StudioTerrainPhysicalPageService::HeightPageBatch::Sample(
+    const math::Double3& direction) const noexcept
+{
+    if (!planet || !std::isfinite(direction.x) ||
+        !std::isfinite(direction.y) || !std::isfinite(direction.z) ||
+        math::LengthSquared(direction) < 0.5)
+        return std::nullopt;
+    const auto tile = world::TileForDirection(direction, level);
+    const auto found = pages.find(tile);
+    if (found != pages.end() && found->second &&
+        found->second->address.planet == planet)
+    {
+        const auto coordinate = world::UnitDirectionToCube(
+            math::Normalize(direction));
+        const auto bounds = world::TileBounds(tile);
+        const f64 du = bounds.maximumUv.x - bounds.minimumUv.x;
+        const f64 dv = bounds.maximumUv.y - bounds.minimumUv.y;
+        if (du <= 0 || dv <= 0) return std::nullopt;
+        return found->second->SampleSurfaceHeight(
+            std::clamp((coordinate.uv.x - bounds.minimumUv.x)/du,0.0,1.0),
+            std::clamp((coordinate.uv.y - bounds.minimumUv.y)/dv,0.0,1.0));
+    }
+    return std::nullopt;
+}
+
+StudioTerrainPhysicalPageService::HeightPageBatch
+StudioTerrainPhysicalPageService::CaptureHeightTiles(
+    const world::PlanetId planet, const u8 level,
+    const std::span<const world::PlanetTileId> tiles) const
+{
+    HeightPageBatch result{};
+    result.planet = planet;
+    result.level = level;
+    result.revisionFingerprint = 1469598103934665603ULL;
+    for (const auto& tile : tiles)
+    {
+        if (tile.level != level) continue;
+        const auto snapshot = Find({.planet=planet,.tile=tile});
+        result.revisionFingerprint = terrain::StableCombine64(
+            result.revisionFingerprint,
+            (static_cast<u64>(static_cast<u8>(tile.face)) << 56U) ^
+            (static_cast<u64>(tile.level) << 48U) ^
+            (static_cast<u64>(tile.x) << 24U) ^ tile.y);
+        result.revisionFingerprint = terrain::StableCombine64(
+            result.revisionFingerprint,
+            snapshot ? snapshot->revisionFingerprint : 0U);
+        if (snapshot) result.pages.emplace(tile, snapshot);
+    }
+    return result;
+}
+
+StudioTerrainPhysicalPageService::HeightPageBatch
+StudioTerrainPhysicalPageService::CaptureHeightPages(
+    const world::PlanetId planet, const u8 level,
+    const std::span<const math::Double3> directions) const
+{
+    std::vector<world::PlanetTileId> tiles;
+    tiles.reserve(directions.size());
+    for (const auto& direction : directions)
+    {
+        if (!std::isfinite(direction.x) || !std::isfinite(direction.y) ||
+            !std::isfinite(direction.z) ||
+            math::LengthSquared(direction) < 0.5) continue;
+        tiles.push_back(world::TileForDirection(direction, level));
+    }
+    std::sort(tiles.begin(), tiles.end(), HeightPageBatch::TileLess{});
+    tiles.erase(std::unique(tiles.begin(), tiles.end()), tiles.end());
+    return CaptureHeightTiles(planet, level, tiles);
+}
+
+std::optional<f64>
+StudioTerrainPhysicalPageService::SamplePublishedSurfaceHeight(
+    const world::PlanetId planet,
+    const math::Double3& unitDirection,
+    const u8 pageLevel) const noexcept
+{
+    if (!planet || pageLevel > 24U ||
+        !std::isfinite(unitDirection.x) ||
+        !std::isfinite(unitDirection.y) ||
+        !std::isfinite(unitDirection.z) ||
+        math::LengthSquared(unitDirection) < 0.5)
+        return std::nullopt;
+    const auto coordinate = world::UnitDirectionToCube(
+        math::Normalize(unitDirection));
+    const terrain::PhysicalTerrainPageAddress address{
+        .planet = planet,
+        .tile = world::TileForDirection(unitDirection, pageLevel)
+    };
+    const auto snapshot = Find(address);
+    if (!snapshot || !snapshot->material)
+        return std::nullopt;
+    const auto bounds = world::TileBounds(address.tile);
+    const f64 du = bounds.maximumUv.x - bounds.minimumUv.x;
+    const f64 dv = bounds.maximumUv.y - bounds.minimumUv.y;
+    if (du <= 0.0 || dv <= 0.0)
+        return std::nullopt;
+    const f64 u = std::clamp(
+        (coordinate.uv.x - bounds.minimumUv.x) / du, 0.0, 1.0);
+    const f64 v = std::clamp(
+        (coordinate.uv.y - bounds.minimumUv.y) / dv, 0.0, 1.0);
+    return snapshot->SampleSurfaceHeight(u, v);
+}
+
+std::optional<f64> StudioTerrainPhysicalPageSnapshot::SampleSurfaceHeight(
+    const f64 u, const f64 v) const noexcept
+{
+    if (!material || !std::isfinite(u) || !std::isfinite(v) ||
+        u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
+        return std::nullopt;
+    const u32 n = material->Resolution();
+    if (n == 0U) return std::nullopt;
+    const f64 px = u * static_cast<f64>(n - 1U);
+    const f64 py = v * static_cast<f64>(n - 1U);
+    const u32 x0 = static_cast<u32>(px);
+    const u32 y0 = static_cast<u32>(py);
+    const u32 x1 = std::min(x0 + 1U, n - 1U);
+    const u32 y1 = std::min(y0 + 1U, n - 1U);
+    const f64 tx = px - static_cast<f64>(x0);
+    const f64 ty = py - static_cast<f64>(y0);
+    const f64 a = material->At(x0, y0).SurfaceHeightMeters();
+    const f64 b = material->At(x1, y0).SurfaceHeightMeters();
+    const f64 d = material->At(x0, y1).SurfaceHeightMeters();
+    const f64 e = material->At(x1, y1).SurfaceHeightMeters();
+    return (a * (1.0 - tx) + b * tx) * (1.0 - ty) +
+           (d * (1.0 - tx) + e * tx) * ty;
 }
 
 void StudioTerrainPhysicalPageService::

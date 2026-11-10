@@ -63,7 +63,9 @@ int main()
         const auto sphere =
             commands.CreateObject(
                 world_model::kVisibilityProxyType,
-                "Sphere Proxy",
+                // Siblings resolve in ObjectStore order (sort_order, then name), so the
+                // names pin the order the assertions below rely on.
+                "A Sphere Proxy",
                 group);
 
         commands.SetProperty(

@@ -4,7 +4,6 @@
 #include <orbit/studio_ui/StudioShellModel.hpp>
 #include <orbit/studio_ui/StudioUiContributions.hpp>
 #include <orbit/studio_ui/ViewportAuthoringState.hpp>
-#include <orbit/studio_ui/WorldAssetsBrowserModel.hpp>
 
 #include <cstdlib>
 #include <iostream>
@@ -25,19 +24,6 @@ void Check(const bool condition, const std::string_view what)
     }
 }
 
-void WorldAssetsPanelIsAnOptionalCompatibilitySurface()
-{
-    const auto& contract = kWorldAssetsBrowserContract;
-    Check(contract.panel.IsValid(), "browser panel id is stable and valid");
-    Check(!contract.defaultOpen, "composite browser is not part of the default shell");
-    Check(
-        contract.defaultDock == editor_ui::DockRegion::Left,
-        "browser remains available in the left dock when explicitly opened");
-    Check(contract.dockOrder < 0, "browser keeps a deterministic dock position");
-    Check(contract.minSize.width >= 240.0F, "browser keeps a usable minimum width");
-    Check(contract.defaultSize.width <= 360.0F, "browser stays compact when opened");
-}
-
 void WorkspacesChooseTheExpectedBrowserSurface()
 {
     Check(DefaultBrowserMode(StudioWorkspaceMode::Scene) == StudioBrowserMode::World, "Scene starts on World");
@@ -46,9 +32,9 @@ void WorkspacesChooseTheExpectedBrowserSurface()
     Check(DefaultBrowserMode(StudioWorkspaceMode::Simulation) == StudioBrowserMode::World, "Simulation starts on World");
     Check(DefaultBrowserMode(StudioWorkspaceMode::Shading) == StudioBrowserMode::Assets, "Shading starts on Assets");
 
-    Check(BrowserSourcePanelTitle(StudioBrowserMode::World) == std::string_view{"Explorer"}, "World maps to Explorer");
+    Check(BrowserSourcePanelTitle(StudioBrowserMode::World) == std::string_view{"Explorer Source"}, "World maps to the internal Explorer source panel");
     Check(BrowserSourcePanelTitle(StudioBrowserMode::Assets) == std::string_view{"Material Service"}, "Assets map to Material Service");
-    Check(StudioWorkspaceName(StudioWorkspaceMode::Scene) == "Scene", "Scene name stable");
+    Check(StudioWorkspaceName(StudioWorkspaceMode::Scene) == "Build", "Build workspace label stable");
     Check(StudioWorkspaceName(StudioWorkspaceMode::Shading) == "Shading", "Shading name stable");
 }
 
@@ -187,62 +173,6 @@ void ViewportLayoutsClampAndRetainGizmoState()
     Check(state.gizmo.surfaceSnap, "surface snap retained");
 }
 
-content::AssetRecord Asset(
-    const u64 low,
-    const content::AssetKind kind,
-    std::string name,
-    std::string path,
-    std::vector<std::string> tags = {})
-{
-    return {
-        .id = {.high = 0xA55E7, .low = low},
-        .kind = kind,
-        .name = std::move(name),
-        .sourcePath = std::move(path),
-        .tags = std::move(tags)
-    };
-}
-
-void AssetBrowserSupportsCollectionsAndSearch()
-{
-    const auto vehicle = Asset(
-        1,
-        content::AssetKind::Component,
-        "Harlow Coupe",
-        "Content/Vehicles/HarlowCoupe.component",
-        {"vehicle", "blueprint", "v8"});
-    const auto material = Asset(
-        2,
-        content::AssetKind::Material,
-        "Paint Blue",
-        "Content/Materials/PaintBlue.material",
-        {"paint"});
-
-    WorldAssetsBrowserModel browser;
-    browser.SetCategory(AssetBrowserCategory::Vehicles);
-    Check(browser.Matches(vehicle), "vehicle category uses tags");
-    Check(!browser.Matches(material), "vehicle category rejects material");
-
-    browser.SetCategory(AssetBrowserCategory::All);
-    browser.SetQuery("harlow");
-    Check(browser.Matches(vehicle), "asset query searches names");
-
-    browser.SetQuery({});
-    browser.SetSearchChips({"v8"});
-    Check(browser.Matches(vehicle), "search chips search asset tags");
-
-    browser.SetSearchChips({});
-    browser.ToggleFavorite(vehicle.id);
-    browser.SetCategory(AssetBrowserCategory::Favorites);
-    Check(browser.Matches(vehicle), "favorites collection works");
-
-    browser.RecordRecent(material.id);
-    browser.RecordRecent(vehicle.id);
-    browser.SetCategory(AssetBrowserCategory::Recent);
-    Check(browser.Matches(vehicle) && browser.Matches(material), "recent collection works");
-    Check(browser.Recent().front() == vehicle.id, "most recent asset comes first");
-}
-
 void PersistentStateRoundTrips()
 {
     StudioPersistentState state;
@@ -274,14 +204,12 @@ void PersistentStateRoundTrips()
 
 int main()
 {
-    WorldAssetsPanelIsAnOptionalCompatibilitySurface();
     WorkspacesChooseTheExpectedBrowserSurface();
     WorkspacesShareOneCanonicalSpatialShell();
     InspectorProvidersAreOrderedAndOwnerScoped();
     ContributionsAreStableAndOwnerScoped();
     CommandPaletteRanksUsefulMatches();
     ViewportLayoutsClampAndRetainGizmoState();
-    AssetBrowserSupportsCollectionsAndSearch();
     PersistentStateRoundTrips();
     return EXIT_SUCCESS;
 }

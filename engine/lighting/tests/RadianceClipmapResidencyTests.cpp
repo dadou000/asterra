@@ -1,6 +1,7 @@
 #include <orbit/lighting/RadianceClipmapResidency.hpp>
 
 #include <algorithm>
+#include <vector>
 
 int main()
 {
@@ -260,6 +261,57 @@ int main()
             0.0F)
     {
         return 16;
+    }
+
+    // The update list is built from a cached batch between full scans. Drawing
+    // it a few cells at a time must give exactly the order one large request
+    // gives, with no repeats while nothing is committed.
+    {
+        const RadianceClipmapConfig bigConfig{
+            .baseCellSizeMeters = 1.0,
+            .levelScale = 2.0,
+            .levelCount = 2U,
+            .cellsPerAxis = 8U
+        };
+
+        RadianceClipmapResidency reference(bigConfig);
+        reference.Reset(view, {0.0, 0.0, 0.0}, 5U);
+        const auto expected =
+            reference.BuildUpdateList({0.0, 0.0, 0.0}, 32U);
+
+        RadianceClipmapResidency batched(bigConfig);
+        batched.Reset(view, {0.0, 0.0, 0.0}, 5U);
+
+        std::vector<RadianceUpdateCandidate> collected;
+        for (int call = 0; call < 8; ++call)
+        {
+            const auto part =
+                batched.BuildUpdateList({0.0, 0.0, 0.0}, 4U);
+            collected.insert(collected.end(), part.begin(), part.end());
+        }
+
+        if (expected.size() != 32U || collected.size() != 32U)
+        {
+            return 17;
+        }
+
+        for (std::size_t i = 0U; i < expected.size(); ++i)
+        {
+            if (expected[i].key != collected[i].key)
+            {
+                return 18;
+            }
+        }
+
+        // An invalidation must drop the cached remainder.
+        batched.RequestGlobalRefresh();
+        const auto afterRefresh =
+            batched.BuildUpdateList({0.0, 0.0, 0.0}, 4U);
+        if (afterRefresh.size() != 4U ||
+            afterRefresh.front().key != expected.front().key)
+        {
+            return 19;
+        }
     }
 
     return 0;

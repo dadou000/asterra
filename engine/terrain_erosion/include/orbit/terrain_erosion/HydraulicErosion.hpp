@@ -44,6 +44,11 @@ struct HydraulicErosionConfig
     // Uniform rain is added to the optional per-cell rainfall rate supplied to
     // SimulateHydraulicErosion().
     f64 rainfallMetersPerSecond{0.0002};
+    // Planet-wide seasonal modulation of the static precipitation map used by
+    // M09 runoff. Zero amplitude preserves the authored annual-mean rainfall.
+    f64 seasonalRainfallAmplitude{0.0};
+    f64 seasonalRainfallPeriodSeconds{31'557'600.0};
+    f64 seasonalRainfallPhaseRadians{0.0};
 
     // Virtual-pipe shallow-water parameters after Mei/Decaudin/Hu.
     f64 gravityMetersPerSecondSquared{9.81};

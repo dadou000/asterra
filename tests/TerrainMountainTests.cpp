@@ -302,8 +302,30 @@ bool TectonicRegression()
         noShadow.global.tectonic.rainShadowStrength = 0.0;
         const terrain::AnalyticTerrainSource sourceNoShadow(planet, noShadow);
 
-        const auto frame = world::MakeSurfaceFrame(peak);
+        // The best peak in each octant of the planet: whether one particular
+        // range sits where the winds give it a measurable shadow depends on
+        // the exact geography, which is not what this checks.
+        std::array<math::Double3, 8> octantPeak{};
+        std::array<f64, 8> octantHighest;
+        octantHighest.fill(-1.0e30);
+        for (u32 i = 0; i < surveyCount; ++i)
+        {
+            const f64 y = 1.0 - 2.0 * (static_cast<f64>(i) + 0.5) / surveyCount;
+            const f64 radius = std::sqrt(std::max(0.0, 1.0 - y * y));
+            const math::Double3 direction{radius * std::cos(goldenAngle * i), y, radius * std::sin(goldenAngle * i)};
+            const u32 octant = (direction.x > 0.0 ? 1U : 0U) | (direction.y > 0.0 ? 2U : 0U) |
+                (direction.z > 0.0 ? 4U : 0U);
+            const f64 elevation = source.Sample({direction, 20.0}).elevationMeters;
+            if (elevation > octantHighest[octant])
+            {
+                octantHighest[octant] = elevation;
+                octantPeak[octant] = direction;
+            }
+        }
         bool foundAttenuation = false;
+        for (const math::Double3& octantDirection : octantPeak)
+        {
+        const auto frame = world::MakeSurfaceFrame(octantDirection);
         // Several ring radii, not just one: a range's rain-shadow footprint
         // depends on its own size/orientation, which shifts with the exact
         // tectonic plate arrangement (e.g. plateSizeVarianceDot) -- pinning
@@ -311,11 +333,11 @@ bool TectonicRegression()
         // which specific range the deterministic survey happened to find,
         // not on whether rain shadow actually works.
         for (const f64 ringMeters :
-             {30'000.0, 60'000.0, 100'000.0, 150'000.0, 200'000.0})
+             {30'000.0, 60'000.0, 100'000.0, 150'000.0, 200'000.0, 300'000.0, 400'000.0})
         {
-            for (u32 k = 0; k < 8; ++k)
+            for (u32 k = 0; k < 16; ++k)
             {
-                const f64 angle = static_cast<f64>(k) * std::numbers::pi / 4.0;
+                const f64 angle = static_cast<f64>(k) * std::numbers::pi / 8.0;
                 const math::Double2 offset{ringMeters * std::cos(angle), ringMeters * std::sin(angle)};
                 const auto direction = world::DirectionAtSurfaceOffset(planet, frame, offset);
 
@@ -332,6 +354,7 @@ bool TectonicRegression()
                     foundAttenuation = true;
                 }
             }
+        }
         }
         if (!foundAttenuation)
         {

@@ -14,15 +14,18 @@ Busy means any of:
 - any RPC/MCP request (`EditorSessionRpcHost::RequestCount`);
 - far terrain patches still being built (`StudioViewportRenderer::HasPendingTerrainWork`).
 
-After 1.5 s without any of these the loop paces to `ORBIT_IDLE_FPS` (default **30**). Set `ORBIT_IDLE_FPS=0` to
-disable the throttle (the old behaviour).
+With Eco off a static scene is **not** capped: the loop keeps rendering at the display rate (vsync) after the
+1.5 s idle mark. The status strip's Eco toggle uses 15 FPS while active and 1 FPS after 1.5 s idle. RPC dispatch
+posts a window wake message, so MCP commands are handled on the next loop iteration even during the 1 FPS wait.
+Set `ORBIT_IDLE_FPS` to a positive rate (default **0** = off) to opt in to an idle cap while Eco is off; Eco mode
+always applies its own limits.
 
 Measured on Earth (per-process GPU counters, Orbit alone):
 
 | State | GPU | CPU |
 | --- | --- | --- |
-| Unthrottled (`ORBIT_IDLE_FPS=0`) | 20.9% | 0.92 cores |
-| Idle throttled (default) | 3.7% | 0.26 cores |
+| Unthrottled (default, Eco off) | 20.9% | 0.92 cores |
+| Idle throttled (`ORBIT_IDLE_FPS=30`, opt-in) | 3.7% | 0.26 cores |
 
 ## Orbital terrain patches
 
@@ -59,7 +62,7 @@ builds, picking and sun-visibility marching.
 
 - Worker threads are named, so debuggers, crash dumps and profilers (and `SetThreadDescription` readers) show what a
   thread is: `Orbit.Main`, `Orbit.TerrainPages.<n>`, `Orbit.Routes.<n>`, `Orbit.GlobePatch`, `Orbit.HotIteration`,
-  `Orbit.HotReloadHost`, `Orbit.MapLayers`, `Orbit.ProjectScan`, `Orbit.UniformPlanet`. New pools must pass a name to
+  `Orbit.HotReloadHost`, `Orbit.MapLayers`, `Orbit.ProjectScan`. New pools must pass a name to
   `jobs::JobSystem` and new long-lived threads must call `core::SetCurrentThreadName`.
 - Pools no longer each take every hardware thread. The physical-page pool uses half of them (`jobs::PoolWorkerCount`,
   at least 2) and the route planner uses 2, so on a 16-thread machine the terrain pool (8) + orbital patch builds (6) +
@@ -114,7 +117,7 @@ Hot iteration: engine C++ change, picked up by the generation handoff; nothing i
 
 Found with the micro-profiler ([ORBIT_PROFILER.md](ORBIT_PROFILER.md)): climbing from the ground to orbit and back
 produced nine ~3 s main-thread stalls, every one inside `dxcompiler.dll` under
-`GpuFieldGenerator::GpuFieldGenerator` (`StudioViewportRendererBase.cpp`, `ComposeBase`).
+`GpuFieldGenerator::GpuFieldGenerator` (`StudioViewportRenderer.cpp`, `ComposeBase`).
 
 Cause: the adaptive coverage tier changes the clipmap config at a few altitudes, and `ComposeBase` treated any
 clipmap change as "rebuild everything", including the `GpuFieldGenerator`, which recompiles its compute shader on
@@ -314,8 +317,9 @@ budget step made side-on clouds blurry, striped and see-through), stratified per
 sun march, a 4-step sun march (100-500 m steps on the base shape + a coarse tail) instead of per-sample LUT reads, and
 **half-resolution** marching into an RGBA16F target (radiance + transmittance) bounded by the nearest full-resolution
 depth, composited over the scene with an alpha blend (`L/(1-T), 1-T` -> `L + T*scene`) and bilinear upsampling, with no
-scene copy. Passes: `<view>.Clouds`, `<view>.CloudsComposite`, before `<view>.Atmosphere`. Not done: the reference
-also time-slices a cached light volume and reprojects across frames.
+scene copy. Passes: `<view>.Clouds`, `<view>.CloudsComposite` (correction: these run after `<view>.Atmosphere`, not before; see `/rendering/clouds/raymarch`). Not done at the time (both were added later: `cloud_light_volume` and
+`cloud_temporal`, see `/rendering/clouds/shadows-and-light-volume`): the reference also time-slices a cached light
+volume and reprojects across frames. Constants below have moved since: see `/rendering/clouds/raymarch`.
 
 **Measured** (Release, Earth, frame-time average with clouds on vs off): at 8 km looking at the horizon 6.58 vs 5.88 ms
 (+0.7 ms), looking down 7.51 vs 5.86 ms (+1.65 ms), inside the layer at 3 km 7.33 vs 5.95 ms; the first full-resolution

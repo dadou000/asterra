@@ -63,7 +63,10 @@ enum class TextureFormat : u8
     RGBA16_Float,
     R16_UInt,
     R32_Float,
-    RG32_Float
+    RG32_Float,
+    // 8-bit colour stored as sRGB: sampling returns linear values and mip
+    // generation filters in linear space (albedo and emissive textures).
+    RGBA8_SRGB
 };
 
 [[nodiscard]] constexpr u32 TextureFormatBytesPerTexel(
@@ -72,6 +75,7 @@ enum class TextureFormat : u8
     switch (format)
     {
     case TextureFormat::RGBA8_UNorm:
+    case TextureFormat::RGBA8_SRGB:
     case TextureFormat::D32_Float:
     case TextureFormat::R32_Float:
         return 4U;
@@ -101,6 +105,14 @@ struct TextureDesc
     // signals real UAV intent, so callers that don't need it shouldn't
     // pay for it.
     bool allowUnorderedAccess{false};
+    // Number of mip levels, clamped to the full chain for the extent. Level 0
+    // is uploaded with CopyBufferToTexture and the rest filled with
+    // CommandList::GenerateMipmaps. Sampling a texture with more than one
+    // level is trilinear.
+    u32 mipLevels{1U};
+    // Wrap (repeat) addressing instead of clamp-to-edge, for tiling
+    // surface textures. Independent of mipLevels.
+    bool repeatAddress{false};
 };
 
 class Buffer
@@ -133,6 +145,7 @@ public:
     [[nodiscard]] virtual u32 Width() const noexcept = 0;
     [[nodiscard]] virtual u32 Height() const noexcept = 0;
     [[nodiscard]] virtual TextureFormat Format() const noexcept = 0;
+    [[nodiscard]] virtual u32 MipLevels() const noexcept { return 1U; }
 
 protected:
     Texture() = default;

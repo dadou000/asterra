@@ -67,12 +67,8 @@ private:
     bool uninitialize_{false};
 };
 
-[[nodiscard]] content::ImportOutput
-ImportTexture(
-    const content::ImportRequest& request)
+[[nodiscard]] ComPtr<IWICImagingFactory> CreateFactory()
 {
-    ComApartment apartment;
-
     ComPtr<IWICImagingFactory> factory;
 
     Check(
@@ -83,16 +79,16 @@ ImportTexture(
             IID_PPV_ARGS(&factory)),
         "WIC importer failed to create its imaging factory.");
 
-    ComPtr<IWICBitmapDecoder> decoder;
+    return factory;
+}
 
-    Check(
-        factory->CreateDecoderFromFilename(
-            request.sourcePath.c_str(),
-            nullptr,
-            GENERIC_READ,
-            WICDecodeMetadataCacheOnDemand,
-            &decoder),
-        "WIC importer failed to open the source image.");
+[[nodiscard]] content::ImportOutput
+DecodeToArtifact(
+    IWICImagingFactory& imagingFactory,
+    IWICBitmapDecoder& imageDecoder)
+{
+    IWICImagingFactory* const factory = &imagingFactory;
+    IWICBitmapDecoder* const decoder = &imageDecoder;
 
     ComPtr<IWICBitmapFrameDecode> frame;
 
@@ -192,6 +188,27 @@ ImportTexture(
         }
     };
 }
+[[nodiscard]] content::ImportOutput
+ImportTexture(
+    const content::ImportRequest& request)
+{
+    ComApartment apartment;
+    const auto factory = CreateFactory();
+
+    ComPtr<IWICBitmapDecoder> decoder;
+
+    Check(
+        factory->CreateDecoderFromFilename(
+            request.sourcePath.c_str(),
+            nullptr,
+            GENERIC_READ,
+            WICDecodeMetadataCacheOnDemand,
+            &decoder),
+        "WIC importer failed to open the source image.");
+
+    return DecodeToArtifact(*factory.Get(), *decoder.Get());
+}
+
 } // namespace
 
 void RegisterTextureImporters(
@@ -225,6 +242,49 @@ content::RuntimeTexture DecodeTextureFile(
             content::ImportRequest{
                 .sourcePath = path
             });
+
+    return content::DecodeRuntimeTexture(
+        output.artifacts.at(0).bytes);
+}
+} // namespace orbit::content_wic
+
+namespace orbit::content_wic
+{
+content::RuntimeTexture DecodeTextureMemory(
+    const std::span<const std::byte> encoded)
+{
+    if (encoded.empty() ||
+        encoded.size() > std::numeric_limits<DWORD>::max())
+    {
+        throw std::runtime_error(
+            "WIC importer received an empty or oversized image buffer.");
+    }
+
+    ComApartment apartment;
+    const auto factory = CreateFactory();
+
+    ComPtr<IWICStream> stream;
+    Check(
+        factory->CreateStream(&stream),
+        "WIC importer failed to create a memory stream.");
+    Check(
+        stream->InitializeFromMemory(
+            reinterpret_cast<BYTE*>(
+                const_cast<std::byte*>(encoded.data())),
+            static_cast<DWORD>(encoded.size())),
+        "WIC importer failed to open the image buffer.");
+
+    ComPtr<IWICBitmapDecoder> decoder;
+    Check(
+        factory->CreateDecoderFromStream(
+            stream.Get(),
+            nullptr,
+            WICDecodeMetadataCacheOnDemand,
+            &decoder),
+        "WIC importer cannot decode this image buffer.");
+
+    const content::ImportOutput output =
+        DecodeToArtifact(*factory.Get(), *decoder.Get());
 
     return content::DecodeRuntimeTexture(
         output.artifacts.at(0).bytes);

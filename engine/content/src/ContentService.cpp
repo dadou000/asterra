@@ -8,11 +8,33 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 
 namespace orbit::content
 {
 namespace
 {
+[[nodiscard]] std::filesystem::path ResolveProjectRoot(
+    const std::filesystem::path& projectRoot)
+{
+    std::error_code error;
+    auto resolved = std::filesystem::weakly_canonical(projectRoot, error);
+    if (!error)
+        return resolved;
+
+    error.clear();
+    resolved = std::filesystem::absolute(projectRoot, error);
+    if (error)
+    {
+        throw std::filesystem::filesystem_error(
+            "Could not resolve the project content root",
+            projectRoot,
+            error);
+    }
+
+    return resolved.lexically_normal();
+}
+
 [[nodiscard]] u64 Hash(std::string_view text, u64 seed) noexcept
 {
     u64 value = seed;
@@ -156,8 +178,7 @@ void ValidateEmission(
 
 ContentService::ContentService(std::filesystem::path projectRoot)
     : projectRoot_(
-          std::filesystem::weakly_canonical(
-              std::move(projectRoot))),
+          ResolveProjectRoot(projectRoot)),
       contentRoot_(
           projectRoot_ / "Content"),
       cache_(

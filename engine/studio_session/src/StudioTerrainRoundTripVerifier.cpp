@@ -1004,7 +1004,9 @@ VerifyStudioTerrainRoundTrip(
             Fail(
                 report,
                 "compare-physical",
-                "Regenerated physical/M29 fingerprint differs from the pre-close result.");
+                "Regenerated physical/M29 fingerprint differs from the pre-close result: " +
+                    std::to_string(report.physicalFingerprintBefore) + " vs " +
+                    std::to_string(report.physicalFingerprintAfter) + ".");
             return report;
         }
 

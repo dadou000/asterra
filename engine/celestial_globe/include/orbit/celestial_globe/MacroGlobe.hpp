@@ -80,11 +80,8 @@ struct MacroGlobeMesh
     u64 fingerprint{0};
 };
 
-// The implementation in MacroGlobe.cpp is compiled under this legacy symbol;
-// the public wrapper below registers the terrain authority for the hybrid
-// renderer before forwarding to it. The legacy declaration intentionally has
-// no default argument because MacroGlobe.cpp macro-renames the public symbol to
-// this name; repeating the default there is ill-formed in MSVC.
+// MacroGlobe.cpp implements this legacy symbol; the public wrapper below
+// registers the terrain authority for the hybrid renderer before forwarding to it.
 [[nodiscard]] u64 LegacyMacroGlobeFingerprint(
     const terrain::TerrainSource& source,
     const universe::BodyShape& shape,
@@ -200,7 +197,6 @@ private:
     std::unique_ptr<rhi::GraphicsPipeline> depthSurfacePipeline_;
 };
 
-#ifndef ORBIT_BUILD_LEGACY_MACRO_GLOBE_RENDERER
 class HybridMacroGlobeRuntime;
 
 struct MacroGlobeWorkStats
@@ -255,5 +251,4 @@ private:
     std::unique_ptr<LegacyMacroGlobeRenderer> legacy_;
     std::unique_ptr<HybridMacroGlobeRuntime> hybrid_;
 };
-#endif
 } // namespace orbit::celestial_globe

@@ -206,17 +206,49 @@ struct Constants
 [[vk::push_constant]]
 Constants g;
 
-[numthreads(8, 8, 1)]
-void main(uint3 dispatchId : SV_DispatchThreadID)
+// Per-group accumulation: every pixel used to issue three global atomics on
+// the same statistics words (plus one on its bin), which serialised the whole
+// dispatch. The group builds its histogram in shared memory and flushes it
+// once.
+// One thread per 2x2 quad: the quad's top-left pixel is metered (a quarter of
+// the reads and atomics) and its values fill the metering mask for all four
+// pixels, so the overlay still covers the frame.
+void WriteMeteringQuad(uint2 pixel, float4 value)
 {
-    if (dispatchId.x >= g.width ||
-        dispatchId.y >= g.height)
+    [unroll]
+    for (uint k = 0u; k < 4u; ++k)
     {
-        return;
+        const uint2 p = pixel + uint2(k & 1u, k >> 1u);
+        if (p.x < g.width && p.y < g.height)
+        {
+            g_meteringMask[p] = value;
+        }
     }
+}
 
+groupshared uint s_histogram[128];
+groupshared uint s_count;
+groupshared uint s_weight;
+groupshared uint s_maxBin;
+
+[numthreads(8, 8, 1)]
+void main(uint3 dispatchId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
+{
+    s_histogram[groupIndex] = 0u;
+    s_histogram[groupIndex + 64u] = 0u;
+    if (groupIndex == 0u)
+    {
+        s_count = 0u;
+        s_weight = 0u;
+        s_maxBin = 0u;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    if (dispatchId.x * 2u < g.width &&
+        dispatchId.y * 2u < g.height)
+    {
     const uint2 pixel =
-        dispatchId.xy;
+        dispatchId.xy * 2u;
 
     const float2 uv =
         (float2(pixel) + 0.5) /
@@ -296,39 +328,46 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
     // body in a mostly-empty celestial frame.
     if (luminance <= 0.0)
     {
-        g_meteringMask[pixel] =
-            float4(0.0, normalized, luminance, 1.0);
-        return;
+        WriteMeteringQuad(
+            pixel, float4(0.0, normalized, luminance, 1.0));
+    }
+    else
+    {
+        uint ignored;
+        InterlockedAdd(s_histogram[bin], fixedWeight, ignored);
+        InterlockedAdd(s_count, 1u, ignored);
+        InterlockedAdd(s_weight, fixedWeight, ignored);
+        InterlockedMax(s_maxBin, bin, ignored);
+
+        WriteMeteringQuad(
+            pixel,
+            float4(
+                weight,
+                normalized,
+                luminance,
+                1.0));
+    }
     }
 
-    uint ignored;
+    GroupMemoryBarrierWithGroupSync();
 
-    g_histogram.InterlockedAdd(
-        bin * 4u,
-        fixedWeight,
-        ignored);
-
-    g_statistics.InterlockedAdd(
-        0u,
-        1u,
-        ignored);
-
-    g_statistics.InterlockedAdd(
-        4u,
-        fixedWeight,
-        ignored);
-
-    g_statistics.InterlockedMax(
-        8u,
-        bin,
-        ignored);
-
-    g_meteringMask[pixel] =
-        float4(
-            weight,
-            normalized,
-            luminance,
-            1.0);
+    uint flushed;
+    if (s_histogram[groupIndex] != 0u)
+    {
+        g_histogram.InterlockedAdd(
+            groupIndex * 4u, s_histogram[groupIndex], flushed);
+    }
+    if (s_histogram[groupIndex + 64u] != 0u)
+    {
+        g_histogram.InterlockedAdd(
+            (groupIndex + 64u) * 4u, s_histogram[groupIndex + 64u], flushed);
+    }
+    if (groupIndex == 0u && s_count != 0u)
+    {
+        g_statistics.InterlockedAdd(0u, s_count, flushed);
+        g_statistics.InterlockedAdd(4u, s_weight, flushed);
+        g_statistics.InterlockedMax(8u, s_maxBin, flushed);
+    }
 }
 )";
 
@@ -804,8 +843,8 @@ void LuminanceHistogramRenderer::Build(
         sourceHdr);
 
     commands.Dispatch(
-        (width + 7U) / 8U,
-        (height + 7U) / 8U,
+        (((width + 1U) / 2U) + 7U) / 8U,
+        (((height + 1U) / 2U) + 7U) / 8U,
         1U);
 }
 

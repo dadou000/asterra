@@ -96,6 +96,8 @@ const char* TerrainChangeKindName(
         return "Biome surface material";
     case terrain_dependency::TerrainChangeKind::BiomeScatter:
         return "Biome scatter";
+    case terrain_dependency::TerrainChangeKind::DrainageBoundary:
+        return "Drainage boundary exchange";
     }
 
     return "Unknown terrain change";
@@ -435,6 +437,12 @@ void StudioTerrainRebuildScheduler::QueueChange(
     UpdatePeakOutstandingPages();
 }
 
+void StudioTerrainRebuildScheduler::SetPageGate(
+    PageGate gate)
+{
+    pageGate_ = std::move(gate);
+}
+
 void StudioTerrainRebuildScheduler::
 SetAppliedChangeCallback(
     AppliedChangeCallback callback)
@@ -733,6 +741,12 @@ void StudioTerrainRebuildScheduler::ScheduleBudget()
             page.uploadFailed ||
             page.pendingProducts != 0U ||
             page.dirtyProducts == 0U)
+        {
+            continue;
+        }
+
+        if (pageGate_ &&
+            !pageGate_(page.address))
         {
             continue;
         }

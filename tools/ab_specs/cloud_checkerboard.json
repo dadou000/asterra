@@ -1,0 +1,32 @@
+{
+  "_comment": "Temporal reuse of the cloud march: CLOUD_CHECKERBOARD=1 marches one pixel of every 2x2 block per frame (half-size march target, rotating phase) and the resolve fills the rest from reprojected history. Static scenes: the converged image must match the shipped one and the Clouds pass drops. Pan scenes (motion): in-motion error, ghosting and flicker against the reference path. CLOUD_CHECKERBOARD_WEIGHT is the weight of a fresh sample.",
+  "mode": "in_process",
+  "rounds": 2,
+  "world": "Worlds/Main.orbitworld",
+  "body": "Earth",
+  "baseline": "shipped",
+  "gpu_passes": ["Clouds"],
+  "gpu_window_ms": 1500,
+  "ghost_threshold": 3,
+  "variants": {
+    "shipped": {"env": {"ORBIT_CLOUD_DEFINES": ""}},
+    "cb25":    {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_CHECKERBOARD=1;CLOUD_CHECKERBOARD_WEIGHT=0.25"}},
+    "cb40":    {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_CHECKERBOARD=1;CLOUD_CHECKERBOARD_WEIGHT=0.4"}},
+    "cb60":    {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_CHECKERBOARD=1;CLOUD_CHECKERBOARD_WEIGHT=0.6"}}
+  },
+  "scenes": [
+    {"name": "sky_cumulus", "time_microseconds": 18070405751, "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 42, "yaw_deg": 0, "pitch_deg": 20}},
+    {"name": "cumulus_far", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 1200, "yaw_deg": 0, "pitch_deg": 8}},
+    {"name": "orbit_deck", "local_time_seconds": 43200,
+     "pose": {"kind": "approach", "target": {"lat_deg": 5.3045, "lon_deg": 0.0},
+              "origin": {"lat_deg": 0, "lon_deg": 0, "alt_km": 1590.95}, "alt_km": 1500}},
+    {"name": "pan_slow", "local_time_seconds": 43200, "box_rel": [0.0, 0.25, 1.0, 0.6],
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 1200, "yaw_deg": -6, "pitch_deg": 8},
+     "motion": {"kind": "pan", "per_step": 0.25, "steps": 24, "frames_per_step": 1}},
+    {"name": "pan_fast", "local_time_seconds": 43200, "box_rel": [0.0, 0.25, 1.0, 0.6],
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 1200, "yaw_deg": -12, "pitch_deg": 8},
+     "motion": {"kind": "pan", "per_step": 1.0, "steps": 24, "frames_per_step": 1}}
+  ]
+}

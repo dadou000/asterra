@@ -1,0 +1,16 @@
+asset_mount_points = [ 'Content' ]
+plugins = []
+script_entry_points = []
+
+[project]
+engine_compatibility = '0.0.9'
+id = '634dbc66-f1db-4ad8-a93e-1a626c46a142'
+name = 'Meridian'
+schema_version = 1
+startup_world = 'Worlds/Main.orbitworld'
+
+[[build_profiles]]
+configuration = 'Development'
+name = 'Development Windows'
+platform = 'Windows'
+storefront = 'standalone'

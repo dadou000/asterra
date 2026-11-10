@@ -112,7 +112,8 @@ struct SourceSpan
 [[nodiscard]] std::vector<PathStation>
 Resample(
     const PathCenterline& centerline,
-    const f64 spacing)
+    const f64 spacing,
+    const std::size_t maximumStations)
 {
     std::vector<SourceSpan> spans;
     spans.reserve(
@@ -163,6 +164,12 @@ Resample(
         throw std::invalid_argument(
             "Path centerline requires at least two distinct samples.");
     }
+
+    const f64 projectedCount=std::ceil(total/spacing)+1.0;
+    if(!std::isfinite(total) || !std::isfinite(projectedCount) ||
+       projectedCount>static_cast<f64>(maximumStations))
+        throw std::length_error(
+            "Derived path exceeds station budget. Subdivide into spatial edge chunks.");
 
     std::vector<f64> requestedStations;
 
@@ -393,6 +400,10 @@ PathDerivedProduct BuildPathDerived(
             "Derived path sample spacing must be positive and finite.");
     }
 
+    if (options.maximumStations<2U || options.maximumStations>131072U)
+        throw std::invalid_argument(
+            "Derived path maximumStations must be between 2 and 131072.");
+
     PathDerivedProduct product{
         .edge = centerline.edge,
         .frame = centerline.frame,
@@ -410,8 +421,8 @@ PathDerivedProduct BuildPathDerived(
         .stations =
             Resample(
                 centerline,
-                options.
-                    sampleSpacingMeters)
+                options.sampleSpacingMeters,
+                options.maximumStations)
     };
 
     const f64 halfWidth =

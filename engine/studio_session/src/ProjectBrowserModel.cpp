@@ -1,5 +1,7 @@
 #include <orbit/studio_session/ProjectBrowserModel.hpp>
 
+#include <orbit/platform/Paths.hpp>
+
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -144,6 +146,24 @@ ProjectBrowserModel::RecentProjects() const
     return result;
 }
 
+std::vector<std::filesystem::path> ProjectBrowserModel::InternalProjectFolders()
+{
+    std::vector<std::filesystem::path> result;
+    std::error_code error;
+    const auto addIfPresent = [&](const std::filesystem::path& path)
+    {
+        error.clear();
+        if (std::filesystem::is_directory(path, error) && !error &&
+            std::find(result.begin(), result.end(), path) == result.end())
+            result.push_back(path);
+    };
+    addIfPresent(platform::ExecutablePath().parent_path() / "examples");
+    // Development generations run from out/unpacked; they keep the
+    // repository root as the current working directory.
+    addIfPresent(std::filesystem::current_path() / "examples");
+    return result;
+}
+
 std::vector<DiscoveredProject> ProjectBrowserModel::DiscoverProjects(
     const std::vector<std::filesystem::path>& roots,
     const ProjectDiscoveryOptions& options)
@@ -244,10 +264,21 @@ std::vector<DiscoveredProject> ProjectBrowserModel::DiscoverProjects(
             try
             {
                 const auto loaded = documents::LoadProjectManifest(resolved);
+                const bool testContent = std::ranges::any_of(
+                    options.testContentRoots,
+                    [&resolved](const fs::path& testRoot)
+                    {
+                        std::error_code rootError;
+                        const auto canonicalRoot = fs::weakly_canonical(testRoot, rootError);
+                        const auto& base = rootError ? testRoot : canonicalRoot;
+                        const auto relative = resolved.lexically_relative(base);
+                        return !relative.empty() && *relative.begin() != "..";
+                    });
                 found.push_back({
                     .manifestPath = resolved,
                     .displayName = loaded.displayName,
-                    .modified = fs::last_write_time(resolved, statusError)
+                    .modified = fs::last_write_time(resolved, statusError),
+                    .testContent = testContent
                 });
             }
             catch (const std::exception&)

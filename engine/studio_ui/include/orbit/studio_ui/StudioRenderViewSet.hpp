@@ -13,6 +13,7 @@
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
 
 #include <map>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -92,6 +93,18 @@ struct StudioTerrainDiagnosticOverlayOptions
 
     [[nodiscard]] constexpr bool operator==(
         const StudioTerrainDiagnosticOverlayOptions&) const noexcept = default;
+};
+
+// Where the terrain observer is right now, measured the way navigation measures
+// it (the live observer, the CPU terrain floored by the drawn ground), not from
+// the last rendered camera, so it is current right after NavigateTerrain.
+struct StudioNavigationReadout
+{
+    f64 distanceFromCoreMeters{0.0};
+    f64 heightAboveTerrainMeters{0.0};
+    // Set where the ground under the observer is under water: negative when
+    // the observer is beneath the surface, positive above it.
+    std::optional<f64> heightAboveWaterSurfaceMeters;
 };
 
 struct StudioViewPose
@@ -196,6 +209,12 @@ public:
         std::string_view id,
         const StudioTerrainNavigationInput& input);
 
+    // The observer's distance from the core and its height above the terrain
+    // bed (and below the water surface when underwater), from the live observer.
+    // Absent when the viewport has no current terrain runtime.
+    [[nodiscard]] std::optional<StudioNavigationReadout> NavigationReadout(
+        std::string_view id);
+
     // True when the viewport currently has a usable terrain runtime, i.e.
     // NavigateTerrain drives the terrain observer rather than the reference
     // sphere.
@@ -209,6 +228,13 @@ public:
 
     [[nodiscard]] bool FocusTerrainBody(
         std::string_view id);
+
+    // Frames body-fixed selection bounds through the persistent navigation
+    // pose. Refresh advances the two-second camera move.
+    [[nodiscard]] bool FrameSelectedBounds(
+        std::string_view id,
+        const math::Double3& centerMeters,
+        f64 radiusMeters);
 
     [[nodiscard]] bool FocusTerrainSurfacePoint(
         std::string_view id,
@@ -225,6 +251,18 @@ public:
     // Vertical field of view of the camera the view renders with now (zoom
     // included).
     [[nodiscard]] f64 ViewFovRadians(std::string_view id) const;
+    // Lens controls use the same per-view zoom authority as the viewport.
+    // Setting either lens value updates that zoom and returns the value the
+    // active view can actually represent.
+    [[nodiscard]] f64 CameraFovDegrees(std::string_view id) const;
+    [[nodiscard]] f64 CameraFocalLengthMillimeters(
+        std::string_view id) const;
+    [[nodiscard]] f64 SetCameraFovDegrees(
+        std::string_view id,
+        f64 degrees);
+    [[nodiscard]] f64 SetCameraFocalLengthMillimeters(
+        std::string_view id,
+        f64 millimeters);
 
     // Capture tiling (see StudioCaptureTile). Applied each Refresh on top of
     // the zoomed camera; nullopt returns to the normal camera.
@@ -465,9 +503,19 @@ private:
     std::map<std::string, ReferenceNavigation, std::less<>>
         referenceNavigation_;
 
+    struct FrameTransition
+    {
+        StudioViewPose start;
+        math::Double3 targetObserver{};
+        math::Double3 targetCenter{};
+        std::chrono::steady_clock::time_point started{};
+    };
+    std::map<std::string, FrameTransition, std::less<>> frameTransitions_;
+
     std::map<std::string, bool, std::less<>> compositionEnabled_;
     std::map<std::string, bool, std::less<>> textDiagnosticsHud_;
     std::map<std::string, f64, std::less<>> zoom_;
+    std::map<std::string, f64, std::less<>> baseFovRadians_;
     std::map<std::string, StudioCaptureTile, std::less<>> captureTiles_;
 
     std::map<std::string, StudioTerrainLayerOptions, std::less<>>

@@ -66,8 +66,11 @@ int main()
     Check(near.runtimeCenterInFrameMeters ==
         input.volumeCenterInFrameMeters);
 
+    // Live is held by distance OR projected size. The bounds are the box's bounding
+    // sphere (radius ~17.3 m), which still covers ~86 px at 400 m (above the 72 px
+    // live-exit size), so the coarse band is checked at 600 m (~57 px).
     input.observerInFrameMeters =
-        {0.0,0.0,400.0};
+        {0.0,0.0,600.0};
     const auto medium =
         ResolveRepresentation(
             input,

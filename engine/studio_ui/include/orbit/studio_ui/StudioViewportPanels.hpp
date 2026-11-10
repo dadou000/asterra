@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/world_model/PrimitiveBinding.hpp>
 #include <orbit/editor_model/InspectorModel.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
@@ -8,22 +9,31 @@
 #include <orbit/studio_ui/StudioExpansionShell.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/StudioTextDiagnosticsHud.hpp>
+#include <orbit/studio_ui/StudioViewportManipulatorUi.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
+#include <orbit/terrain_impacts/ImpactField.hpp>
 
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace orbit::content
 {
 class ContentService;
+}
+
+namespace orbit::editor_model
+{
+class SurfaceAuthoringModel;
 }
 
 namespace orbit::studio_ui
@@ -45,6 +55,7 @@ enum class StudioTerrainAuthoringTool : u8
     Lower,
     Protection,
     Drainage,
+    DrainagePath,
     Canyon,
     Ridge,
     Material,
@@ -99,10 +110,36 @@ public:
         InstallQol(nullptr);
     }
 
+    void SetOpenProceduralRoadsAction(std::function<void()> action)
+    {
+        openProceduralRoadsAction_ = std::move(action);
+    }
+
+    void OpenProceduralRoads()
+    {
+        if (openProceduralRoadsAction_)
+            openProceduralRoadsAction_();
+    }
+
     void RequestCommandPaletteOpen() noexcept
     {
         expansion_.RequestCommandPaletteOpen();
     }
+
+    void SetEcoModeAccessors(
+        std::function<int()> getter,
+        std::function<void(int)> setter)
+    {
+        ecoModeGetter_ = std::move(getter);
+        ecoModeSetter_ = std::move(setter);
+    }
+
+    // Shared operation behind the Scene toolbar, F shortcut and RPC.
+    [[nodiscard]] bool FrameSelectedObject();
+    [[nodiscard]] GizmoSettings Snapping() const noexcept;
+    void SetSnapping(const GizmoSettings& settings);
+    void DrawSnappingControls(editor_ui::PanelContext& context, bool compact = false);
+    void DrawSnappingSettings(editor_ui::PanelContext& context);
 
     // Shows the horizontal toolbar that belongs to the active workspace mode
     // (Scene today) and removes it for modes that have none.
@@ -117,10 +154,38 @@ public:
         bubbleOpenRequest_ = object;
     }
 
+    // Move / Rotate / Scale handles of the single selected object over the
+    // perspective viewport `id`, driven by the Scene toolbar's tool, space and
+    // snap settings. Call right after the viewport Image is submitted.
+    // Returns true while the handles own the left button (hovering one or
+    // dragging), so that press must not also select or place something.
+    // The same operation without a pointer is the object.transform RPC.
+    [[nodiscard]] bool HandleViewportGizmo(
+        editor_ui::PanelContext& context,
+        std::string_view id);
+
+    void SetGizmoRelativeMouseDelta(math::Float2 delta) noexcept
+    {
+        gizmoRelativeMouseDelta_ = delta;
+    }
+    [[nodiscard]] bool GizmoDragging() const noexcept;
+    // Temporary render-target size used only by Profiler's viewport-only capture.
+    // Passing nullopt restores the primary view to its panel's normal size.
+    void SetViewportCaptureResolution(
+        std::optional<std::pair<u32, u32>> size) noexcept
+    {
+        viewportCaptureResolution_ = size;
+    }
+
 private:
     friend class StudioExpansionShell;
 
     struct ViewportModeCommandState;
+    math::Float2 gizmoRelativeMouseDelta_{};
+    std::function<void()> openProceduralRoadsAction_;
+    std::function<int()> ecoModeGetter_;
+    std::function<void(int)> ecoModeSetter_;
+    std::optional<std::pair<u32, u32>> viewportCaptureResolution_;
 
     void RegisterBase(editor_ui::EditorUi& ui);
     void RegisterSecondaryBase(editor_ui::EditorUi& ui);
@@ -158,6 +223,23 @@ private:
 
     void RegisterShellBands(editor_ui::EditorUi& ui);
     void DrawSceneToolbar(editor_ui::PanelContext& context);
+    void DrawPlanetToolbar(editor_ui::PanelContext& context);
+    void DrawTerrainProcessesToolbarBubble(
+        editor_ui::PanelContext& context,
+        editor_model::SurfaceAuthoringModel& terrainAuthoring,
+        scene::ObjectId terrain,
+        bool compact);
+    void DrawRiversToolbarBubble(
+        editor_ui::PanelContext& context,
+        editor_model::SurfaceAuthoringModel& terrainAuthoring,
+        scene::ObjectId terrain,
+        bool compact);
+    void DrawGeologicalToolbarBubbles(
+        editor_ui::PanelContext& context,
+        editor_model::SurfaceAuthoringModel& terrainAuthoring,
+        scene::ObjectId body,
+        scene::ObjectId terrain,
+        bool compact);
     void DrawCelestialToolbar(editor_ui::PanelContext& context);
 
     // Small "v" chip that opens a popover with the ordinary (non-advanced)
@@ -187,12 +269,22 @@ private:
     void CreateVisibilityProxyAtViewport(
         std::string_view id,
         bool box);
+    // Same operation as the primitive.create RPC (world_model::CreatePrimitive),
+    // placed five metres in front of the viewport camera.
+    void CreatePrimitiveAtViewport(
+        std::string_view id,
+        world_model::PrimitiveShape shape,
+        world_model::PrimitiveSurface surface);
 
     StudioRenderViewSet* views_{nullptr};
     studio_session::StudioSession* session_{nullptr};
     content::ContentService* content_{nullptr};
     editor_ui::EditorUi* ui_{nullptr};
     std::string status_;
+    // Tectonics menu structural-layer probe: observer sub-point or a typed point.
+    bool tectonicProbeAtObserver_{true};
+    f64 tectonicProbeLatitude_{0.0};
+    f64 tectonicProbeLongitude_{0.0};
     bool celestialMoreRequested_{false};
     std::optional<scene::ObjectId> bubbleOpenRequest_;
     std::shared_ptr<ViewportModeCommandState> viewportModeCommandState_;
@@ -209,6 +301,10 @@ private:
     bool propertyModifiedOnly_{false};
     std::vector<schema::PropertyId> pinnedProperties_;
     std::optional<schema::PropertyValue> copiedPropertyValue_;
+
+    std::unordered_map<scene::ObjectId, terrain_impacts::ImpactFieldDefinition>
+        impactHistoryDrafts_;
+    i32 craterHistoryPage_{0};
 
     StudioTerrainAuthoringTool terrainTool_{
         StudioTerrainAuthoringTool::Select};
@@ -239,6 +335,7 @@ private:
     bool contextualAdvancedProperties_{false};
 
     StudioExpansionShell expansion_{*this};
+    StudioViewportManipulatorUi manipulatorUi_;
 };
 } // namespace orbit::studio_ui
 

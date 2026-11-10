@@ -1,0 +1,16 @@
+asset_mount_points = [ 'Content' ]
+plugins = []
+script_entry_points = []
+
+[project]
+engine_compatibility = '0.0.9'
+id = 'a5d68bb1-cb1e-4bc3-9969-3f620e770001'
+name = 'MCP Smoke Example'
+schema_version = 1
+startup_world = 'Worlds/Main.orbitworld'
+
+[[build_profiles]]
+configuration = 'Development'
+name = 'Development Windows'
+platform = 'Windows'
+storefront = 'standalone'

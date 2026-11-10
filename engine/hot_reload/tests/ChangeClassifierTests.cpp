@@ -17,8 +17,15 @@ int main()
     using orbit::hot_reload::ChangeKind;
 
     if (!Expect("engine/terrain/src/Terrain.cpp", ChangeKind::NativeModule) ||
+        !Expect("engine/studio_ui/src/StudioViewportTerrainPass.cpp", ChangeKind::NativeModule) ||
+        !Expect("apps/editor/src/StudioApplication.cpp", ChangeKind::NativeModule) ||
+        !Expect("tools/validation/SceneValidationScenarios.cpp", ChangeKind::NativeModule) ||
+        !Expect("tools/validation/include/orbit/validation/SceneValidationScenarios.hpp", ChangeKind::NativeModule) ||
         !Expect("Content/Shaders/terrain.hlsl", ChangeKind::Shader) ||
         !Expect("engine/render/shaders/terrain.hlsl", ChangeKind::RestartRequired) ||
+        !Expect("engine/weather_gpu/shaders/storm.hlsl", ChangeKind::EngineShader) ||
+        !Expect("C:/work/engine/weather_gpu/shaders/storm.hlsl.orbit-write.tmp", ChangeKind::Ignored) ||
+        !Expect("engine/weather_gpu/src/GpuStormSolver.cpp", ChangeKind::NativeModule) ||
         !Expect("Plugins/weather.luau", ChangeKind::Script) ||
         !Expect("Content/Materials/rock.orbitmaterial", ChangeKind::Content) ||
         // Shading tab: shaders hot-compile through the Shader path, shader

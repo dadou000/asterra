@@ -1,7 +1,9 @@
 #include <orbit/studio_session/StudioTerrainAuthoringInvalidation.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -11,6 +13,36 @@ namespace
 {
 constexpr f64 Pi =
     3.1415926535897932384626433832795;
+
+[[nodiscard]] u64 MixGlobalImpactRecipe(
+    const terrain_impacts::ImpactFieldDefinition& recipe) noexcept
+{
+    u64 hash = terrain::StableCombine64(recipe.seed, static_cast<u64>(recipe.environment));
+    for (const f64 value : {recipe.surfaceAgeYears,
+             recipe.surfaceGravityMetersPerSecondSquared,
+             recipe.targetDensityKgPerCubicMeter, recipe.targetStrengthPascals,
+             recipe.complexTransitionRadiusMeters,
+             recipe.procedural.minimumRadiusMeters,
+             recipe.procedural.maximumRadiusMeters,
+             recipe.procedural.cumulativeExponent})
+        hash = terrain::StableCombine64(hash, std::bit_cast<u64>(value));
+    hash = terrain::StableCombine64(hash, recipe.procedural.count);
+    if (recipe.iceFractures != nullptr)
+    {
+        const auto& ice = *recipe.iceFractures;
+        hash = terrain::StableCombine64(hash, ice.seed);
+        hash = terrain::StableCombine64(hash, ice.fractureCount);
+        hash = terrain::StableCombine64(hash, ice.segmentsPerFracture);
+        for (const f64 value : {ice.tidalAxis.x, ice.tidalAxis.y, ice.tidalAxis.z,
+                 ice.spinAxis.x, ice.spinAxis.y, ice.spinAxis.z, ice.tidalStress,
+                 ice.rotationalStress, ice.tensileStrength, ice.maximumLengthMeters,
+                 ice.widthMeters, ice.grooveDepthMeters, ice.ridgeHeightMeters,
+                 ice.branchProbability})
+            hash = terrain::StableCombine64(hash, std::bit_cast<u64>(value));
+        hash = terrain::StableCombine64(hash, ice.enabled ? 1U : 0U);
+    }
+    return hash;
+}
 
 [[nodiscard]] math::Double3 Unit(
     const math::Double3& direction)
@@ -288,6 +320,90 @@ BuildTerrainAuthoringInvalidations(
             request);
     }
 
+    return result;
+}
+
+std::vector<terrain_dependency::TerrainInvalidationRequest>
+BuildImpactHistoryInvalidations(
+    const world::PlanetDefinition& planet,
+    const std::string_view previousToml,
+    const std::string_view nextToml,
+    const u8 physicalTileLevel,
+    const u32 downstreamRadiusTiles)
+{
+    if (physicalTileLevel > 30U || downstreamRadiusTiles > 64U)
+        throw std::invalid_argument("Impact history invalidation tile scope is invalid.");
+    std::optional<terrain_impacts::ImpactFieldDefinition> previous;
+    std::optional<terrain_impacts::ImpactFieldDefinition> next;
+    if (!previousToml.empty()) previous = terrain_impacts::ParseImpactFieldToml(previousToml);
+    if (!nextToml.empty()) next = terrain_impacts::ParseImpactFieldToml(nextToml);
+    const auto validForPlanet = [&](const auto& recipe)
+    {
+        return !recipe.has_value() || recipe->planet == planet.id;
+    };
+    if (!validForPlanet(previous) || !validForPlanet(next))
+        throw std::invalid_argument("Impact history invalidation recipe belongs to another planet.");
+
+    const auto globalHash = [](const auto& recipe)
+    {
+        return recipe.has_value()
+            ? MixGlobalImpactRecipe(*recipe)
+            : MixGlobalImpactRecipe(terrain_impacts::ImpactFieldDefinition{});
+    };
+    if (globalHash(previous) != globalHash(next))
+    {
+        return {terrain_dependency::TerrainInvalidationRequest{
+            .kind = terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+            .scope = {.planet = planet.id, .global = true}}};
+    }
+
+    if (!previous.has_value() && !next.has_value()) return {};
+    auto before = previous.has_value() ? *previous : *next;
+    auto after = next.has_value() ? *next : *previous;
+    if (!previous.has_value())
+    {
+        before.authoredImpacts.clear();
+        before.resurfacingEvents.clear();
+    }
+    if (!next.has_value())
+    {
+        after.authoredImpacts.clear();
+        after.resurfacingEvents.clear();
+    }
+
+    // Reuse the geological owner's exact old/new bounds. Independent editor
+    // bounds omitted moved/deleted centers, long rays, physical size scaling
+    // and tectonic advection, leaving historical pages stale after an edit.
+    const auto caps = terrain_impacts::ChangedAuthoredEventInfluenceCaps(
+        planet, before, after);
+    if (!caps.has_value())
+    {
+        return {terrain_dependency::TerrainInvalidationRequest{
+            .kind = terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+            .scope = {.planet = planet.id, .global = true}}};
+    }
+    std::vector<terrain_dependency::TerrainInvalidationRequest> result;
+    for (const auto& cap : *caps)
+    {
+        // A single bounded page scope cannot represent a wider spherical
+        // event. Do not silently clamp its radius and leave outer rays stale.
+        const f64 tileMeters = std::max(planet.radiusMeters /
+            static_cast<f64>(u64{1} << physicalTileLevel) * 0.5, 0.001);
+        const f64 requestedTiles = std::ceil(
+            cap.angularRadiusRadians * planet.radiusMeters / tileMeters) + 1.0;
+        if (requestedTiles + downstreamRadiusTiles > 64.0)
+        {
+            return {terrain_dependency::TerrainInvalidationRequest{
+                .kind = terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+                .scope = {.planet = planet.id, .global = true}}};
+        }
+        auto local = BuildTerrainAuthoringInvalidations(
+            planet, std::span<const math::Double3>(&cap.centerDirection, 1U),
+            cap.angularRadiusRadians * planet.radiusMeters,
+            physicalTileLevel, downstreamRadiusTiles,
+            terrain_dependency::TerrainChangeKind::TerrainAuthoring);
+        result.insert(result.end(), local.begin(), local.end());
+    }
     return result;
 }
 } // namespace orbit::studio_session

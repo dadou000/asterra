@@ -299,6 +299,12 @@ void TestImpactChannelsFeedMaterialColumn()
         .ejectaThicknessMeters = 0.25,
         .debrisField = 0.6,
         .rayField = 0.7,
+        .meltThicknessMeters = 0.05,
+        .brecciaField = 0.5,
+        .resurfacedMaterialFraction = 0.8,
+        .resurfacingThicknessMeters = 0.2,
+        .microImpactRoughnessMeters = 3.0,
+        .microImpactCoverage = 0.4,
         .affectingImpacts = 1
     };
 
@@ -322,9 +328,9 @@ void TestImpactChannelsFeedMaterialColumn()
 
     RequireNear(
         page.At(0, 0).debrisMeters,
-        0.25,
+        0.56,
         1.0e-5,
-        "M07 ejecta must become M08 debris depth.");
+        "M07 ejecta, melt, resurfacing deposits and fractured target material must enter the M08 debris column.");
 
     RequireNear(
         page.At(0, 0).temporaryScalar,

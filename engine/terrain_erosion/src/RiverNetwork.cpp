@@ -1,10 +1,12 @@
 #include <orbit/terrain_erosion/RiverNetwork.hpp>
+#include <orbit/world/PlanetTileNeighborhood.hpp>
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
@@ -171,6 +173,43 @@ constexpr u64 kRiverCutoffDomain =
                     t)));
 }
 
+[[nodiscard]] std::vector<math::Double2> SimplifyRoutingPath(
+    const std::vector<math::Double2>& points,
+    const f64 toleranceMeters)
+{
+    if (points.size() <= 2U) return points;
+    std::vector<u8> keep(points.size(), 0U);
+    keep.front() = 1U;
+    keep.back() = 1U;
+    std::vector<std::pair<std::size_t, std::size_t>> ranges{
+        {0U, points.size() - 1U}};
+    while (!ranges.empty())
+    {
+        const auto [first, last] = ranges.back();
+        ranges.pop_back();
+        f64 maximumDistance = toleranceMeters;
+        std::size_t furthest = first;
+        for (std::size_t i = first + 1U; i < last; ++i)
+        {
+            const f64 distance = DistanceToSegment(points[i], points[first], points[last]);
+            if (distance > maximumDistance)
+            {
+                maximumDistance = distance;
+                furthest = i;
+            }
+        }
+        if (furthest == first) continue;
+        keep[furthest] = 1U;
+        ranges.emplace_back(first, furthest);
+        ranges.emplace_back(furthest, last);
+    }
+    std::vector<math::Double2> simplified;
+    simplified.reserve(points.size());
+    for (std::size_t i = 0U; i < points.size(); ++i)
+        if (keep[i] != 0U) simplified.push_back(points[i]);
+    return simplified;
+}
+
 [[nodiscard]] u64 StableAddressFingerprint(
     const terrain::PhysicalTerrainPageAddress& address) noexcept
 {
@@ -276,6 +315,15 @@ template <typename Id>
         packedExit);
 }
 
+[[nodiscard]] RiverBasinId MakeBasinId(
+    const u64 terminalFingerprint) noexcept
+{
+    return {
+        terrain::StableCombine64(kRiverBasinDomain, terminalFingerprint),
+        terrain::StableCombine64(terminalFingerprint, kRiverBasinDomain)
+    };
+}
+
 [[nodiscard]] RiverSegmentId MakeSegmentId(
     const RiverNodeId upstream,
     const RiverNodeId downstream,
@@ -306,6 +354,41 @@ template <typename Id>
         cell.dischargeCubicMetersPerSecond >=
             config.
                 minimumDischargeCubicMetersPerSecond;
+}
+
+[[nodiscard]] f64 LocalRiverSlope(
+    const terrain_hydrology::DrainagePage& drainage,
+    const u32 x,
+    const u32 y) noexcept
+{
+    constexpr f64 minimumSlope = 0.00002;
+    const auto& cell = drainage.At(x, y);
+    if (!cell.flow.HasDownstream() || cell.flow.exitsPage)
+        return minimumSlope;
+    const i32 nextX = static_cast<i32>(x) + cell.flow.dx;
+    const i32 nextY = static_cast<i32>(y) + cell.flow.dy;
+    if (!Inside(nextX, nextY, drainage.Resolution()))
+        return minimumSlope;
+    const f64 distance = drainage.SpacingMeters() *
+        (cell.flow.dx != 0 && cell.flow.dy != 0 ? std::numbers::sqrt2 : 1.0);
+    const f64 elevationDrop = static_cast<f64>(cell.surfaceHeightMeters) -
+        drainage.At(static_cast<u32>(nextX), static_cast<u32>(nextY)).surfaceHeightMeters;
+    return std::clamp(elevationDrop / std::max(distance, 1.0e-6), minimumSlope, 1.0);
+}
+
+[[nodiscard]] f64 ManningVelocity(
+    const f64 widthMeters,
+    const f64 depthMeters,
+    const f64 slope,
+    const f64 roughness = 0.035) noexcept
+{
+    const f64 area = std::max(widthMeters, 0.0) * std::max(depthMeters, 0.0);
+    const f64 perimeter = std::max(widthMeters, 0.0) + 2.0 * std::max(depthMeters, 0.0);
+    const f64 radius = area / std::max(perimeter, 1.0e-6);
+    const f64 velocity = radius > 0.0
+        ? (1.0 / roughness) * std::pow(radius, 2.0 / 3.0) * std::sqrt(std::max(slope, 0.00002))
+        : 0.05;
+    return std::clamp(velocity, 0.05, 8.0);
 }
 
 [[nodiscard]] math::Double2 CellOffset(
@@ -353,6 +436,11 @@ template <typename Id>
                 x,
                 y);
 
+        if (cell.basinTerminalFingerprint != 0U)
+        {
+            return MakeBasinId(cell.basinTerminalFingerprint);
+        }
+
         if (!cell.flow.HasDownstream())
         {
             return MakeBasinId(
@@ -371,6 +459,46 @@ template <typename Id>
         const i32 ny =
             static_cast<i32>(y) +
             cell.flow.dy;
+
+        // If this page's last step enters an ocean cell in its cardinal
+        // neighbor, use that outlet page/cell as the basin terminal. This
+        // makes the upstream boundary link and the receiving ocean network
+        // share one stable basin ID.
+        if (cell.flow.exitsPage &&
+            cell.flow.targetIsOutlet &&
+            ((cell.flow.dx == 0) != (cell.flow.dy == 0)))
+        {
+            const world::TileEdge sourceEdge =
+                cell.flow.dx < 0 ? world::TileEdge::West :
+                cell.flow.dx > 0 ? world::TileEdge::East :
+                cell.flow.dy < 0 ? world::TileEdge::North :
+                                   world::TileEdge::South;
+            const auto mapping = world::NeighborAcrossTileEdge(
+                drainage.SourcePage().address.tile,
+                sourceEdge);
+            const u32 sourceSample =
+                sourceEdge == world::TileEdge::West ||
+                sourceEdge == world::TileEdge::East
+                    ? static_cast<u32>(std::clamp<i32>(ny, 0, static_cast<i32>(resolution) - 1))
+                    : static_cast<u32>(std::clamp<i32>(nx, 0, static_cast<i32>(resolution) - 1));
+            const u32 mapped = world::RemapTileEdgeSampleIndex(
+                mapping,
+                sourceSample,
+                resolution);
+            u32 outletX = mapped;
+            u32 outletY = 0U;
+            switch (mapping.edge)
+            {
+            case world::TileEdge::North: outletY = 0U; break;
+            case world::TileEdge::East: outletX = resolution - 1U; outletY = mapped; break;
+            case world::TileEdge::South: outletY = resolution - 1U; break;
+            case world::TileEdge::West: outletX = 0U; outletY = mapped; break;
+            }
+            const terrain::PhysicalTerrainPageAddress outletAddress{
+                .planet = drainage.SourcePage().address.planet,
+                .tile = mapping.tile};
+            return MakeBasinId(outletAddress, outletX, outletY, 0, 0);
+        }
 
         if (cell.flow.exitsPage ||
             !Inside(
@@ -627,6 +755,9 @@ void ApplyConstraint(
                     HashDouble(
                         number));
         };
+
+    addDouble(
+        config.maximumNodeSpacingMeters);
 
     addDouble(
         config.
@@ -1297,6 +1428,8 @@ bool RiverNetworkConfig::IsValid() const noexcept
         };
 
     return
+        positive(
+            maximumNodeSpacingMeters) &&
         nonnegative(
             minimumDrainageAreaSquareMeters) &&
         nonnegative(
@@ -1436,11 +1569,15 @@ u64 RiverBasinConstraintRevision(
 RiverNetwork BuildRiverNetwork(
     const terrain_hydrology::DrainagePage& drainage,
     const std::span<const RiverConstraint> constraints,
-    const RiverNetworkConfig& config)
+    const RiverNetworkConfig& config,
+    const SedimentExchangePage* sediment)
 {
     if (!config.IsValid() ||
         drainage.Resolution() == 0U ||
-        drainage.SpacingMeters() <= 0.0)
+        drainage.SpacingMeters() <= 0.0 ||
+        (sediment != nullptr &&
+         (sediment->Resolution() != drainage.Resolution() ||
+          std::abs(sediment->SpacingMeters() - drainage.SpacingMeters()) > 1.0e-9)))
     {
         throw std::invalid_argument(
             "Orbit M16 river network configuration or drainage page is invalid.");
@@ -1473,272 +1610,234 @@ RiverNetwork BuildRiverNetwork(
     constexpr u32 invalidNode =
         std::numeric_limits<u32>::max();
 
-    std::vector<u32> nodeForCell(
-        static_cast<std::size_t>(
-            resolution) *
-            resolution,
-        invalidNode);
+    const std::size_t cellCount = static_cast<std::size_t>(resolution) * resolution;
+    std::vector<u8> riverCells(cellCount, 0U);
+    std::vector<u8> incomingCount(cellCount, 0U);
+    std::vector<i8> incomingDx(cellCount, 0);
+    std::vector<i8> incomingDy(cellCount, 0);
+    std::vector<u8> graphNodes(cellCount, 0U);
+    std::vector<u32> nodeForCell(cellCount, invalidNode);
 
-    const auto ensureNode =
-        [&](
-            const u32 x,
-            const u32 y) -> u32
-        {
-            const std::size_t cellIndex =
-                Index(
-                    resolution,
-                    x,
-                    y);
-
-            if (nodeForCell[cellIndex] !=
-                invalidNode)
-            {
-                return
-                    nodeForCell[cellIndex];
-            }
-
-            const auto& source =
-                drainage.At(
-                    x,
-                    y);
-
-            const f64 discharge =
-                std::max(
-                    source.
-                        dischargeCubicMetersPerSecond,
-                    0.0);
-
-            const f64 ratio =
-                std::max(
-                    discharge /
-                        config.
-                            referenceDischargeCubicMetersPerSecond,
-                    1.0e-9);
-
-            const f64 width =
-                std::clamp(
-                    config.
-                        baseChannelWidthMeters *
-                        std::pow(
-                            ratio,
-                            config.
-                                widthDischargeExponent),
-                    config.
-                        minimumChannelWidthMeters,
-                    config.
-                        maximumChannelWidthMeters);
-
-            const f64 depth =
-                std::clamp(
-                    config.
-                        baseChannelDepthMeters *
-                        std::pow(
-                            ratio,
-                            config.
-                                depthDischargeExponent),
-                    config.
-                        minimumChannelDepthMeters,
-                    config.
-                        maximumChannelDepthMeters);
-
-            const math::Double2 offset =
-                CellOffset(
-                    resolution,
-                    result.spacingMeters,
-                    x,
-                    y);
-
-            const RiverBasinId basin =
-                ResolveBasin(
-                    drainage,
-                    x,
-                    y);
-
-            const u32 nodeIndex =
-                static_cast<u32>(
-                    result.nodes.size());
-
-            result.nodes.push_back({
-                .id =
-                    MakeNodeId(
-                        result.sourcePage.
-                            address,
-                        x,
-                        y),
-                .basin =
-                    basin,
-                .sourceX = x,
-                .sourceY = y,
-                .drainageOffsetMeters =
-                    offset,
-                .channelOffsetMeters =
-                    offset,
-                .surfaceHeightMeters =
-                    source.
-                        surfaceHeightMeters,
-                .drainageElevationMeters =
-                    source.
-                        drainageElevationMeters,
-                .drainageAreaSquareMeters =
-                    source.
-                        drainageAreaSquareMeters,
-                .dischargeCubicMetersPerSecond =
-                    discharge,
-                .channelWidthMeters =
-                    static_cast<f32>(
-                        width),
-                .channelDepthMeters =
-                    static_cast<f32>(
-                        depth),
-                .drainageFlowDx =
-                    source.flow.dx,
-                .drainageFlowDy =
-                    source.flow.dy,
-                .exitsPage =
-                    source.flow.exitsPage,
-                .outlet =
-                    source.outlet
-            });
-
-            nodeForCell[cellIndex] =
-                nodeIndex;
-
-            return nodeIndex;
-        };
-
-    for (u32 y = 0U;
-         y < resolution;
-         ++y)
+    for (u32 y = 0U; y < resolution; ++y)
     {
-        for (u32 x = 0U;
-             x < resolution;
-             ++x)
+        for (u32 x = 0U; x < resolution; ++x)
         {
-            const auto& cell =
-                drainage.At(
-                    x,
-                    y);
+            const auto& cell = drainage.At(x, y);
+            const std::size_t index = Index(resolution, x, y);
+            if (QualifiesAsRiver(cell, config)) riverCells[index] = 1U;
+        }
+    }
 
-            if (!QualifiesAsRiver(
-                    cell,
-                    config))
+    // Keep headwaters and confluences even when the intervening reach is
+    // sparsified. Incoming flow vectors also identify bends for refinement.
+    for (u32 y = 0U; y < resolution; ++y)
+    {
+        for (u32 x = 0U; x < resolution; ++x)
+        {
+            const std::size_t index = Index(resolution, x, y);
+            if (riverCells[index] == 0U) continue;
+            const auto& cell = drainage.At(x, y);
+            if (!cell.flow.HasDownstream() || cell.flow.exitsPage) continue;
+            const i32 nx = static_cast<i32>(x) + cell.flow.dx;
+            const i32 ny = static_cast<i32>(y) + cell.flow.dy;
+            if (!Inside(nx, ny, resolution)) continue;
+            const std::size_t downstream = Index(
+                resolution, static_cast<u32>(nx), static_cast<u32>(ny));
+            if (riverCells[downstream] == 0U) continue;
+            incomingCount[downstream] = static_cast<u8>(
+                std::min<u32>(3U, static_cast<u32>(incomingCount[downstream]) + 1U));
+            incomingDx[downstream] = cell.flow.dx;
+            incomingDy[downstream] = cell.flow.dy;
+        }
+    }
+
+    for (u32 y = 0U; y < resolution; ++y)
+    {
+        for (u32 x = 0U; x < resolution; ++x)
+        {
+            const std::size_t index = Index(resolution, x, y);
+            if (riverCells[index] == 0U) continue;
+            const auto& cell = drainage.At(x, y);
+            const i32 nx = static_cast<i32>(x) + cell.flow.dx;
+            const i32 ny = static_cast<i32>(y) + cell.flow.dy;
+            const bool exitsPage = cell.flow.exitsPage || !Inside(nx, ny, resolution);
+            const bool downstreamIsRiver = !exitsPage &&
+                riverCells[Index(resolution, static_cast<u32>(nx), static_cast<u32>(ny))] != 0U;
+            bool sharpBend = false;
+            if (incomingCount[index] == 1U && cell.flow.HasDownstream())
             {
-                continue;
+                const f64 inLength = std::hypot(
+                    static_cast<f64>(incomingDx[index]), static_cast<f64>(incomingDy[index]));
+                const f64 outLength = std::hypot(
+                    static_cast<f64>(cell.flow.dx), static_cast<f64>(cell.flow.dy));
+                const f64 alignment =
+                    (static_cast<f64>(incomingDx[index]) * cell.flow.dx +
+                     static_cast<f64>(incomingDy[index]) * cell.flow.dy) /
+                    std::max(inLength * outLength, 1.0e-12);
+                sharpBend = alignment < 0.25;
             }
+            if (incomingCount[index] != 1U || !downstreamIsRiver || exitsPage || sharpBend)
+                graphNodes[index] = 1U;
+        }
+    }
 
-            static_cast<void>(
-                ensureNode(
-                    x,
-                    y));
-
-            if (!cell.flow.HasDownstream() ||
-                cell.flow.exitsPage)
+    // Sample otherwise straight, single-channel reaches at the authored
+    // physical spacing. Any new sample becomes a deterministic trace origin.
+    std::vector<std::size_t> traceOrigins;
+    traceOrigins.reserve(cellCount / 8U);
+    for (std::size_t index = 0U; index < cellCount; ++index)
+        if (graphNodes[index] != 0U) traceOrigins.push_back(index);
+    for (std::size_t originIndex = 0U; originIndex < traceOrigins.size(); ++originIndex)
+    {
+        std::size_t cursor = traceOrigins[originIndex];
+        f64 distanceSinceNode = 0.0;
+        for (std::size_t guard = 0U; guard < cellCount; ++guard)
+        {
+            const u32 x = static_cast<u32>(cursor % resolution);
+            const u32 y = static_cast<u32>(cursor / resolution);
+            const auto& cell = drainage.At(x, y);
+            if (!cell.flow.HasDownstream() || cell.flow.exitsPage) break;
+            const i32 nx = static_cast<i32>(x) + cell.flow.dx;
+            const i32 ny = static_cast<i32>(y) + cell.flow.dy;
+            if (!Inside(nx, ny, resolution)) break;
+            const std::size_t next = Index(
+                resolution, static_cast<u32>(nx), static_cast<u32>(ny));
+            if (riverCells[next] == 0U || graphNodes[next] != 0U) break;
+            distanceSinceNode += result.spacingMeters *
+                (cell.flow.dx != 0 && cell.flow.dy != 0 ? std::numbers::sqrt2 : 1.0);
+            cursor = next;
+            if (distanceSinceNode >= config.maximumNodeSpacingMeters)
             {
-                continue;
-            }
-
-            const i32 nx =
-                static_cast<i32>(x) +
-                cell.flow.dx;
-
-            const i32 ny =
-                static_cast<i32>(y) +
-                cell.flow.dy;
-
-            if (Inside(
-                    nx,
-                    ny,
-                    resolution))
-            {
-                static_cast<void>(
-                    ensureNode(
-                        static_cast<u32>(nx),
-                        static_cast<u32>(ny)));
+                graphNodes[next] = 1U;
+                traceOrigins.push_back(next);
+                distanceSinceNode = 0.0;
             }
         }
     }
 
-    for (u32 nodeIndex = 0U;
-         nodeIndex <
-             static_cast<u32>(
-                 result.nodes.size());
-         ++nodeIndex)
+    const auto ensureNode = [&](const u32 x, const u32 y) -> u32
     {
-        const auto& node =
-            result.nodes[
-                nodeIndex];
+        const std::size_t cellIndex = Index(resolution, x, y);
+        if (nodeForCell[cellIndex] != invalidNode) return nodeForCell[cellIndex];
+        const auto& source = drainage.At(x, y);
+        const f64 discharge = std::max(source.dischargeCubicMetersPerSecond, 0.0);
+        const f64 ratio = std::max(discharge / config.referenceDischargeCubicMetersPerSecond, 1.0e-9);
+        const f64 width = std::clamp(
+            config.baseChannelWidthMeters * std::pow(ratio, config.widthDischargeExponent),
+            config.minimumChannelWidthMeters, config.maximumChannelWidthMeters);
+        const f64 depth = std::clamp(
+            config.baseChannelDepthMeters * std::pow(ratio, config.depthDischargeExponent),
+            config.minimumChannelDepthMeters, config.maximumChannelDepthMeters);
+        const math::Double2 offset = CellOffset(resolution, result.spacingMeters, x, y);
+        const RiverBasinId basin = ResolveBasin(drainage, x, y);
+        constexpr f64 waterFillFraction = 0.82;
+        constexpr f64 manningRoughness = 0.035;
+        const f64 slope = LocalRiverSlope(drainage, x, y);
+        const f64 wettedDepth = depth * waterFillFraction;
+        const f64 waterLevel = static_cast<f64>(source.surfaceHeightMeters) -
+            depth * (1.0 - waterFillFraction);
+        const f64 sectionArea = width * wettedDepth;
+        const f64 velocity = ManningVelocity(width, wettedDepth, slope, manningRoughness);
+        const f64 suspendedSediment = sediment != nullptr
+            ? sediment->At(x, y).waterborne.TotalKg()
+            : 0.0;
+        const u32 nodeIndex = static_cast<u32>(result.nodes.size());
+        result.nodes.push_back({
+            .id = MakeNodeId(result.sourcePage.address, x, y),
+            .basin = basin,
+            .sourceX = x,
+            .sourceY = y,
+            .drainageOffsetMeters = offset,
+            .channelOffsetMeters = offset,
+            .surfaceHeightMeters = source.surfaceHeightMeters,
+            .drainageElevationMeters = source.drainageElevationMeters,
+            .drainageAreaSquareMeters = source.drainageAreaSquareMeters,
+            .dischargeCubicMetersPerSecond = discharge,
+            .waterLevelMeters = static_cast<f32>(waterLevel),
+            .slope = static_cast<f32>(slope),
+            .velocityMetersPerSecond = static_cast<f32>(velocity),
+            .manningRoughness = static_cast<f32>(manningRoughness),
+            .crossSectionAreaSquareMeters = sectionArea,
+            .suspendedSedimentKg = suspendedSediment,
+            .channelWidthMeters = static_cast<f32>(width),
+            .channelDepthMeters = static_cast<f32>(depth),
+            .drainageFlowDx = source.flow.dx,
+            .drainageFlowDy = source.flow.dy,
+            .exitsPage = source.flow.exitsPage,
+            .outlet = source.outlet});
+        nodeForCell[cellIndex] = nodeIndex;
+        return nodeIndex;
+    };
 
-        const auto& cell =
-            drainage.At(
-                node.sourceX,
-                node.sourceY);
+    for (u32 y = 0U; y < resolution; ++y)
+        for (u32 x = 0U; x < resolution; ++x)
+            if (graphNodes[Index(resolution, x, y)] != 0U)
+                static_cast<void>(ensureNode(x, y));
 
-        if (!cell.flow.HasDownstream())
+    for (u32 nodeIndex = 0U; nodeIndex < result.nodes.size(); ++nodeIndex)
+    {
+        const auto& node = result.nodes[nodeIndex];
+        u32 x = node.sourceX;
+        u32 y = node.sourceY;
+        std::vector<math::Double2> routingPathMeters{
+            CellOffset(resolution, result.spacingMeters, x, y)};
+        for (std::size_t guard = 0U; guard < cellCount; ++guard)
         {
-            continue;
+            const auto& cell = drainage.At(x, y);
+            if (!cell.flow.HasDownstream()) break;
+            const i32 nx = static_cast<i32>(x) + cell.flow.dx;
+            const i32 ny = static_cast<i32>(y) + cell.flow.dy;
+            if (cell.flow.exitsPage || !Inside(nx, ny, resolution))
+            {
+                result.boundaryLinks.push_back({
+                    .upstreamNode = node.id,
+                    .basin = node.basin,
+                    .flowDx = cell.flow.dx,
+                    .flowDy = cell.flow.dy,
+                    .targetX = nx,
+                    .targetY = ny});
+                break;
+            }
+            const u32 nextX = static_cast<u32>(nx);
+            const u32 nextY = static_cast<u32>(ny);
+            const std::size_t nextIndex = Index(resolution, nextX, nextY);
+            if (riverCells[nextIndex] == 0U) break;
+            routingPathMeters.push_back(
+                CellOffset(resolution, result.spacingMeters, nextX, nextY));
+            if (graphNodes[nextIndex] != 0U)
+            {
+                const u32 downstream = nodeForCell[nextIndex];
+                if (downstream != invalidNode)
+                {
+                    result.segments.push_back({
+                        .id = MakeSegmentId(node.id, result.nodes[downstream].id),
+                        .basin = node.basin,
+                        .upstreamNode = nodeIndex,
+                        .downstreamNode = downstream,
+                        .slope = static_cast<f32>(std::max(
+                            (static_cast<f64>(node.waterLevelMeters) -
+                             result.nodes[downstream].waterLevelMeters) /
+                                std::max(Distance(
+                                    node.channelOffsetMeters,
+                                    result.nodes[downstream].channelOffsetMeters),
+                                    1.0e-6),
+                            0.00002)),
+                        .velocityMetersPerSecond = static_cast<f32>(
+                            0.5 * (node.velocityMetersPerSecond +
+                                   result.nodes[downstream].velocityMetersPerSecond)),
+                        .manningRoughness = node.manningRoughness,
+                        .suspendedSedimentKg = 0.5 * (
+                            node.suspendedSedimentKg +
+                            result.nodes[downstream].suspendedSedimentKg),
+                        .routingPathMeters = SimplifyRoutingPath(
+                            routingPathMeters,
+                            result.spacingMeters * 0.75)});
+                }
+                break;
+            }
+            x = nextX;
+            y = nextY;
         }
-
-        const i32 nx =
-            static_cast<i32>(
-                node.sourceX) +
-            cell.flow.dx;
-
-        const i32 ny =
-            static_cast<i32>(
-                node.sourceY) +
-            cell.flow.dy;
-
-        if (cell.flow.exitsPage ||
-            !Inside(
-                nx,
-                ny,
-                resolution))
-        {
-            result.boundaryLinks.push_back({
-                .upstreamNode =
-                    node.id,
-                .basin =
-                    node.basin,
-                .flowDx =
-                    cell.flow.dx,
-                .flowDy =
-                    cell.flow.dy,
-                .targetX = nx,
-                .targetY = ny
-            });
-
-            continue;
-        }
-
-        const u32 downstream =
-            nodeForCell[
-                Index(
-                    resolution,
-                    static_cast<u32>(nx),
-                    static_cast<u32>(ny))];
-
-        if (downstream ==
-            invalidNode)
-        {
-            continue;
-        }
-
-        const auto& downstreamNode =
-            result.nodes[
-                downstream];
-
-        result.segments.push_back({
-            .id =
-                MakeSegmentId(
-                    node.id,
-                    downstreamNode.id),
-            .basin =
-                node.basin,
-            .upstreamNode =
-                nodeIndex,
-            .downstreamNode =
-                downstream
-        });
     }
 
     for (const auto& node :
@@ -1944,6 +2043,45 @@ RiverIncisionResult ApplyRiverNetworkIncision(
             network.resolution - 1U) *
         0.5;
 
+    struct IncisionPath
+    {
+        u32 upstreamNode{0U};
+        u32 downstreamNode{0U};
+        std::vector<math::Double2> points;
+        std::vector<f64> cumulativeMeters;
+        f64 totalLengthMeters{0.0};
+    };
+    std::vector<IncisionPath> incisionPaths;
+    incisionPaths.reserve(network.segments.size());
+    for (const auto& segment : network.segments)
+    {
+        if (!segment.active ||
+            segment.upstreamNode >= network.nodes.size() ||
+            segment.downstreamNode >= network.nodes.size())
+            continue;
+        const auto& a = network.nodes[segment.upstreamNode];
+        const auto& b = network.nodes[segment.downstreamNode];
+        IncisionPath path{
+            .upstreamNode = segment.upstreamNode,
+            .downstreamNode = segment.downstreamNode};
+        path.points = segment.routingPathMeters.size() >= 2U
+            ? segment.routingPathMeters
+            : std::vector<math::Double2>{a.drainageOffsetMeters, b.drainageOffsetMeters};
+        const math::Double2 offsetA = Subtract(a.channelOffsetMeters, a.drainageOffsetMeters);
+        const math::Double2 offsetB = Subtract(b.channelOffsetMeters, b.drainageOffsetMeters);
+        for (std::size_t i = 0U; i < path.points.size(); ++i)
+        {
+            const f64 t = static_cast<f64>(i) /
+                static_cast<f64>(path.points.size() - 1U);
+            path.points[i] = Add(path.points[i], Add(Scale(offsetA, 1.0 - t), Scale(offsetB, t)));
+            if (i > 0U)
+                path.totalLengthMeters += Distance(path.points[i - 1U], path.points[i]);
+            path.cumulativeMeters.push_back(path.totalLengthMeters);
+        }
+        if (path.totalLengthMeters > 1.0e-9)
+            incisionPaths.push_back(std::move(path));
+    }
+
     for (u32 y = 0U;
          y <
              network.resolution;
@@ -1965,48 +2103,30 @@ RiverIncisionResult ApplyRiverNetworkIncision(
 
             f64 desiredDepth = 0.0;
 
-            for (const auto& segment :
-                 network.segments)
+            for (const auto& path : incisionPaths)
             {
-                if (!segment.active)
-                {
-                    continue;
-                }
-
                 const auto& a =
                     network.nodes[
-                        segment.
-                            upstreamNode];
+                        path.upstreamNode];
 
                 const auto& b =
                     network.nodes[
-                        segment.
-                            downstreamNode];
+                        path.downstreamNode];
 
-                f64 t = 0.0;
-
-                const f64 distance =
-                    DistanceToSegment(
-                        point,
-                        a.channelOffsetMeters,
-                        b.channelOffsetMeters,
-                        &t);
-
-                const f64 width =
-                    std::lerp(
-                        static_cast<f64>(
-                            a.channelWidthMeters),
-                        static_cast<f64>(
-                            b.channelWidthMeters),
-                        t);
-
-                const f64 depth =
-                    std::lerp(
-                        static_cast<f64>(
-                            a.channelDepthMeters),
-                        static_cast<f64>(
-                            b.channelDepthMeters),
-                        t);
+                for (std::size_t leg = 1U; leg < path.points.size(); ++leg)
+                {
+                    f64 localT = 0.0;
+                    const f64 distance = DistanceToSegment(
+                        point, path.points[leg - 1U], path.points[leg], &localT);
+                    const f64 legLength = path.cumulativeMeters[leg] - path.cumulativeMeters[leg - 1U];
+                    const f64 t = (path.cumulativeMeters[leg - 1U] + legLength * localT) /
+                        path.totalLengthMeters;
+                    const f64 width = std::lerp(
+                        static_cast<f64>(a.channelWidthMeters),
+                        static_cast<f64>(b.channelWidthMeters), t);
+                    const f64 depth = std::lerp(
+                        static_cast<f64>(a.channelDepthMeters),
+                        static_cast<f64>(b.channelDepthMeters), t);
 
                 const f64 channelHalfWidth =
                     std::max(
@@ -2048,6 +2168,7 @@ RiverIncisionResult ApplyRiverNetworkIncision(
                         desiredDepth,
                         depth *
                             profile);
+                }
             }
 
             desiredDepth =

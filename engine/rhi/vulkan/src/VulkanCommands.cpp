@@ -1,5 +1,7 @@
 #include "VulkanObjects.hpp"
 
+#include <algorithm>
+
 #include <stdexcept>
 
 namespace orbit::rhi::vulkan::detail
@@ -171,17 +173,42 @@ BufferBarrierInfo ToBufferBarrierInfo(const ResourceState state)
 VulkanCommandAllocator::VulkanCommandAllocator(
     const VkDevice device,
     const QueueType type,
-    const VkCommandPool pool)
-    : device_(device), type_(type), pool_(pool)
+    const VkCommandPool pool,
+    GpuProgress* const progress)
+    : device_(device), type_(type), pool_(pool), progress_(progress)
 {
+    if (progress_ != nullptr)
+    {
+        lastSubmit_ = std::make_shared<std::atomic<u64>>(0U);
+    }
 }
 
 VulkanCommandAllocator::~VulkanCommandAllocator()
 {
     if (pool_ != VK_NULL_HANDLE)
     {
-        vkDestroyCommandPool(device_, pool_, nullptr);
+        const VkDevice device = device_;
+        const VkCommandPool pool = pool_;
+        auto destroy = [device, pool]
+        { vkDestroyCommandPool(device, pool, nullptr); };
+
+        // Destroying the pool frees its command buffers, which a submit in
+        // flight (or one still being recorded) may be executing.
+        if (progress_ != nullptr)
+        {
+            progress_->Retire(progress_->NextSerial(), std::move(destroy));
+        }
+        else
+        {
+            destroy();
+        }
     }
+}
+
+const std::shared_ptr<std::atomic<u64>>&
+VulkanCommandAllocator::UseTracker() const noexcept
+{
+    return lastSubmit_;
 }
 
 QueueType VulkanCommandAllocator::Type() const noexcept
@@ -191,6 +218,14 @@ QueueType VulkanCommandAllocator::Type() const noexcept
 
 void VulkanCommandAllocator::Reset()
 {
+    // A pool cannot be reset while a command buffer allocated from it is
+    // still executing. A per-frame allocator whose slot fence has passed
+    // never waits here; a reused one-shot allocator waits for its submit.
+    if (lastSubmit_ != nullptr)
+    {
+        progress_->Wait(lastSubmit_->load(std::memory_order_acquire));
+    }
+
     if (vkResetCommandPool(device_, pool_, 0) != VK_SUCCESS)
     {
         throw std::runtime_error(
@@ -209,14 +244,48 @@ VulkanCommandList::VulkanCommandList(
     const VkCommandPool pool,
     const VkCommandBuffer nativeCommandList,
     const DeviceFunctions& functions,
-    const VkSampler defaultSampler)
+    const VkSampler defaultSampler,
+    GpuProgress* const progress)
     : device_(device),
       type_(type),
       pool_(pool),
       nativeCommandList_(nativeCommandList),
       functions_(&functions),
-      defaultSampler_(defaultSampler)
+      defaultSampler_(defaultSampler),
+      progress_(progress)
 {
+}
+
+void VulkanCommandList::NoteAllocator(VulkanCommandAllocator& allocator)
+{
+    allocatorTracker_ = allocator.UseTracker();
+}
+
+VkBuffer VulkanCommandList::UseBuffer(VulkanBuffer& buffer)
+{
+    if (const auto& tracker = buffer.UseTracker(); tracker != nullptr)
+    {
+        if (usedBuffers_.empty() || usedBuffers_.back() != tracker)
+        {
+            usedBuffers_.push_back(tracker);
+        }
+    }
+
+    return buffer.Native();
+}
+
+void VulkanCommandList::FinalizeSubmit(const u64 serial)
+{
+    for (const auto& tracker : usedBuffers_)
+    {
+        RaiseTo(*tracker, serial);
+    }
+    usedBuffers_.clear();
+
+    if (allocatorTracker_ != nullptr)
+    {
+        RaiseTo(*allocatorTracker_, serial);
+    }
 }
 
 QueueType VulkanCommandList::Type() const noexcept
@@ -254,6 +323,8 @@ void VulkanCommandList::Reset(CommandAllocator& allocator)
     // VulkanCommandAllocator's own destructor (vkDestroyCommandPool)
     // to free implicitly, all at once, when that pool goes away.
     const VkCommandPool targetPool = vulkanAllocator->Native();
+    NoteAllocator(*vulkanAllocator);
+    usedBuffers_.clear();
 
     VkCommandBuffer* cached = nullptr;
     for (auto& [pool, commandBuffer] : commandBuffersByPool_)
@@ -460,7 +531,7 @@ void VulkanCommandList::Transition(
         isDepth
             ? static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT)
             : static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT),
-        0, 1, 0, 1};
+        0, VK_REMAINING_MIP_LEVELS, 0, 1};
 
     VkDependencyInfo dependencyInfo{};
     dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -500,7 +571,7 @@ void VulkanCommandList::Transition(
     barrier.dstAccessMask = destination.accessMask;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.buffer = vulkanBuffer->Native();
+    barrier.buffer = UseBuffer(*vulkanBuffer);
     barrier.offset = 0;
     barrier.size = VK_WHOLE_SIZE;
 
@@ -537,7 +608,7 @@ void VulkanCommandList::UavBarrier(Buffer& buffer)
         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.buffer = vulkanBuffer->Native();
+    barrier.buffer = UseBuffer(*vulkanBuffer);
     barrier.offset = 0;
     barrier.size = VK_WHOLE_SIZE;
 
@@ -586,7 +657,7 @@ void VulkanCommandList::UavBarrier(Texture& texture)
         isDepth
             ? static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT)
             : static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT),
-        0, 1, 0, 1};
+        0, VK_REMAINING_MIP_LEVELS, 0, 1};
 
     VkDependencyInfo dependencyInfo{};
     dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -639,8 +710,8 @@ void VulkanCommandList::CopyBuffer(
 
     VkCopyBufferInfo2 copyInfo{};
     copyInfo.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2;
-    copyInfo.srcBuffer = vulkanSource->Native();
-    copyInfo.dstBuffer = vulkanDestination->Native();
+    copyInfo.srcBuffer = UseBuffer(*vulkanSource);
+    copyInfo.dstBuffer = UseBuffer(*vulkanDestination);
     copyInfo.regionCount = 1;
     copyInfo.pRegions = &region;
 
@@ -701,13 +772,117 @@ void VulkanCommandList::CopyBufferToTexture(
 
     VkCopyBufferToImageInfo2 copyInfo{};
     copyInfo.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2;
-    copyInfo.srcBuffer = vulkanSource->Native();
+    copyInfo.srcBuffer = UseBuffer(*vulkanSource);
     copyInfo.dstImage = vulkanDestination->Native();
     copyInfo.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     copyInfo.regionCount = 1;
     copyInfo.pRegions = &region;
 
     vkCmdCopyBufferToImage2(nativeCommandList_, &copyInfo);
+
+    ResumeRenderingIfPaused(wasRendering);
+}
+
+void VulkanCommandList::GenerateMipmaps(Texture& texture)
+{
+    auto* vulkanTexture = dynamic_cast<VulkanTexture*>(&texture);
+
+    if (vulkanTexture == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a resource from another backend.");
+    }
+
+    const u32 levels = vulkanTexture->MipLevels();
+
+    if (levels <= 1U)
+    {
+        return;
+    }
+
+    const bool wasRendering = PauseRenderingIfActive();
+
+    const auto transition =
+        [&](const u32 firstLevel,
+            const u32 levelCount,
+            const VkImageLayout oldLayout,
+            const VkImageLayout newLayout,
+            const VkAccessFlags2 srcAccess,
+            const VkAccessFlags2 dstAccess)
+        {
+            VkImageMemoryBarrier2 barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            barrier.srcAccessMask = srcAccess;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            barrier.dstAccessMask = dstAccess;
+            barrier.oldLayout = oldLayout;
+            barrier.newLayout = newLayout;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = vulkanTexture->Native();
+            barrier.subresourceRange = {
+                VK_IMAGE_ASPECT_COLOR_BIT, firstLevel, levelCount, 0, 1};
+
+            VkDependencyInfo dependencyInfo{};
+            dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dependencyInfo.imageMemoryBarrierCount = 1;
+            dependencyInfo.pImageMemoryBarriers = &barrier;
+            vkCmdPipelineBarrier2(nativeCommandList_, &dependencyInfo);
+        };
+
+    i32 sourceWidth = static_cast<i32>(vulkanTexture->Width());
+    i32 sourceHeight = static_cast<i32>(vulkanTexture->Height());
+
+    for (u32 level = 1U; level < levels; ++level)
+    {
+        // The previous level was just written (or uploaded): make it a
+        // blit source. Level `level` is still in TRANSFER_DST.
+        transition(
+            level - 1U,
+            1U,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_ACCESS_2_TRANSFER_READ_BIT);
+
+        const i32 destinationWidth = std::max(sourceWidth / 2, 1);
+        const i32 destinationHeight = std::max(sourceHeight / 2, 1);
+
+        VkImageBlit2 region{};
+        region.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
+        region.srcSubresource = {
+            VK_IMAGE_ASPECT_COLOR_BIT, level - 1U, 0, 1};
+        region.srcOffsets[1] = {sourceWidth, sourceHeight, 1};
+        region.dstSubresource = {
+            VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+        region.dstOffsets[1] = {destinationWidth, destinationHeight, 1};
+
+        VkBlitImageInfo2 blit{};
+        blit.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2;
+        blit.srcImage = vulkanTexture->Native();
+        blit.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        blit.dstImage = vulkanTexture->Native();
+        blit.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        blit.regionCount = 1;
+        blit.pRegions = &region;
+        blit.filter = VK_FILTER_LINEAR;
+
+        vkCmdBlitImage2(nativeCommandList_, &blit);
+
+        sourceWidth = destinationWidth;
+        sourceHeight = destinationHeight;
+    }
+
+    // Every level but the last was moved to TRANSFER_SRC: return the whole
+    // image to TRANSFER_DST, the layout CopyDestination promises.
+    transition(
+        0U,
+        levels - 1U,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_ACCESS_2_TRANSFER_READ_BIT,
+        VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
     ResumeRenderingIfPaused(wasRendering);
 }
@@ -783,7 +958,7 @@ void VulkanCommandList::CopyTextureToBuffer(
     copyInfo.srcImageLayout =
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     copyInfo.dstBuffer =
-        vulkanDestination->Native();
+        UseBuffer(*vulkanDestination);
     copyInfo.regionCount = 1;
     copyInfo.pRegions = &region;
 
@@ -1168,7 +1343,7 @@ void VulkanCommandList::SetGraphicsBuffer(
     }
 
     VkDescriptorBufferInfo bufferInfo{};
-    bufferInfo.buffer = vulkanBuffer->Native();
+    bufferInfo.buffer = UseBuffer(*vulkanBuffer);
     bufferInfo.offset = 0;
     bufferInfo.range = VK_WHOLE_SIZE;
 
@@ -1214,7 +1389,10 @@ void VulkanCommandList::SetGraphicsTexture(
     }
 
     VkDescriptorImageInfo imageInfo{};
-    imageInfo.sampler = defaultSampler_;
+    imageInfo.sampler =
+        vulkanTexture->Sampler() != VK_NULL_HANDLE
+            ? vulkanTexture->Sampler()
+            : defaultSampler_;
     imageInfo.imageView = vulkanTexture->View();
     imageInfo.imageLayout =
         texture.Format() == TextureFormat::D32_Float
@@ -1318,7 +1496,7 @@ void VulkanCommandList::SetComputeBuffer(
     }
 
     VkDescriptorBufferInfo bufferInfo{};
-    bufferInfo.buffer = vulkanBuffer->Native();
+    bufferInfo.buffer = UseBuffer(*vulkanBuffer);
     bufferInfo.offset = 0;
     bufferInfo.range = VK_WHOLE_SIZE;
 
@@ -1413,7 +1591,10 @@ void VulkanCommandList::SetComputeTexture(
     }
 
     VkDescriptorImageInfo imageInfo{};
-    imageInfo.sampler = defaultSampler_;
+    imageInfo.sampler =
+        vulkanTexture->Sampler() != VK_NULL_HANDLE
+            ? vulkanTexture->Sampler()
+            : defaultSampler_;
     imageInfo.imageView = vulkanTexture->View();
     imageInfo.imageLayout =
         texture.Format() == TextureFormat::D32_Float
@@ -1551,7 +1732,7 @@ void VulkanCommandList::SetVertexBuffer(
             "Orbit vertex buffer stride cannot be zero.");
     }
 
-    const VkBuffer nativeBuffer = vulkanBuffer->Native();
+    const VkBuffer nativeBuffer = UseBuffer(*vulkanBuffer);
     constexpr VkDeviceSize offset = 0;
 
     vkCmdBindVertexBuffers(
@@ -1576,7 +1757,7 @@ void VulkanCommandList::SetIndexBuffer(
             : VK_INDEX_TYPE_UINT32;
 
     vkCmdBindIndexBuffer(
-        nativeCommandList_, vulkanBuffer->Native(), 0, indexType);
+        nativeCommandList_, UseBuffer(*vulkanBuffer), 0, indexType);
 }
 
 void VulkanCommandList::DrawIndexed(
@@ -1618,7 +1799,7 @@ void VulkanCommandList::DrawIndirect(
     }
     vkCmdDrawIndirect(
         nativeCommandList_,
-        vulkanBuffer->Native(),
+        UseBuffer(*vulkanBuffer),
         static_cast<VkDeviceSize>(argumentOffsetBytes),
         1U,
         sizeof(VkDrawIndirectCommand));

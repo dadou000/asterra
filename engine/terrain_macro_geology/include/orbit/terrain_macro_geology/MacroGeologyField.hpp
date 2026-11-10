@@ -32,6 +32,18 @@ struct MacroGeologyDesc
     f64 distortionWavelengthMeters{1'800'000.0};
     u32 distortionOctaves{3};
 
+    // Old crust has already shed relief: tectonic uplift (not hotspots or
+    // authored uplift) is scaled by 1 - ageUpliftDecay * geologicalAge. Zero
+    // keeps the pre-structural-layer behaviour.
+    f64 ageUpliftDecay{0.0};
+
+    // Strength of the tectonic watershed steer folded into drainageGuidance,
+    // in [0, 1]. Routing is attracted toward subsiding basins, rifts and
+    // trenches and repelled from uplifting belts. It only re-ranks downhill
+    // neighbours (DrainagePage never routes uphill), so a belt acts as a
+    // divide without ever forcing flow over a ridge. Zero disables it.
+    f64 tectonicDrainageGuidance{0.0};
+
     [[nodiscard]] bool IsValid() const noexcept;
 };
 
@@ -56,6 +68,12 @@ struct MacroGeologySample
     f64 tectonicSubsidenceMeters{0.0};
     f64 hotspotUpliftMeters{0.0};
     f64 distortionSignal{0.0};
+
+    // Planet structural layer (TectonicStructureSample) at this position.
+    f64 geologicalAge{0.0};
+    f64 crustAge{0.0};
+    f64 crustThicknessKm{0.0};
+    f64 tectonicDrainageSteer{0.0};
 
     // Final M05 uplift forcing after M04 authored uplift composition.
     // This is an input to later stream-power equilibrium, not final height.

@@ -177,9 +177,9 @@ public:
           residency_(config_.clipmap),
           levels_(terrain_view::ClipmapLevelCount(config_.clipmap))
     {
-        if (math::Length(observer.meters) <= planet_.radiusMeters)
+        if (!(math::Length(observer.meters) > 1.0))
             throw std::invalid_argument(
-                "Orbit terrain preview observer must be above the planet surface.");
+                "Orbit terrain preview observer must be away from the planet centre.");
         if (config_.framesInFlight == 0)
             throw std::invalid_argument(
                 "Orbit terrain preview requires at least one frame in flight.");
@@ -1126,9 +1126,9 @@ private:
     void SetObserverView(const world::WorldPosition& observer)
     {
         const f64 observerRadius = math::Length(observer.meters);
-        if (observerRadius <= planet_.radiusMeters)
+        if (!(observerRadius > 1.0))
             throw std::invalid_argument(
-                "Orbit terrain preview observer must be above the planet surface.");
+                "Orbit terrain preview observer must be away from the planet centre.");
 
         observer_ = observer;
         if (!observerFrameInitialized_)

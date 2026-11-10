@@ -116,6 +116,28 @@ def orbit_project_info() -> dict[str, Any]:
     return _rpc("project.info")
 
 
+@mcp.tool()
+def orbit_studio_github_update(start: bool = False) -> dict[str, Any]:
+    """Check GitHub update status or request safe Harmony update/rebuild.
+
+    start=True saves the project, refuses dirty or divergent Git history,
+    fetches origin/0.1.1-Harmony, rebuilds Studio incrementally, and hands
+    off to the new process only after a successful build. A successful
+    update may temporarily disconnect RPC during the generation handoff.
+    Call with start=False to inspect stage/detail/log_path.
+    """
+    return _rpc("studio.github_update_start" if start
+                else "studio.github_update_status")
+
+
+@mcp.tool()
+def orbit_studio_eco_mode(enabled: bool | None = None) -> dict[str, Any]:
+    """Read or set Studio Eco mode (15 FPS while active, 1 FPS while idle)."""
+    if enabled is None:
+        return _rpc("studio.eco_mode_get")
+    return _rpc("studio.eco_mode_set", {"enabled": enabled})
+
+
 def _wait_for_project(project_id: str, timeout_seconds: float) -> dict[str, Any]:
     """Poll project.info until Studio has relaunched into project_id.
 
@@ -292,21 +314,58 @@ def orbit_view_terrain_layers_set(
     cloud_resolution_scale: float | None = None,
     cloud_godray_strength: float | None = None,
     cloud_light_volume: bool | None = None,
+    terrain_occluded_atmosphere: bool | None = None,
+    atmosphere_audit_mode: int | None = None,
+    atmosphere_audit_radiance_only: bool | None = None,
+    sun_audit_method: int | None = None,
+    sun_audit_disc_debug: bool | None = None,
+    sun_audit_relief_debug: bool | None = None,
+    sun_audit_sources_debug: bool | None = None,
     bypass_cloud_shadow: bool | None = None,
     bypass_proxy_sun_shadow: bool | None = None,
     bypass_proxy_surfaces: bool | None = None,
+    bypass_mesh_surfaces: bool | None = None,
+    bypass_sdf_gi: bool | None = None,
+    bypass_sdf_terrain: bool | None = None,
+    bypass_sdf_proxies: bool | None = None,
     bypass_sky_cache: bool | None = None,
     bypass_indirect_lighting: bool | None = None,
     bypass_near_field_water: bool | None = None,
     bypass_atmosphere: bool | None = None,
     bypass_hybrid_reflections: bool | None = None,
+    reflection_exact_triangles: bool | None = None,
+    reflection_temporal: bool | None = None,
+    reflection_maximum_roughness: float | None = None,
+    reflection_distance_meters: float | None = None,
+    reflection_debug_view: int | None = None,
     bypass_radiance_cache: bool | None = None,
     indirect_coverage_view: bool | None = None,
+    gi_only_view: bool | None = None,
+    anti_aliasing: str | None = None,
+    sdf_debug_view: int | None = None,
+    gi_intensity: float | None = None,
+    render_scale: float | None = None,
+    taa_jitter_scale: float | None = None,
+    mesh_shadow_softness: float | None = None,
     cloud_volume_debug_altitude: float | None = None,
     cloud_temporal: bool | None = None,
 ) -> dict[str, Any]:
     """Choose which terrain layers a viewport draws and its LOD bias. Omitted
-    fields keep their value. lod_bias_stops is clamped to [-4, 4]: +1 keeps richer
+    fields keep their value. reflection_exact_triangles switches the shared mesh
+    BVH for smooth opaque reflections and analytic glass; reflection_temporal
+    controls reflection-only history (independent of scene TAA).
+    sun_audit_method: 0=baseline, 1=finite solar disc sphere, 2=terrain ray
+    visibility, 3=isolate direct stellar term from sky/GI. Three independent
+    sun_audit_*_debug switches enable their method's linear-HDR debug view
+    while that method is active; debug bypasses later GI, atmosphere/cloud
+    layers for readable masks. Relief mode can initially fall back to
+    spherical visibility while the height field builds asynchronously.
+    These settings are transient per viewport, not project authority.
+    reflection_maximum_roughness [0,1] defaults to 0.25,
+    reflection_distance_meters [0.1,1000] defaults to 40.
+    reflection_debug_view: 0 scene, 1 reflected radiance, 2 hit distance (magenta
+    means environment/cache). Hardware traversal follows the lighting scheduler;
+    disabling it preserves software traversal and shading. lod_bias_stops is clamped to [-4, 4]: +1 keeps richer
     representations longer and doubles orbital patch resolution, -1 is coarser and
     cheaper (with full_clipmap it scales the clipmap planner's target spacing too).
     full_clipmap (default true) draws the production clipmap from the ground to
@@ -348,7 +407,20 @@ def orbit_view_terrain_layers_set(
     for this view, to bisect a rendering artefact (default false). indirect_coverage_view
     replaces the final gather's contribution with its coverage (red confidence, green
     gathered brightness on a log scale, magenta = the gather returned nothing for the
-    pixel, i.e. no indirect light there). cloud_volume_debug_altitude
+    pixel, i.e. no indirect light there). gi_only_view shows ONLY the global illumination
+    (the final gather plus the radiance-cache cascade fallback; no direct sun, sky fill,
+    emission or reflections) so the cascades can be judged alone. anti_aliasing is "off", "fxaa" or
+    "taa" (default): TAA jitters the camera by a sub-pixel rotation, reprojects its history from the
+    camera pair and depth, clips it to the 3x3 neighbourhood and falls back to FXAA on frames with no
+    usable history (first frame, teleport, lens change, resize); all run on the HDR colour before
+    exposure and tone mapping, and only in the lit view. taa_jitter_scale (0..1, default 1) scales the
+    sub-pixel jitter; 0 disables the jitter (TAA becomes a plain temporal filter). bypass_sdf_terrain / bypass_sdf_proxies leave the terrain height patch / Visibility Proxies out of the mesh distance field (A/B what each adds to the GI fallback). bypass_sdf_gi skips the final gather's world-space fallback (rays the screen cannot resolve are traced
+    through the merged mesh distance field and read its lit surface voxels). render_scale (0.25-1, default 1: the view renders at this fraction of the panel/capture resolution per axis and is shown stretched; 0.75 costs roughly 45% fewer pixels), gi_intensity (0-16, default pi = physically correct diffuse bounce; the gather multiplies its averaged
+    radiance by albedo / pi, so pi restores the energy) scales all gathered bounce light. sdf_debug_view (0-5)
+    sphere traces the merged mesh distance field and shows it: 1 shaded, 2 step heat map, 3 distance,
+    4 split (left half SDF, right half the scene), 5 the stored surface radiance (sun + sky + bounce), 0 off. mesh_shadow_softness
+    (0..32, default 1) multiplies the sun's angular size in the mesh sun shadow (PCSS): 0 = hard
+    shadows, 1 = the real sun, larger exaggerates the penumbra. cloud_volume_debug_altitude
     (metres, default 0 = off) draws a horizontal slice of that volume at the given altitude
     over the view as a heatmap of the optical depth towards the sun (blue clear to white
     opaque, magenta = voxel not ready, nothing outside the cascades). -1 shows the scene
@@ -387,16 +459,39 @@ def orbit_view_terrain_layers_set(
         "cloud_resolution_scale": cloud_resolution_scale,
         "cloud_godray_strength": cloud_godray_strength,
         "cloud_light_volume": cloud_light_volume,
+        "terrain_occluded_atmosphere": terrain_occluded_atmosphere,
+        "atmosphere_audit_mode": atmosphere_audit_mode,
+        "atmosphere_audit_radiance_only": atmosphere_audit_radiance_only,
+        "sun_audit_method": sun_audit_method,
+        "sun_audit_disc_debug": sun_audit_disc_debug,
+        "sun_audit_relief_debug": sun_audit_relief_debug,
+        "sun_audit_sources_debug": sun_audit_sources_debug,
         "bypass_cloud_shadow": bypass_cloud_shadow,
         "bypass_proxy_sun_shadow": bypass_proxy_sun_shadow,
         "bypass_proxy_surfaces": bypass_proxy_surfaces,
+        "bypass_mesh_surfaces": bypass_mesh_surfaces,
+        "bypass_sdf_gi": bypass_sdf_gi,
+        "bypass_sdf_terrain": bypass_sdf_terrain,
+        "bypass_sdf_proxies": bypass_sdf_proxies,
         "bypass_sky_cache": bypass_sky_cache,
         "bypass_indirect_lighting": bypass_indirect_lighting,
         "bypass_near_field_water": bypass_near_field_water,
         "bypass_hybrid_reflections": bypass_hybrid_reflections,
+        "reflection_exact_triangles": reflection_exact_triangles,
+        "reflection_temporal": reflection_temporal,
+        "reflection_maximum_roughness": reflection_maximum_roughness,
+        "reflection_distance_meters": reflection_distance_meters,
+        "reflection_debug_view": reflection_debug_view,
         "bypass_radiance_cache": bypass_radiance_cache,
         "bypass_atmosphere": bypass_atmosphere,
         "indirect_coverage_view": indirect_coverage_view,
+        "gi_only_view": gi_only_view,
+        "anti_aliasing": anti_aliasing,
+        "sdf_debug_view": sdf_debug_view,
+        "gi_intensity": gi_intensity,
+        "render_scale": render_scale,
+        "taa_jitter_scale": taa_jitter_scale,
+        "mesh_shadow_softness": mesh_shadow_softness,
         "cloud_volume_debug_altitude": cloud_volume_debug_altitude,
         "cloud_temporal": cloud_temporal,
     }.items():
@@ -435,11 +530,30 @@ def orbit_view_text_diagnostics_set(
 
 
 @mcp.tool()
-def orbit_project_discover(roots: list[str] | None = None) -> list[dict[str, Any]]:
+def orbit_viewport_fullscreen_get() -> dict[str, Any]:
+    """Whether the primary viewport is in (or animating into) full-screen mode."""
+    return _rpc("viewport.fullscreen_get")
+
+
+@mcp.tool()
+def orbit_viewport_fullscreen_set(enabled: bool) -> dict[str, Any]:
+    """Animate the primary viewport into or out of full screen (F11 / the
+    viewport's Full Screen button; Esc also leaves it). The image grows from the
+    docked panel to the whole window over about 0.3 s."""
+    return _rpc("viewport.fullscreen_set", {"enabled": enabled})
+
+
+@mcp.tool()
+def orbit_project_discover(roots: list[str] | None = None, include_test_content: bool = True) -> list[dict[str, Any]]:
     """Scan the usual folders (Documents, Desktop, Downloads, Orbit's Projects
-    folder) for Orbit projects, newest first. Pass roots to scan other folders.
-    Open one with orbit_project_open."""
-    return _rpc("project.discover", {"roots": roots} if roots else {})
+    folder) and the engine's bundled examples/ folder for Orbit projects, newest
+    first. Projects under examples/ carry test_content=true; pass
+    include_test_content=False to hide them (the Project Browser's "Show test
+    content" toggle). Pass roots to scan other folders. Open one with orbit_project_open."""
+    params: dict[str, Any] = {"include_test_content": include_test_content}
+    if roots:
+        params["roots"] = roots
+    return _rpc("project.discover", params)
 
 
 @mcp.tool()
@@ -544,6 +658,43 @@ def orbit_viewport_focus_body() -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_viewport_snapping_get() -> dict[str, Any]:
+    """Read movement snap distance/unit, surface snapping, angle degrees, and scale percent."""
+    return _rpc("viewport.snapping_get")
+
+
+@mcp.tool()
+def orbit_viewport_snapping_set(
+    translation_enabled: bool | None = None,
+    distance: float | None = None,
+    unit: str | None = None,
+    surface_enabled: bool | None = None,
+    rotation_enabled: bool | None = None,
+    rotation_degrees: float | None = None,
+    scale_enabled: bool | None = None,
+    scale_percent: float | None = None,
+) -> dict[str, Any]:
+    """Adjust shared snapping. Distance defaults to meters; units: mm, cm, m, km, in, ft.
+    Steps must be positive and finite. Unit-only changes preserve physical distance.
+    Rotation uses degrees and scale uses percent. Unspecified settings stay unchanged.
+    """
+    return _rpc("viewport.snapping_set", {
+        key: value for key, value in {
+            "translation_enabled": translation_enabled, "distance": distance, "unit": unit,
+            "surface_enabled": surface_enabled, "rotation_enabled": rotation_enabled,
+            "rotation_degrees": rotation_degrees, "scale_enabled": scale_enabled,
+            "scale_percent": scale_percent,
+        }.items() if value is not None
+    })
+
+
+@mcp.tool()
+def orbit_viewport_frame_selected() -> dict[str, Any]:
+    """Frame the selected scene object in the controlled perspective viewport."""
+    return _rpc("viewport.frame_selected")
+
+
+@mcp.tool()
 def orbit_cpu_timings() -> dict[str, Any]:
     """Return last and rolling 120-frame CPU timings for the live Studio frame loop."""
     return _rpc("studio.cpu_timings")
@@ -570,6 +721,158 @@ def orbit_profiler_status() -> dict[str, Any]:
     frame times, and recent hitch captures (Perfetto traces with one lane per
     thread and per CPU core, plus the stack frames that dominated each stall)."""
     return _rpc("profiler.status")
+
+
+@mcp.tool()
+def orbit_profiler_viewport_capture(
+    action: str = "start",
+    duration_ms: float | None = None,
+    resolution: str | None = None,
+    window_ms: float | None = None,
+    scenario: str | None = None,
+) -> dict[str, Any]:
+    """Start/cancel/query a viewport-only Perfetto capture. Start defaults to
+    the ProfilerModel duration and resolution (initially 4 seconds and 1440p);
+    presets are 720p, 1080p, 1440p and 2160p. scenario may be static,
+    walk_1_94_mps, surface_200_kmh, flight_2000_mps_5000m, or
+    ground_to_orbit_20s. window_ms remains an alias for duration_ms. Studio
+    pauses non-viewport panels, keeps the primary viewport live, then restores
+    the shell. Poll with action='status' for progress and the trace path."""
+    params: dict[str, Any] = {"action": action}
+    if duration_ms is not None:
+        params["duration_ms"] = duration_ms
+    elif window_ms is not None:
+        params["window_ms"] = window_ms
+    if resolution is not None:
+        params["resolution"] = resolution
+    if scenario is not None:
+        params["scenario"] = scenario
+    if action == "status":
+        return _rpc("profiler.viewport_capture_status")
+    return _rpc("profiler.viewport_capture", params)
+
+
+@mcp.tool()
+def orbit_mesh_status() -> dict[str, Any]:
+    """Imported Static Mesh (glTF/GLB) status: for every mesh the renderer
+    requested, its load state (loading | ready | failed), error, triangle /
+    part / material counts, textures resident of total while they stream in,
+    bounds in metres and import warnings."""
+    return _rpc("mesh.status")
+
+
+_STATIC_MESH_TYPE = "4f524249-5453-4d48-5459-504500000001"
+_STATIC_MESH_ASSET = "4f524249-5453-4d48-4153-534554000001"
+_STATIC_MESH_POSITION = "4f524249-5453-4d48-504f-534954494f4e"
+_STATIC_MESH_EULER = "4f524249-5453-4d48-4555-4c4552000001"
+_STATIC_MESH_SCALE = "4f524249-5453-4d48-5343-414c45000001"
+
+
+@mcp.tool()
+def orbit_primitive_create(
+    position: list[float],
+    shape: str = "sphere",
+    surface: str = "standard",
+    parent_id: str | None = None,
+    name: str | None = None,
+    euler_degrees: list[float] | None = None,
+    size: list[float] | float | None = None,
+    color: list[float] | None = None,
+    roughness: float | None = None,
+    metallic: float | None = None,
+    ior: float | None = None,
+    caustics: bool | None = None,
+    emission_nits: float | None = None,
+) -> dict[str, Any]:
+    """Creates a visible Primitive in one undo step (`primitive.create`).
+    `shape` is box, sphere, cylinder, capsule or plane; `surface` is standard,
+    mirror (a perfect reflector), glass (refracts the scene, Fresnel
+    reflection, tinted by `color` per metre, and focuses sunlight into
+    caustics on nearby surfaces unless `caustics` is false) or emissive
+    (radiates `color` at `emission_nits` cd/m^2, default 100000, and lights
+    its surroundings through the distance-field GI). `position` is in
+    metres relative to the parent's frame; `parent_id` defaults to the primary
+    viewport's target body. `size` is the full dimensions ([x, y, z] or one
+    number); `ior` (1..3) applies to glass. Primitives only draw while the
+    viewport targets their body. Returns id, name, shape and surface."""
+    params: dict[str, Any] = {
+        "position": position,
+        "shape": shape,
+        "surface": surface,
+    }
+    optional = {
+        "parent": parent_id,
+        "name": name,
+        "euler_degrees": euler_degrees,
+        "size": size,
+        "color": color,
+        "roughness": roughness,
+        "metallic": metallic,
+        "ior": ior,
+        "caustics": caustics,
+        "emission_nits": emission_nits,
+    }
+    params.update({key: value for key, value in optional.items() if value is not None})
+    return _rpc("primitive.create", params)
+
+
+@mcp.tool()
+def orbit_mesh_import(
+    source: str,
+    name: str | None = None,
+    parent_id: str | None = None,
+    position: list[float] | None = None,
+    euler_degrees: list[float] | None = None,
+    scale: float | None = None,
+) -> dict[str, Any]:
+    """Imports a glTF 2.0 model (.glb / .gltf, a folder containing one, or a
+    .zip of either) into the open project's Content/Models/<name>/ folder
+    (`mesh.import`). With `parent_id` (usually the planet body object) it also
+    creates a Static Mesh object there and sets its Mesh Asset, body-local
+    `position` (m), `euler_degrees` and uniform `scale` (glTF units are
+    metres). Returns the import result plus `object_id` when an object was
+    created. Meshes only draw while the viewport targets their body."""
+    import tempfile
+    import zipfile
+
+    path = source
+    extracted = None
+    if source.lower().endswith(".zip"):
+        extracted = tempfile.mkdtemp(prefix="orbit_mesh_")
+        with zipfile.ZipFile(source) as archive:
+            archive.extractall(extracted)
+        path = extracted
+    try:
+        params: dict[str, Any] = {"source": path}
+        if name:
+            params["name"] = name
+        result = _rpc("mesh.import", params)
+    finally:
+        if extracted is not None:
+            import shutil
+
+            shutil.rmtree(extracted, ignore_errors=True)
+
+    if parent_id:
+        label = name or result["asset_path"].split("/")[-2]
+        created = _rpc(
+            "object.create",
+            {"type": _STATIC_MESH_TYPE, "name": label, "parent": parent_id},
+        )
+        object_id = created.get("id") or created.get("object_id")
+        _rpc("property.set", {"object": object_id, "property": _STATIC_MESH_ASSET,
+                              "value": result["asset_path"]})
+        if position is not None:
+            _rpc("property.set", {"object": object_id, "property": _STATIC_MESH_POSITION,
+                                  "value": list(position)})
+        if euler_degrees is not None:
+            _rpc("property.set", {"object": object_id, "property": _STATIC_MESH_EULER,
+                                  "value": list(euler_degrees)})
+        if scale is not None:
+            _rpc("property.set", {"object": object_id, "property": _STATIC_MESH_SCALE,
+                                  "value": float(scale)})
+        result["object_id"] = object_id
+    return result
 
 
 @mcp.tool()
@@ -625,6 +928,8 @@ def orbit_profiler_panel_set(
     grouping: str | None = None,
     freeze_on_hitch: bool | None = None,
     min_slice_ms: float | None = None,
+    viewport_capture_duration_ms: float | None = None,
+    viewport_capture_resolution: str | None = None,
     filter: str | None = None,
     reset_view: bool | None = None,
     view_begin_ms: float | None = None,
@@ -635,9 +940,13 @@ def orbit_profiler_panel_set(
     clear_selection: bool | None = None,
     zoom_to_selection: bool | None = None,
     load_trace: str | None = None,
+    viewport_capture_scenario: str | None = None,
 ) -> dict[str, Any]:
     """Drive the Profiler panel like its controls. paused pauses/resumes the live
-    capture; grouping is 'threads' or 'cores'; view_begin_ms/view_span_ms are
+    capture; viewport_capture_duration_ms, viewport_capture_resolution and
+    viewport_capture_scenario set
+    the shared viewport-only capture defaults (4 seconds and 1440p initially);
+    grouping is 'threads' or 'cores'; view_begin_ms/view_span_ms are
     relative to the snapshot start; zoom_frame picks a frame (-1 = longest);
     select_thread + select_time_ms selects the slice there; load_trace opens a
     hitch or capture file (paused). Returns the new panel state."""
@@ -649,6 +958,9 @@ def orbit_profiler_panel_set(
             "grouping": grouping,
             "freeze_on_hitch": freeze_on_hitch,
             "min_slice_ms": min_slice_ms,
+            "viewport_capture_duration_ms": viewport_capture_duration_ms,
+            "viewport_capture_resolution": viewport_capture_resolution,
+            "viewport_capture_scenario": viewport_capture_scenario,
             "filter": filter,
             "reset_view": reset_view,
             "view_begin_ms": view_begin_ms,
@@ -674,6 +986,441 @@ def orbit_profiler_snapshot(top_scopes: int = 15, slowest: int = 15) -> dict[str
     slices (thread, core, self time) and stall stack samples. Pause first with orbit_profiler_panel_set(paused=True) to analyse a
     fixed moment."""
     return _rpc("profiler.snapshot", {"top_scopes": top_scopes, "slowest": slowest})
+
+
+@mcp.tool()
+def orbit_weather_lab_status() -> dict[str, Any]:
+    """State of the Weather Lab (SC-01 supercell experiment): idle / paused /
+    running / finished / failed, simulated time vs target, steps, realtime_ratio
+    (simulated seconds per compute second), solver diagnostics (max
+    updraft/downdraft, divergence residual, total-water drift), per-stage step
+    timings, resident memory, the settings and the loaded CM1/playback reference."""
+    return _rpc("weather_lab.status")
+
+
+@mcp.tool()
+def orbit_weather_lab_configure(
+    nx: int | None = None,
+    ny: int | None = None,
+    nz: int | None = None,
+    dx: float | None = None,
+    dz: float | None = None,
+    bubble_k: float | None = None,
+    max_time_step: float | None = None,
+    max_courant: float | None = None,
+    advection: str | None = None,
+    moisture: bool | None = None,
+    mass_fixer: bool | None = None,
+    horizontal_mixing: float | None = None,
+    vertical_mixing: float | None = None,
+    threads: int | None = None,
+    target_minutes: float | None = None,
+    frame_interval_s: float | None = None,
+    speed_limit: float | None = None,
+    record_path: str | None = None,
+) -> dict[str, Any]:
+    """Set the fast-core storm experiment (only while no live run exists; use
+    orbit_weather_lab_control(action='reset') first). nx/ny must be powers of two;
+    dx is the square cell size in metres, dz the layer thickness; the validated
+    preset is nx=ny=64, nz=40, dx=2000, dz=500, bubble_k=1, max_time_step=24,
+    max_courant=2.5. advection is 'cubic' (needed for a persistent storm) or
+    'linear'. frame_interval_s is the metric/record cadence, speed_limit caps
+    simulated seconds per wall second (0 = unlimited), record_path writes an
+    .orbitwx file. Returns the settings."""
+    params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "nx": nx, "ny": ny, "nz": nz, "dx": dx, "dz": dz,
+            "bubble_k": bubble_k, "max_time_step": max_time_step,
+            "max_courant": max_courant, "advection": advection,
+            "moisture": moisture, "mass_fixer": mass_fixer,
+            "horizontal_mixing": horizontal_mixing,
+            "vertical_mixing": vertical_mixing, "threads": threads,
+            "target_minutes": target_minutes,
+            "frame_interval_s": frame_interval_s, "speed_limit": speed_limit,
+            "record_path": record_path,
+        }.items()
+        if value is not None
+    }
+    return _rpc("weather_lab.configure", params)
+
+
+@mcp.tool()
+def orbit_weather_lab_control(
+    action: str,
+    seconds: float | None = None,
+    limit: float | None = None,
+) -> dict[str, Any]:
+    """Drive the live run like the Weather Lab panel's buttons. action: 'start'
+    (create the solver if needed and run/resume), 'pause', 'reset' (discard the
+    run and its metrics), 'step' (advance `seconds` of simulated time then pause;
+    returns immediately, poll orbit_weather_lab_status) or 'speed' (set `limit`,
+    simulated seconds per wall second, 0 = unlimited). Returns the status."""
+    params: dict[str, Any] = {"action": action}
+    if seconds is not None:
+        params["seconds"] = seconds
+    if limit is not None:
+        params["limit"] = limit
+    return _rpc("weather_lab.control", params)
+
+
+@mcp.tool()
+def orbit_weather_lab_playback(
+    action: str,
+    path: str | None = None,
+    frame: int | None = None,
+) -> dict[str, Any]:
+    """Load and step through a reference run (.orbitwx from
+    tools/weather_lab/cm1_lab.py or a fast-core recording). action: 'load' (path;
+    computes its metrics), 'select' (frame index shown by source='playback'
+    slices) or 'clear'. Returns the playback state."""
+    params: dict[str, Any] = {"action": action}
+    if path is not None:
+        params["path"] = path
+    if frame is not None:
+        params["frame"] = frame
+    return _rpc("weather_lab.playback", params)
+
+
+@mcp.tool()
+def orbit_weather_lab_metrics(source: str = "live") -> dict[str, Any]:
+    """Storm metrics per sampled frame for source 'live' or 'playback': time, max
+    updraft and its height, max downdraft, max rain mixing ratio, cloud top, max
+    vorticity below 1 km, 2-5 km updraft helicity, cold-pool deficit, rain area."""
+    return _rpc("weather_lab.metrics", {"source": source})
+
+
+@mcp.tool()
+def orbit_weather_lab_compare() -> dict[str, Any]:
+    """Playback reference (for example a CM1 run) vs the live fast-core run, paired
+    by time within 1 s: one row per reference frame the live run has also
+    sampled, each with 'reference' and 'live' metrics."""
+    return _rpc("weather_lab.compare")
+
+
+@mcp.tool()
+def orbit_weather_lab_slice(
+    source: str = "live",
+    kind: str = "plan",
+    field: str = "w",
+    height_m: float | None = None,
+    row: int | None = None,
+    include_values: bool = False,
+    max_cells: int | None = None,
+) -> dict[str, Any]:
+    """A 2-D slice of the live run or the playback frame, as the panel draws it.
+    kind: 'plan' (map at height_m), 'section' (x-z cut at y row `row`, -1 = through
+    the strongest updraft) or 'column_max'. field: w, qr, qc, qv (g/kg), thp (theta
+    perturbation, K), zvort, speed, condensate. Returns size, min/max, the peak
+    cell and time; include_values adds the row-major grid (row 0 is y=0 or z=0),
+    max_cells decimates each axis to at most that many cells."""
+    params: dict[str, Any] = {
+        "source": source, "kind": kind, "field": field,
+        "include_values": include_values,
+    }
+    if height_m is not None:
+        params["height_m"] = height_m
+    if row is not None:
+        params["row"] = row
+    if max_cells is not None:
+        params["max_cells"] = max_cells
+    return _rpc("weather_lab.slice", params)
+
+
+@mcp.tool()
+def orbit_lightning_fire(
+    distance_m: float | None = None,
+    lateral_m: float | None = None,
+    height_m: float | None = None,
+    energy_j: float | None = None,
+    strokes: int | None = None,
+    stroke_spacing_s: float | None = None,
+    seed: int | None = None,
+    base_m: list[float] | None = None,
+) -> dict[str, Any]:
+    """Fire one lightning flash that lights the scene (and the clouds when the
+    viewport runs with ORBIT_CLOUD_POINT_LIGHTS=1). By default the channel stands
+    distance_m (3000) ahead of the camera and lateral_m to its right, rising
+    height_m (6000); pass base_m=[x, y, z] in the lighting frame to place it
+    absolutely. energy_j is the optical energy (3e5), strokes 1-8 (3). The flash
+    lasts about 0.25 s after its last stroke, so capture a screenshot right
+    after firing. Returns the flash id."""
+    params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "distance_m": distance_m, "lateral_m": lateral_m,
+            "height_m": height_m, "energy_j": energy_j, "strokes": strokes,
+            "stroke_spacing_s": stroke_spacing_s, "seed": seed,
+            "base_m": base_m,
+        }.items()
+        if value is not None
+    }
+    return _rpc("lightning.fire", params)
+
+
+@mcp.tool()
+def orbit_lightning_status() -> dict[str, Any]:
+    """Live lightning flashes: id, whether a frame has resolved the position,
+    age, time left and base position."""
+    return _rpc("lightning.status")
+
+
+@mcp.tool()
+def orbit_lightning_storm_start(
+    distance_m: float | None = None,
+    lateral_m: float | None = None,
+    time_scale: float | None = None,
+) -> dict[str, Any]:
+    """Turn the Weather Lab's live storm into lightning. Needs a live Weather Lab
+    sample with square cells (orbit_weather_lab_configure nx=64, ny=64, nz=40,
+    dx=500, dz=500, then orbit_weather_lab_control start or step) and a storm
+    that has matured (about 20+ simulated minutes; use step). The ice phase is
+    derived from temperature, an assumption. Electrification runs at time_scale
+    simulated seconds per wall second (default 20) on a frozen snapshot; flashes
+    appear at a fixed spot distance_m (12000) ahead of the camera. Poll
+    orbit_lightning_storm_status."""
+    params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "distance_m": distance_m, "lateral_m": lateral_m,
+            "time_scale": time_scale,
+        }.items()
+        if value is not None
+    }
+    return _rpc("lightning.storm_start", params)
+
+
+@mcp.tool()
+def orbit_lightning_storm_stop() -> dict[str, Any]:
+    """Stop the Weather Lab driven lightning."""
+    return _rpc("lightning.storm_stop")
+
+
+@mcp.tool()
+def orbit_lightning_storm_status() -> dict[str, Any]:
+    """Weather Lab driven lightning: running, simulated seconds, flashes so far,
+    breakdown_ratio (strongest field over the breakdown field; 1 or more means it
+    is flashing) and the storm domain size."""
+    return _rpc("lightning.storm_status")
+
+
+@mcp.tool()
+def orbit_storm_status() -> dict[str, Any]:
+    """The simulated storm domain in the viewport clouds: state (none, pending,
+    active, failed), message, its current centre latitude_deg / longitude_deg (it
+    drifts with the storm), storm_seconds simulated, steps, step_ms (GPU time per
+    step), cells, spacing_m and resident_mib."""
+    return _rpc("storm.status")
+
+
+@mcp.tool()
+def orbit_storm_place(
+    latitude_deg: float,
+    longitude_deg: float,
+    cells: int | None = None,
+    spacing_m: float | None = None,
+    bubble_k: float | None = None,
+    spin_minutes: float | None = None,
+    ice: bool | None = None,
+    sponge_cells: int | None = None,
+    nested: bool | None = None,
+) -> dict[str, Any]:
+    """Place a simulated storm domain on the body under the primary view. The
+    GPU storm core (engine/weather_gpu) is built on the next frame that draws
+    clouds, spun up for spin_minutes (default 40), then advanced with the
+    simulation clock; inside the domain the cloud renderer draws the simulated
+    condensate instead of the procedural clouds (march, cloud shadow and sun light
+    volume). cells (nx = ny, power of two 16 to 256, default 128), spacing_m (500
+    to 5000, default 2000), bubble_k (default 2), ice (default true), sponge_cells
+    (default 12), nested (default true: a 4:1 child grid, 500 m inside a 2 km
+    domain, over the middle quarter of the domain). One domain at a time. Returns
+    error (empty when queued) and the status; poll orbit_storm_status for active. Compare with the procedural sky:
+    orbit_clouds_split_set(enabled=true, defines="CLOUD_STORM=0")."""
+    params: dict[str, Any] = {"latitude_deg": latitude_deg, "longitude_deg": longitude_deg}
+    for key, value in (("cells", cells), ("spacing_m", spacing_m), ("bubble_k", bubble_k), ("spin_minutes", spin_minutes),
+                       ("ice", ice), ("sponge_cells", sponge_cells), ("nested", nested)):
+        if value is not None:
+            params[key] = value
+    return _rpc("storm.place", params)
+
+
+@mcp.tool()
+def orbit_storm_auto(
+    enabled: bool,
+    seed: int | None = None,
+    cells: int | None = None,
+    spacing_m: float | None = None,
+    search_km: float | None = None,
+    ice: bool | None = None,
+    nested: bool | None = None,
+) -> dict[str, Any]:
+    """Scheduled storms near the camera. enabled=true makes Studio simulate the
+    nearest live storm of the deterministic storm schedule
+    (engine/celestial_clouds StormSchedule) within search_km (default 500) of the
+    camera: a pure function of the absolute simulation time and seed (default 1),
+    so the same time shows the same storm in every launch, and a time jump
+    recomputes the storm from the nearest cached checkpoint instead of stepping
+    through the skipped time. A storm grows from nothing at its start, lives 2.5
+    to 4.5 hours and dissolves into the procedural clouds. cells (power of two 16
+    to 256, default 128), spacing_m (default 2000), ice (default true). A manual
+    orbit_storm_place overrides it while it exists. Returns error and the status
+    (mode, storm_id, age_seconds, lifetime_seconds, intensity, catching_up,
+    checkpoints, checkpoint_mib, scheduled_nearby)."""
+    params: dict[str, Any] = {"enabled": enabled}
+    for key, value in (("seed", seed), ("cells", cells), ("spacing_m", spacing_m), ("search_km", search_km), ("ice", ice), ("nested", nested)):
+        if value is not None:
+            params[key] = value
+    return _rpc("storm.auto", params)
+
+
+@mcp.tool()
+def orbit_storm_reload_shaders(path: str = "") -> dict[str, Any]:
+    """Recompile the storm solver's compute kernels (engine/weather_gpu/shaders/
+    storm.hlsl) without restarting, from path, or the file named by
+    ORBIT_WEATHER_GPU_SHADER, or the embedded copy. This also happens
+    automatically when storm.hlsl is saved while Studio runs. A kernel that does
+    not compile leaves the running ones in use and the error appears in
+    shader_reload of orbit_storm_status; the storm is untouched. Happens on the
+    next frame that draws clouds."""
+    return _rpc("storm.reload_shaders", {"path": path} if path else {})
+
+
+@mcp.tool()
+def orbit_storm_lightning(
+    enabled: bool | None = None,
+    slow_motion: float | None = None,
+    charge_boost: float | None = None,
+    breakdown_scale: float | None = None,
+    brightness: float | None = None,
+    arcs: bool | None = None,
+    pause_on_strike: bool | None = None,
+    frame_strike: bool | None = None,
+    show_grid: bool | None = None,
+    flash_size: float | None = None,
+    ground_strike_chance: float | None = None,
+    small_flash_fraction: float | None = None,
+) -> dict[str, Any]:
+    """Lightning from the simulated storm's own charge (graupel, ice, supercooled
+    water, updraft). Omitted parameters keep their value. For testing:
+    slow_motion (1 to 2000) stretches every flash by that factor at the same
+    power so one frame can catch it; charge_boost (1 to 10000) multiplies the
+    charging rate; breakdown_scale (0.02 to 1) lowers the field at which air
+    breaks down (electrically unstable). Changing the boost or breakdown
+    restarts the charge. brightness (1 to 1e6) multiplies the energy of every
+    flash (the light on the clouds and the arc). arcs (default true) draws the
+    channel of a live flash as a jagged glowing line over the clouds.
+    pause_on_strike (default false) pauses the simulation just before a flash
+    that is in view starts, so it can be played in slow motion with time.set
+    rate (also a toggle in the bottom bar). frame_strike (default false) turns
+    the camera to a flash about to start and moves it closer or farther until its
+    whole channel fills about 60% of the narrower field of view. show_grid (default false) draws the electrified window as a box with
+    a grid and the charge in it (red positive, blue negative). Both are toggles in
+    the bottom bar too. flash_size (1 to 50, default 4) multiplies the charge one
+    flash may neutralise, so flashes grow larger (restarts the charge).
+    small_flash_fraction (0 to 1, default 0.75) is the share of flashes that are
+    small intracloud ones (a few tens of cells, cheap, never to the ground;
+    restarts the charge). ground_strike_chance (0 to 1, default 0.25) is the share of flashes that are
+    descending leaders seeking the ground (cloud to ground: return stroke, later
+    strokes, continuing current; restarts the charge). Clouds are
+    lit by the flashes when Studio runs with ORBIT_CLOUD_POINT_LIGHTS=1. Returns
+    the settings and lightning_flashes (storm.status also has
+    lightning_arc_segments)."""
+    params: dict[str, Any] = {}
+    for key, value in (("enabled", enabled), ("slow_motion", slow_motion),
+                       ("charge_boost", charge_boost), ("breakdown_scale", breakdown_scale),
+                       ("brightness", brightness), ("arcs", arcs),
+                       ("pause_on_strike", pause_on_strike), ("frame_strike", frame_strike),
+                       ("show_grid", show_grid), ("flash_size", flash_size),
+                       ("ground_strike_chance", ground_strike_chance), ("small_flash_fraction", small_flash_fraction)):
+        if value is not None:
+            params[key] = value
+    return _rpc("storm.lightning", params)
+
+
+@mcp.tool()
+def orbit_storm_clear() -> dict[str, Any]:
+    """Remove the simulated storm domain; the procedural clouds return."""
+    return _rpc("storm.clear")
+
+
+@mcp.tool()
+def orbit_clouds_get_defines() -> dict[str, Any]:
+    """The cloud shader defines in use ("NAME=VALUE;NAME=VALUE", empty = the
+    shipped shaders)."""
+    return _rpc("clouds.get_defines")
+
+
+@mcp.tool()
+def orbit_clouds_set_defines(defines: str) -> dict[str, Any]:
+    """Recompile the cloud march, shadow and volume shaders with `defines`
+    ("NAME=VALUE;NAME=VALUE"; an empty string restores the shipped shaders), so
+    a march tunable can be A/B-compared without relaunching Studio. Tunables:
+    CLOUD_FAR_EARLYOUT, CLOUD_JITTER_FIX, CLOUD_INCLOUD_STEP_SCALE,
+    CLOUD_MAX_STEPS, CLOUD_SCHEDULE_STEPS, CLOUD_FOOTPRINT_STEP,
+    CLOUD_BASE_STEP, CLOUD_EMPTY_SKIP, CLOUD_EMPTY_COVERAGE, CLOUD_SUN_FAR_START,
+    CLOUD_SUN_FAR_END, CLOUD_SUN_VOLUME, CLOUD_RESOLVE_WEIGHT (temporal resolve
+    current-frame weight 0..1, unset = 0.2) and the CLOUD_PROF_* profiling
+    stubs. Returns the defines in use, compile_ms and error (empty
+    on success; on a compile error the previous shaders stay in use). Allow a
+    second or two for the image to converge afterwards."""
+    return _rpc("clouds.set_defines", {"defines": defines})
+
+
+@mcp.tool()
+def orbit_clouds_split_get() -> dict[str, Any]:
+    """The cloud split view: enabled, defines (the right half's) and position
+    (0..1)."""
+    return _rpc("clouds.split_get")
+
+
+@mcp.tool()
+def orbit_clouds_split_set(enabled: bool, defines: str = "", position: float | None = None) -> dict[str, Any]:
+    """Split-screen view of the cloud march: the left of the viewport renders
+    with the defines in use (orbit_clouds_set_defines), the right with
+    `defines`, divided at `position` (0..1 of the width, default 0.5; a white
+    line marks it). Only the march and temporal resolve take `defines`
+    (CLOUD_CHECKERBOARD=1|2, CLOUD_CHECKERBOARD_WEIGHT, CLOUD_CB_CLAMP,
+    CLOUD_RESOLVE_WEIGHT, CLOUD_MAX_STEPS, ...). Each half is marched on its own,
+    so the Clouds GPU time is the sum of the two halves. enabled=false returns
+    to the single view. Returns enabled, defines, position and error (empty on
+    success)."""
+    params: dict[str, Any] = {"enabled": enabled, "defines": defines}
+    if position is not None:
+        params["position"] = position
+    return _rpc("clouds.split_set", params)
+
+
+@mcp.tool()
+def orbit_lightning_clear() -> dict[str, Any]:
+    """Remove every live lightning flash."""
+    return _rpc("lightning.clear")
+
+
+@mcp.tool()
+def orbit_weather_lab_view(
+    source: str | None = None,
+    plan_field: str | None = None,
+    plan_height_m: float | None = None,
+    section_field: str | None = None,
+    section_row: int | None = None,
+    column_field: str | None = None,
+    show_metrics: bool | None = None,
+    show_comparison: bool | None = None,
+) -> dict[str, Any]:
+    """Get or set what the Weather Lab panel shows (source 'live' | 'playback',
+    the three slice fields, the map height and section row, metrics and
+    comparison visibility). With no arguments just returns the view."""
+    params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "source": source, "plan_field": plan_field,
+            "plan_height_m": plan_height_m, "section_field": section_field,
+            "section_row": section_row, "column_field": column_field,
+            "show_metrics": show_metrics, "show_comparison": show_comparison,
+        }.items()
+        if value is not None
+    }
+    return _rpc("weather_lab.view", params)
 
 
 @mcp.tool()
@@ -888,6 +1635,379 @@ def orbit_celestial_set_capability(
 
 
 @mcp.tool()
+def orbit_atmosphere_presets() -> list[str]:
+    """List the atmosphere preset names accepted by orbit_atmosphere_apply_preset."""
+    return _rpc("atmosphere.presets", {})
+
+
+@mcp.tool()
+def orbit_atmosphere_solve(atmosphere_id: str) -> dict[str, Any]:
+    """Run the atmosphere property solver on an atmosphere capability object
+    (the same operation as the Celestial panel's Solve button). Returns the
+    per-property report: events[] with outcome derived / no_change / conflict /
+    invalid_input and an explanation, plus derived_count, has_conflict and
+    has_invalid_input. Locked or explicit properties are never overwritten;
+    they come back as conflicts."""
+    return _rpc("atmosphere.solve", {"atmosphere": atmosphere_id})
+
+
+@mcp.tool()
+def orbit_atmosphere_apply_preset(atmosphere_id: str, preset: str) -> dict[str, Any]:
+    """Apply a named atmosphere preset (see orbit_atmosphere_presets) to an
+    atmosphere capability object as one undoable transaction and return the
+    solve report (same shape as orbit_atmosphere_solve)."""
+    return _rpc(
+        "atmosphere.apply_preset",
+        {"atmosphere": atmosphere_id, "preset": preset},
+    )
+
+
+@mcp.tool()
+def orbit_terrain_cache_stats(
+    terrain_id: str,
+    viewport: str = "studio.primary",
+) -> dict[str, Any]:
+    """Persistent GPU terrain cache statistics for a terrain surface object:
+    cache{hits, misses, generations, insertions, evictions, resident_pages,
+    resident_bytes, hit_rate_percent} plus stationary{frames, cache_hits,
+    cache_misses, hit_rate_percent} for the viewport. With a stationary camera
+    after warmup, hits may grow but misses and generations must not."""
+    return _rpc(
+        "terrain.cache_stats",
+        {"terrain": terrain_id, "viewport": viewport},
+    )
+
+
+@mcp.tool()
+def orbit_terrain_tectonics_get(terrain_id: str) -> dict[str, Any]:
+    """Read the persisted procedural tectonics recipe for a terrain surface.
+    Returns settings used by the Planet toolbar and analytic terrain generator."""
+    return _rpc("terrain.tectonics_get", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_impacts_get(terrain_id: str) -> dict[str, Any]:
+    """Read the persisted chronological .orbitimpacts recipe, including
+    crater, ejecta, resurfacing-flow and ice-fracture authority. Tectonic
+    renewal events may include displacement_x/y/z and displacement_m to
+    advect older impact structures through the authored fault chronology."""
+    return _rpc("terrain.impacts_get", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_impacts_set(terrain_id: str, history_toml: str) -> dict[str, Any]:
+    """Persist a complete validated .orbitimpacts TOML recipe as one undoable
+    terrain edit and queue geology regeneration. Pass an empty string to clear
+    the recipe. In [[impact]], ray_extent_radii (0 for legacy support, or
+    >1 through 100) and ray_irregularity (0-1) control long, fading material
+    rays independently of ejecta_extent_radii. impact_angle_degrees is measured
+    from the normal: 0 is vertical and 89 nearly grazing. See
+    orbit_terrain_impacts_get for the current value."""
+    return _rpc(
+        "terrain.impacts_set",
+        {"terrain": terrain_id, "history_toml": history_toml},
+    )
+
+
+@mcp.tool()
+def orbit_terrain_stratigraphy_get(terrain_id: str) -> dict[str, Any]:
+    """Read the saved .orbitstratigraphy profile used to resolve exposed bedrock."""
+    return _rpc("terrain.stratigraphy_get", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_stratigraphy_set(terrain_id: str, profile_toml: str) -> dict[str, Any]:
+    """Save or clear a validated material-resolved .orbitstratigraphy profile.
+    The same profile is used by the Surface Authoring panel and terrain pages."""
+    return _rpc(
+        "terrain.stratigraphy_set",
+        {"terrain": terrain_id, "profile_toml": profile_toml},
+    )
+
+
+@mcp.tool()
+def orbit_terrain_processes_get(terrain_id: str) -> dict[str, Any]:
+    """Read the Planet Terrain Processes bubble settings for stream power,
+    hydraulic, thermal, aeolian, glacial and coastal processes."""
+    return _rpc("terrain.processes_get", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_processes_set(
+    terrain_id: str,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Update supplied Terrain Processes bubble fields as one undoable edit
+    and queue terrain regeneration. Keys: stream_power_enabled,
+    stream_power_iterations, stream_incision_coefficient_meters_per_iteration,
+    hydraulic_enabled, hydraulic_iterations, hydraulic_time_step_seconds,
+    thermal_enabled, thermal_iterations, thermal_relaxation, aeolian_enabled,
+    aeolian_iterations, aeolian_capacity_coefficient, aeolian_time_step_seconds,
+    glacial_enabled, glacial_iterations, glacial_time_step_years,
+    glacial_maximum_temperature_c, coastal_enabled,
+    coastal_hydrodynamic_steps, coastal_cfl_number,
+    coastal_maximum_time_step_seconds."""
+    return _rpc("terrain.processes_set", {"terrain": terrain_id, **settings})
+
+
+@mcp.tool()
+def orbit_terrain_tectonics_sample(
+    latitude_degrees: float | None = None,
+    longitude_degrees: float | None = None,
+    viewport: str = "studio.primary",
+) -> dict[str, Any]:
+    """Sample the planet structural layer: plate and neighbour plate, boundary
+    type and strength, crust thickness and age, geological age, uplift,
+    subsidence, stress and volcanism. Give latitude_degrees and
+    longitude_degrees together, or omit both to sample under the viewport
+    observer. Same data as the Tectonics toolbar menu's Sample readout."""
+    arguments: dict[str, Any] = {"viewport": viewport}
+    if latitude_degrees is not None or longitude_degrees is not None:
+        arguments["latitude_degrees"] = latitude_degrees
+        arguments["longitude_degrees"] = longitude_degrees
+    return _rpc("terrain.tectonics_sample", arguments)
+
+
+@mcp.tool()
+def orbit_terrain_erosion_coupling_get(terrain_id: str) -> dict[str, Any]:
+    """Read how the planet structural layer drives erosion and watersheds:
+    age_erodibility_gain (old crust erodes faster, so relief is lower and
+    rounder), age_uplift_decay (old crust loses tectonic uplift) and
+    tectonic_drainage_guidance (routing is steered from uplifting belts toward
+    basins; it never routes uphill)."""
+    return _rpc("terrain.erosion_coupling_get", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_erosion_coupling_set(
+    terrain_id: str,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Update supplied geological-age / tectonic drainage coupling fields as
+    one undoable edit and queue global terrain regeneration, using the same
+    model operation as the Planet Tectonics menu. Omitted fields keep their
+    values. Keys: age_erodibility_gain (0-8), age_uplift_decay (0-1),
+    tectonic_drainage_guidance (0-1)."""
+    return _rpc("terrain.erosion_coupling_set", {"terrain": terrain_id, **settings})
+
+
+@mcp.tool()
+def orbit_terrain_bake_status(terrain_id: str) -> dict[str, Any]:
+    """Planet bake state for a terrain surface: state (none, baking, ready,
+    stale, failed), progress, resolution, active bake size, recipe hashes
+    (stale means the tectonics recipe changed since the active bake), the bake
+    file path and any error. Terrain samples this bake; it never evaluates the
+    plate model while generating."""
+    return _rpc("terrain.bake_status", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_bake_start(
+    terrain_id: str,
+    resolution: int | None = None,
+) -> dict[str, Any]:
+    """Start a background planet bake now (cancels one in flight). resolution is
+    texels per cube-face edge, 16-2048. The running bake keeps driving terrain
+    until the new one finishes and validates; a failed bake leaves it
+    untouched. Poll orbit_terrain_bake_status."""
+    arguments: dict[str, Any] = {"terrain": terrain_id}
+    if resolution is not None:
+        arguments["resolution"] = resolution
+    return _rpc("terrain.bake_start", arguments)
+
+
+@mcp.tool()
+def orbit_terrain_bake_cancel(terrain_id: str) -> dict[str, Any]:
+    """Cancel a running planet bake. The active bake is untouched and no
+    automatic rebake starts until the recipe changes or a bake is started."""
+    return _rpc("terrain.bake_cancel", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_bake_set(
+    terrain_id: str,
+    resolution: int | None = None,
+    auto_rebake: bool | None = None,
+) -> dict[str, Any]:
+    """Update the persisted planet bake policy (resolution 16-2048, auto_rebake)
+    as one undoable edit, like the Planet Tectonics menu's Planet Bake
+    section. A resolution change makes the bake stale."""
+    arguments: dict[str, Any] = {"terrain": terrain_id}
+    if resolution is not None:
+        arguments["resolution"] = resolution
+    if auto_rebake is not None:
+        arguments["auto_rebake"] = auto_rebake
+    return _rpc("terrain.bake_set", arguments)
+
+
+@mcp.tool()
+def orbit_terrain_tectonics_set(
+    terrain_id: str,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Update supplied fields of a terrain surface's procedural tectonics
+    recipe as one undoable edit, using the same authoring model as the Planet
+    toolbar. Omitted fields retain their values. See orbit_terrain_tectonics_get
+    for the supported setting names."""
+    return _rpc("terrain.tectonics_set", {"terrain": terrain_id, **settings})
+
+
+@mcp.tool()
+def orbit_terrain_hydrology_get(terrain_id: str) -> dict[str, Any]:
+    """Read persisted runoff, soil-water and simulation-time seasonal
+    rainfall controls. The spatial precipitation field remains static."""
+    return _rpc("terrain.hydrology_get", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_hydrology_set(
+    terrain_id: str,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Update supplied runoff, soil-water and seasonal rainfall controls as
+    one undoable edit and queue terrain process regeneration. See
+    orbit_terrain_hydrology_get for supported fields."""
+    return _rpc("terrain.hydrology_set", {"terrain": terrain_id, **settings})
+
+
+@mcp.tool()
+def orbit_terrain_drainage_spline_add(
+    terrain_id: str,
+    points: list[list[float]],
+    half_width_meters: float,
+    falloff_meters: float,
+    guidance: float = 1.0,
+) -> dict[str, Any]:
+    """Add an authored drainage-guidance spline from unit-direction points.
+    It biases routing only among downhill choices; it does not force uphill flow."""
+    return _rpc(
+        "terrain.drainage_spline_add",
+        {
+            "terrain": terrain_id,
+            "points": points,
+            "half_width_meters": half_width_meters,
+            "falloff_meters": falloff_meters,
+            "guidance": guidance,
+        },
+    )
+
+
+@mcp.tool()
+def orbit_terrain_rivers_get(terrain_id: str) -> dict[str, Any]:
+    """Read the persisted mountain-fed river recipe used by the Planet toolbar."""
+    return _rpc("terrain.rivers_get", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_rivers_nearby(
+    terrain_id: str,
+    viewport: str = "studio.primary",
+) -> dict[str, Any]:
+    """Inspect generated river nodes, routed segments and cross-page boundary
+    links on built physical pages near the active viewport observer. Nodes and
+    segments include derived hydraulic readouts; page data not generated yet
+    is reported as pending."""
+    return _rpc(
+        "terrain.rivers_nearby",
+        {"terrain": terrain_id, "viewport": viewport},
+    )
+
+
+@mcp.tool()
+def orbit_terrain_lakes_nearby(
+    terrain_id: str,
+    viewport: str = "studio.primary",
+) -> dict[str, Any]:
+    """Inspect M09-derived lake basins and page-local spill diagnostics on
+    built physical terrain pages near the active viewport. Pages not built
+    yet are reported as pending; spill and outlet coordinates are page-local."""
+    return _rpc(
+        "terrain.lakes_nearby",
+        {"terrain": terrain_id, "viewport": viewport},
+    )
+
+
+@mcp.tool()
+def orbit_terrain_river_constraint_add(
+    terrain_id: str,
+    basin_id: str,
+    kind: str,
+    page_face: int,
+    page_level: int,
+    page_x: int,
+    page_y: int,
+    center_meters: list[float],
+    radius_meters: float = 500.0,
+    strength: float = 1.0,
+    direction_meters: list[float] | None = None,
+) -> dict[str, Any]:
+    """Add a persisted basin-local attract, repel, or trajectory constraint.
+    Use page and local coordinates from orbit_terrain_rivers_nearby. The same
+    M16 production build consumes this constraint after bounded invalidation."""
+    arguments: dict[str, Any] = {
+        "terrain": terrain_id,
+        "basin_id": basin_id,
+        "kind": kind,
+        "page_face": page_face,
+        "page_level": page_level,
+        "page_x": page_x,
+        "page_y": page_y,
+        "center_meters": center_meters,
+        "radius_meters": radius_meters,
+        "strength": strength,
+    }
+    if direction_meters is not None:
+        arguments["direction_meters"] = direction_meters
+    return _rpc("terrain.river_constraint_add", arguments)
+
+
+@mcp.tool()
+def orbit_terrain_rivers_set(
+    terrain_id: str,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Update supplied river recipe fields as one undoable edit through the
+    same model as the Planet toolbar. Supports drainage/discharge thresholds,
+    maximum graph node spacing, channel width/depth scaling, meander controls
+    and cutoff geometry. See
+    orbit_terrain_rivers_get for the complete setting names."""
+    return _rpc("terrain.rivers_set", {"terrain": terrain_id, **settings})
+
+
+@mcp.tool()
+def orbit_object_transform_info(object_id: str) -> dict[str, Any]:
+    """Which move/rotate/scale tools an object supports, its position and its
+    local axes. Supported types: Primitive, Visibility Proxy, Point Light
+    (move only) and Spot Light (move and rotate)."""
+    return _rpc("object.transform_info", {"object": object_id})
+
+
+@mcp.tool()
+def orbit_object_transform(
+    object_id: str,
+    tool: str,
+    axis: str,
+    amount: float,
+    space: str = "world",
+) -> dict[str, Any]:
+    """Move, rotate or scale an object along one axis as ONE undoable step,
+    exactly like dragging a viewport gizmo handle. tool: translate (amount in
+    meters), rotate (degrees) or scale (positive factor). axis: x, y, z, or
+    uniform (scale only). space: world or local; scale always uses the
+    object's own axes. Check orbit_object_transform_info first."""
+    return _rpc(
+        "object.transform",
+        {
+            "object": object_id,
+            "tool": tool,
+            "axis": axis,
+            "amount": amount,
+            "space": space,
+        },
+    )
+
+
+@mcp.tool()
 def orbit_property_set(
     object_id: str,
     property_id: str,
@@ -985,6 +2105,29 @@ def orbit_path_set_bezier_handles(
             "end_handle": end_handle,
         },
     )
+
+
+@mcp.tool()
+def orbit_infrastructure_build_status(edge_id: str) -> dict[str, Any]:
+    """Inspect an infrastructure edge's corridor generation state, last valid mesh and failure."""
+    return _rpc("infrastructure.build_status", {"edge": edge_id})
+
+
+@mcp.tool()
+def orbit_infrastructure_set_intent(
+    edge_id: str,
+    catalog_id: str,
+    catalog_version: int = 1,
+    construction_mode: str = "terrain",
+    design_speed_kmh: float = 0.0,
+    ease_turns: bool = True,
+) -> dict[str, Any]:
+    """Set versioned road/rail catalog intent on an existing path edge; design speed 0 uses catalog default."""
+    return _rpc("infrastructure.set_intent", {
+        "edge": edge_id, "catalog_id": catalog_id,
+        "catalog_version": catalog_version, "construction_mode": construction_mode,
+        "design_speed_kmh": design_speed_kmh, "ease_turns": ease_turns,
+    })
 
 
 @mcp.tool()
@@ -1170,13 +2313,23 @@ def orbit_viewport_navigate(
     move_forward: float = 0.0,
     move_up: float = 0.0,
     boost: bool = False,
+    steps: int = 1,
+    view_id: str = "studio.primary",
 ) -> dict[str, Any]:
-    """Apply one camera navigation step to the primary viewport, like the
-    right-mouse look + WASD/QE gesture. Uses terrain navigation when the active
-    body has terrain, otherwise the same navigation on a reference sphere. Call repeatedly to move continuously."""
+    """Apply camera navigation to a viewport, like the right-mouse look +
+    WASD/QE gesture. steps (default 1, up to 1200) repeats the step so one call
+    can fly or dive a distance; mouse_dx/mouse_dy apply once, on the first
+    step. Uses terrain navigation when the body has terrain (ground clearance,
+    the bed as the floor), otherwise the same navigation on a reference
+    sphere. For a terrain view the result also has distance_from_core_meters,
+    height_above_terrain_meters and height_above_water_surface_meters (set
+    where the ground is under water: negative beneath the surface, positive
+    above it; null over dry land), read from the live observer."""
     return _rpc(
         "viewport.navigate",
         {
+            "id": view_id,
+            "steps": steps,
             "delta_seconds": delta_seconds,
             "mouse_dx": mouse_dx,
             "mouse_dy": mouse_dy,
@@ -1215,7 +2368,11 @@ def orbit_map_status(view_id: str = "studio.primary") -> dict[str, Any]:
 @mcp.tool()
 def orbit_map_layer_set(layer: str, view_id: str = "studio.primary") -> dict[str, Any]:
     """Choose what the flat map colours the planet by: elevation, biomes,
-    temperature, precipitation or water_depth. Switching never re-samples."""
+    temperature, precipitation, water_depth, tectonics (plate identity and
+    boundary influence together), plate_id (plate identity and outlines only),
+    boundary_motion (convergence / divergence / shear only) or
+    crustal_deformation (stress and the fault network). Switching never
+    re-samples."""
     return _rpc("map.layer_set", {"id": view_id, "layer": layer})
 
 
@@ -1522,7 +2679,10 @@ def orbit_time_get() -> dict[str, Any]:
     """The simulation clock that drives planetary rotation, orbits, the sun and
     the atmosphere/weather: playing or paused, rate (simulation seconds per real
     second), time since the epoch (microseconds, seconds, text) and the step
-    size of the Step buttons. Studio starts paused."""
+    size of the Step buttons, active-body prime-meridian UTC and local solar
+    times, longitude-derived zone, and authored rotation period. The dominant
+    radiative star determines solar noon when available.
+    Studio starts paused."""
     return _rpc("time.get")
 
 
@@ -1532,16 +2692,20 @@ def orbit_time_set(
     rate: float | None = None,
     time_microseconds: int | None = None,
     step_seconds: float | None = None,
+    local_time_seconds: float | None = None,
 ) -> dict[str, Any]:
-    """Drive the simulation transport (the Simulate / Pause band at the bottom
+    """Drive the simulation transport (the Play / Pause band at the bottom
     of Studio). playing=True simulates, False pauses; rate is simulation seconds
     per real second (negative runs backwards); time_microseconds jumps to an
-    absolute time; step_seconds sets the size of the Step buttons."""
+    absolute time; local_time_seconds sets the active body's current viewpoint
+    zone clock time (0 through just under 86400 seconds); step_seconds sets the size of the
+    Step buttons."""
     params: dict[str, Any] = {}
     for key, value in {
         "playing": playing,
         "rate": rate,
         "time_microseconds": time_microseconds,
+        "local_time_seconds": local_time_seconds,
         "step_seconds": step_seconds,
     }.items():
         if value is not None:
@@ -1555,6 +2719,78 @@ def orbit_time_step(seconds: float | None = None) -> dict[str, Any]:
     is playing or paused: the Step buttons. Defaults to the configured step
     size."""
     return _rpc("time.step", {} if seconds is None else {"seconds": seconds})
+
+
+@mcp.tool()
+def orbit_viewport_fly_to(
+    latitude_degrees: float,
+    longitude_degrees: float,
+    altitude_meters: float | None = None,
+    yaw_degrees: float | None = None,
+    pitch_degrees: float | None = None,
+    view_id: str = "studio.primary",
+) -> dict[str, Any]:
+    """Put the terrain camera over a latitude/longitude in one call.
+    altitude_meters is above the reference sphere (negative is below sea
+    level); yaw_degrees and pitch_degrees (negative looks down) are optional.
+    Omitted values keep the travel defaults. Returns the pose plus
+    height_above_terrain_meters."""
+    params: dict[str, Any] = {
+        "id": view_id,
+        "latitude_degrees": latitude_degrees,
+        "longitude_degrees": longitude_degrees,
+    }
+    for key, value in {
+        "altitude_meters": altitude_meters,
+        "yaw_degrees": yaw_degrees,
+        "pitch_degrees": pitch_degrees,
+    }.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("viewport.fly_to", params)
+
+
+@mcp.tool()
+def orbit_terrain_list() -> dict[str, Any]:
+    """List the terrain objects of the open world (terrain id, name, parent
+    body, planet radius, sea level). The terrain id is the terrain_id argument
+    of every orbit_terrain_* tool."""
+    return _rpc("terrain.list", {})
+
+
+@mcp.tool()
+def orbit_terrain_sample(
+    terrain_id: str,
+    points: list[dict[str, float]] | None = None,
+    transect: dict[str, Any] | None = None,
+    include_tectonics: bool = False,
+    footprint_meters: float = 500.0,
+) -> dict[str, Any]:
+    """Sample the composed terrain without moving any camera. Give points
+    (up to 4096 {latitude_degrees, longitude_degrees}) or a great-circle
+    transect {from: {...}, to: {...}, count: 2..4096}. Each sample has
+    elevation_meters (the bed the camera collides with), coarse elevation,
+    height above sea level, standing water depth, underwater, climate and
+    biome weights; include_tectonics adds crust, boundary masks, structural
+    elevation, trench/arc and fracture density."""
+    params: dict[str, Any] = {
+        "terrain": terrain_id,
+        "include_tectonics": include_tectonics,
+        "footprint_meters": footprint_meters,
+    }
+    if points is not None:
+        params["points"] = points
+    if transect is not None:
+        params["transect"] = transect
+    return _rpc("terrain.sample", params)
+
+
+@mcp.tool()
+def orbit_studio_process_info() -> dict[str, Any]:
+    """Which Studio process answers: pid, uptime_seconds and terrain_count. A
+    hot generation handoff or project relaunch changes the pid; poll this
+    after project.open or a rebuild instead of sleeping."""
+    return _rpc("studio.process_info", {})
 
 
 @mcp.tool()
@@ -1578,6 +2814,57 @@ def orbit_viewport_pose_set(
         raise ValueError("pose_json must decode to a JSON object.")
     params["id"] = view_id
     return _rpc("viewport.pose_set", params)
+
+
+@mcp.tool()
+def orbit_planning_list() -> dict[str, Any]:
+    """List project implementation-plan bubbles, statuses, canvas positions, and schedule links."""
+    return _rpc("planning.list")
+
+
+@mcp.tool()
+def orbit_planning_create(title: str, description: str = "") -> dict[str, Any]:
+    """Add a floating idea bubble to the project's implementation plan."""
+    return _rpc("planning.create", {"title": title, "description": description})
+
+
+@mcp.tool()
+def orbit_planning_update(
+    id: int,
+    title: str | None = None,
+    description: str | None = None,
+    status: str | None = None,
+    after: int | None = None,
+    clear_after: bool = False,
+    x: float | None = None,
+    y: float | None = None,
+) -> dict[str, Any]:
+    """Edit a plan bubble. Set after to another bubble id to schedule it after that work.
+
+    Status is idea, ready, in_progress or done. The after relation must remain
+    acyclic; canvas x and y are normalized to 0..1. Set clear_after=true to
+    make a scheduled bubble float again.
+    """
+    params: dict[str, Any] = {"id": id}
+    for key, value in {
+        "title": title,
+        "description": description,
+        "status": status,
+        "after": after,
+        "x": x,
+        "y": y,
+    }.items():
+        if value is not None:
+            params[key] = value
+    if clear_after:
+        params["after"] = None
+    return _rpc("planning.update", params)
+
+
+@mcp.tool()
+def orbit_planning_delete(id: int) -> dict[str, Any]:
+    """Delete a planning bubble and leave its scheduled successors floating."""
+    return _rpc("planning.delete", {"id": id})
 
 
 @mcp.tool()
@@ -1811,6 +3098,27 @@ def orbit_view_zoom_set(
     """Set the camera zoom (the viewport Zoom control / mouse wheel). Clamped
     to 0.5..100. Returns the zoom applied."""
     return _rpc("view.zoom_set", {"id": view_id, "zoom": zoom})
+
+
+@mcp.tool()
+def orbit_view_camera_get(view_id: str = "studio.primary") -> dict[str, Any]:
+    """Get viewport camera FOV and equivalent focal length for a 24 mm sensor."""
+    return _rpc("view.camera_get", {"id": view_id})
+
+
+@mcp.tool()
+def orbit_view_camera_set(
+    fov_degrees: float | None = None,
+    focal_length_mm: float | None = None,
+    view_id: str = "studio.primary",
+) -> dict[str, Any]:
+    """Set either vertical field of view or focal length (24 mm sensor height)."""
+    params: dict[str, Any] = {"id": view_id}
+    if fov_degrees is not None:
+        params["fov_degrees"] = fov_degrees
+    if focal_length_mm is not None:
+        params["focal_length_mm"] = focal_length_mm
+    return _rpc("view.camera_set", params)
 
 
 @mcp.tool()

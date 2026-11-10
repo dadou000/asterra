@@ -553,7 +553,9 @@ void VolumeParticleRenderer::Draw(
         return std::bit_cast<u32>(value);
     };
 
-    std::array<u32, 24> constants{};
+    // 32 dwords: the particle pipelines declare pushConstantDwords = 32, and
+    // slots 24..31 carry the stellar light and local light count.
+    std::array<u32, 32> constants{};
     constants[0] = bits(
         static_cast<f32>(width) /
         static_cast<f32>(height));

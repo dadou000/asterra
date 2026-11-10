@@ -8,6 +8,9 @@
 #include <orbit/surface_model/TerrainBodyServices.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
+#include <orbit/terrain/TectonicFieldDesc.hpp>
+#include <orbit/terrain/TerrainContracts.hpp>
+#include <orbit/terrain_erosion/RiverNetwork.hpp>
 
 #include <optional>
 #include <string>
@@ -159,6 +162,18 @@ public:
         scene::ObjectId terrain,
         const SurfaceReliefSettings& settings);
 
+    [[nodiscard]] terrain::TectonicFieldDesc Tectonics(
+        scene::ObjectId terrain) const;
+
+    void SetTectonics(
+        scene::ObjectId terrain,
+        const terrain::TectonicFieldDesc& settings);
+
+    [[nodiscard]] std::string ImpactHistoryToml(scene::ObjectId terrain) const;
+    void SetImpactHistoryToml(scene::ObjectId terrain, std::string toml);
+    [[nodiscard]] std::string StratigraphyToml(scene::ObjectId terrain) const;
+    void SetStratigraphyToml(scene::ObjectId terrain, std::string toml);
+
     [[nodiscard]] std::optional<scene::ObjectId>
     ProcessSettingsObject(
         scene::ObjectId terrain) const;
@@ -197,6 +212,23 @@ public:
         f64 innerRadiusMeters,
         f64 outerRadiusMeters,
         f64 guidance);
+
+    [[nodiscard]] scene::ObjectId AddDrainageSpline(
+        scene::ObjectId terrain,
+        const std::vector<math::Double3>& controlUnitDirections,
+        f64 halfWidthMeters,
+        f64 falloffMeters,
+        f64 guidance);
+
+    [[nodiscard]] scene::ObjectId AddRiverBasinConstraint(
+        scene::ObjectId terrain,
+        terrain::PhysicalTerrainPageAddress page,
+        terrain_erosion::RiverBasinId basin,
+        terrain_erosion::RiverConstraintKind kind,
+        math::Double2 centerMeters,
+        math::Double2 directionMeters,
+        f64 radiusMeters,
+        f64 strength);
 
     [[nodiscard]] scene::ObjectId AddMaterialBrush(
         scene::ObjectId terrain,
@@ -302,9 +334,10 @@ private:
         f64 outerRadiusMeters,
         f64 value);
 
-    [[nodiscard]] scene::ObjectId AddHeightSpline(
+    [[nodiscard]] scene::ObjectId AddScalarSpline(
         scene::ObjectId terrain,
         std::string name,
+        SurfaceTerrainConstraintChannel channel,
         surface_authoring::ConstraintCompositionMode mode,
         const std::vector<math::Double3>& controlUnitDirections,
         f64 halfWidthMeters,

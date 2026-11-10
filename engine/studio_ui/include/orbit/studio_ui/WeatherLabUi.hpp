@@ -1,0 +1,72 @@
+#pragma once
+
+#include <orbit/editor_ui/EditorUi.hpp>
+#include <orbit/celestial_clouds/AnalyticZoneSurvey.hpp>
+#include <orbit/studio_ui/StormDomain.hpp>
+#include <orbit/studio_ui/WeatherLabRpc.hpp>
+#include <orbit/weather_lab/WeatherLabSession.hpp>
+
+#include <string>
+#include <future>
+#include <vector>
+
+namespace orbit::studio_ui
+{
+// The Weather Lab panel (SC-01): run the compressed fast-core supercell in
+// Studio, watch plan / section / column-max slices of the storm, and compare
+// its metrics with a CM1 reference loaded from an .orbitwx file. The panel
+// owns no simulation logic: every button calls WeatherLabSession, the same
+// object the weather_lab.* RPC / MCP methods (RegisterWeatherLabRpc) drive.
+class WeatherLabUi
+{
+public:
+    WeatherLabUi(weather_lab::WeatherLabSession& session, WeatherLabView& view);
+
+    void Register(editor_ui::EditorUi& ui);
+    // The mailbox of the viewport renderer's storm domain (the same object the storm.* RPC drives); without it the section is hidden.
+    void SetStormDomain(StormDomainMailbox* mailbox) noexcept { storm_ = mailbox; }
+
+    inline static constexpr editor_ui::PanelId kPanelId{
+        .high = 0x5745415448455231ULL,
+        .low = 0x4c41425343303100ULL
+    };
+
+private:
+    void Draw(editor_ui::PanelContext& context);
+    void DrawControls(editor_ui::PanelContext& context);
+    void DrawSettings(editor_ui::PanelContext& context);
+    void DrawPlayback(editor_ui::PanelContext& context);
+    void DrawStorm(editor_ui::PanelContext& context);
+    void DrawZoneSurvey(editor_ui::PanelContext& context);
+    void DrawViews(editor_ui::PanelContext& context);
+    void DrawMetrics(editor_ui::PanelContext& context);
+    void DrawSlice(
+        editor_ui::PanelContext& context,
+        std::string_view id,
+        const weather_lab::Slice& slice,
+        editor_ui::UiSize size);
+
+    weather_lab::WeatherLabSession* session_{nullptr};
+    WeatherLabView* view_{nullptr};
+    StormDomainMailbox* storm_{nullptr};
+    StormPlaceRequest stormDraft_;
+    // Larger neighbor extent than the production default: equal-area diagnostic
+    // sample points are much farther apart than a high-resolution global solver grid.
+    celestial_clouds::SparseStormZones zoneSurveyZones_{
+        celestial_clouds::StormZoneConfig{.neighbourRadians=0.15, .matchRadians=0.25}};
+    std::future<std::vector<celestial_clouds::StormZoneProbe>> zoneSurveyFuture_;
+    f64 zoneSurveyTime_{0.0};
+    f64 zoneSurveyJobTime_{0.0};
+    i64 zoneSurveySamples_{1024};
+    u32 zoneSurveyProbeCount_{0};
+    StormAutoRequest stormAuto_;
+    bool stormAutoLoaded_{false};
+    std::string stormMessage_;
+    weather_lab::WeatherLabSettings draft_;
+    bool draftLoaded_{false};
+    std::string playbackPath_;
+    std::string recordPathText_;
+    std::string message_;
+    i32 presetIndex_{0};
+};
+} // namespace orbit::studio_ui

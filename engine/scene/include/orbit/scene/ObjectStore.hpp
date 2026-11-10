@@ -110,6 +110,11 @@ public:
 
     [[nodiscard]] bool TransactionActive() const noexcept;
 
+    // Monotonic preview revision that also advances for writes in an open
+    // transaction. Unlike Revision(), it may advance for changes that are
+    // later rolled back; consumers use it only to refresh transient previews.
+    [[nodiscard]] u64 PreviewRevision() const noexcept;
+
     // Monotonic semantic-state revision. Mutations inside an explicit
     // transaction publish one revision only when the transaction commits;
     // rolled-back transactions do not advance it.

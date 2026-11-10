@@ -12,9 +12,9 @@ The first milestone establishes a strict modular engine layout, a native Windows
 
 The next architecture milestone generalizes Orbit from a terrain-focused planetary runtime into a frame-aware celestial authoring engine with a permanent project/editor/plugin/MCP scaffold.
 
-Read [docs/V0.0.3_SPEC.md](docs/V0.0.3_SPEC.md) before adding new world, editor, asset, path, plugin, build or platform-service systems. It defines the small implementation milestones, CPU/GPU residency rules, Orbit Studio editor architecture, Luau plugin model, project persistence, Material Service, dynamic path networks, MCP V2 and Steam integration boundary.
+Read [docs/ORBIT_ARCHITECTURE.md](docs/ORBIT_ARCHITECTURE.md) and the module blocks ([docs/ORBIT_DOCS.md](docs/ORBIT_DOCS.md)) before adding new world, editor, asset, path, plugin, build or platform-service systems. The original V0.0.3-V0.0.6 milestone specifications were retired in 0.0.9 and remain in git history.
 
-World and celestial setup is tracked explicitly by **M20A — World & Celestial Authoring** in [docs/V0.0.3_WORLD_AUTHORING.md](docs/V0.0.3_WORLD_AUTHORING.md). M20A is a normative extension of the V0.0.3 scaffold between path derivation and build/package work. The production foundation now includes semantic World/System/Body schemas, runtime-backed body properties, transactional contextual system/body creation, multi-world project enumeration/creation/startup-world selection, metadata-driven command surfaces and regression coverage. Project-browser UI, active-world session switching and live semantic-to-runtime universe synchronization remain M20A acceptance items rather than placeholders.
+World and celestial setup was tracked by **M20A — World & Celestial Authoring** (its document was retired in 0.0.9 and remains in git history). M20A is a normative extension of the V0.0.3 scaffold between path derivation and build/package work. The production foundation now includes semantic World/System/Body schemas, runtime-backed body properties, transactional contextual system/body creation, multi-world project enumeration/creation/startup-world selection, metadata-driven command surfaces and regression coverage. Project-browser UI, active-world session switching and live semantic-to-runtime universe synchronization remain M20A acceptance items rather than placeholders.
 
 
 ## V0.0.6 — Celestial Systems & Orbital Rendering
@@ -23,7 +23,7 @@ V0.0.6 is the next major scaffold after the accepted V0.0.5 terrain/Studio loop.
 
 The release keeps one semantic body authority while allowing independent simulation and rendering representations. Production toroidal terrain remains the ground path; orbital and far-distance representations are derived from the same world data.
 
-Read [docs/V0.0.6_SPEC.md](docs/V0.0.6_SPEC.md) before implementing celestial systems. Progress is tracked in [docs/V0.0.6_PROGRESS.md](docs/V0.0.6_PROGRESS.md), and the initial research contract is in [docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md](docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md).
+Read the celestial module blocks under `/world` ([docs/ORBIT_DOCS.md](docs/ORBIT_DOCS.md)) before implementing celestial systems. The V0.0.6 SPEC and PROGRESS documents were retired in 0.0.9 and remain in git history; the research contract is in [docs/tree/history/research/V006_CELESTIAL_RESEARCH_BASELINE.md](docs/tree/history/research/V006_CELESTIAL_RESEARCH_BASELINE.md).
 
 ## V0.0.7 — Dynamic Lighting, GI & HDR Presentation
 
@@ -31,7 +31,7 @@ V0.0.7 is the lighting/presentation and universal-volumetrics scaffold built on 
 
 Hardware ray tracing is an optional visibility accelerator rather than a separate lighting mode: the default Auto/Balanced policy keeps an explicit lighting budget and uses RT hardware to improve difficult visibility work inside that budget.
 
-Read [docs/V0.0.7_SPEC.md](docs/V0.0.7_SPEC.md) before adding lighting/GI/exposure/post-processing/volumetric systems. Progress is tracked in [docs/V0.0.7_PROGRESS.md](docs/V0.0.7_PROGRESS.md). Research baselines are [dynamic lighting / GI / eye response](docs/research/V007_DYNAMIC_LIGHTING_BASELINE.md) and [universal volumetrics](docs/research/V007_UNIVERSAL_VOLUMETRICS.md).
+Read [docs/V0.0.7_SPEC.md](docs/V0.0.7_SPEC.md) before adding lighting/GI/exposure/post-processing/volumetric systems. Progress is tracked in [docs/V0.0.7_PROGRESS.md](docs/V0.0.7_PROGRESS.md). Research baselines are [dynamic lighting / GI / eye response](docs/tree/history/research/V007_DYNAMIC_LIGHTING_BASELINE.md) and [universal volumetrics](docs/tree/history/research/V007_UNIVERSAL_VOLUMETRICS.md).
 
 ## Hot iteration — save to reflect
 
@@ -53,31 +53,68 @@ The full normative contract, ABI/state/lifetime rules, acceptance checklist, and
 
 ## Build
 
-### One-click Windows build
+### Fast incremental Studio build (default)
 
-Double-click `build_orbit.bat` from the repository root.
-
-It configures CMake, builds the runtime, Studio and headless build CLI, and packages the developer build into:
-
-```text
-dist/Orbit-Windows-Release/
-├── OrbitStudio.exe
-├── OrbitPlayer.exe
-├── OrbitBuild.exe
-├── dxcompiler.dll
-└── symbols/
-```
-
-Useful command-line options:
+`build_orbit.bat` now builds **OrbitStudio only** plus its required
+OrbitPlayer/hot-reload dependencies. It uses the existing fast MSVC
+incremental compilation/linking configuration, reuses a valid CMake cache,
+and skips the distribution packaging and large PDB copies. The generated
+build system still automatically reconfigures if CMake files change.
 
 ```bat
-build_orbit.bat run
-build_orbit.bat debug run
-build_orbit.bat rebuild
-build_orbit.bat release nopause
+build_orbit.bat
+build_orbit.bat unpacked run
+build_orbit.bat debug unpacked run
+build_orbit.bat jobs 4 unpacked run
 ```
 
-For normal local development the build script enables the low-latency hot-iteration configuration. After the initial build/launch, prefer saving files and allowing Orbit's watcher to route the change automatically rather than repeatedly invoking the build script.
+`unpacked run` stages the same Studio executable (named `Orbit.exe`) and
+its two runtime dependencies to a unique ignored `out/unpacked/` directory
+and launches it with the repository root as its working directory. This
+avoids locking the linker's development output and preserves the single
+Studio application, its project browser, and automatic generation handoff.
+There is **no additional launcher application**. When only building, no
+unpacked staging or release packaging occurs. The existing CMake POST_BUILD
+also publishes the canonical root `Orbit.exe` when Windows does not have
+that file locked.
+
+The default is two parallel MSBuild projects, since MSVC `/MP` already
+parallelizes compilation within each target; adjust with `jobs N` or
+`ORBIT_BUILD_JOBS` after profiling RAM/CPU use. A clean build is still
+expensive; these changes primarily accelerate repeated small edits.
+
+### Explicit package / full rebuild
+
+```bat
+build_orbit.bat package
+build_orbit.bat release package run
+build_orbit.bat rebuild package
+build_orbit.bat reconfigure
+```
+
+`package` builds OrbitStudio, OrbitBuild and OrbitPlayer, then creates
+`dist/Orbit-Windows-Release/` (or `Debug`) with executables,
+`dxcompiler.dll`, and symbol files. This work no longer happens on
+every ordinary development build.
+
+### Self-hosted GitHub Windows build (no hosted runner minutes)
+
+`.github/workflows/orbit-self-hosted-unpacked.yml` watches the Harmony
+branch and uses a Windows self-hosted runner labelled `orbit-vulkan`.
+It builds Studio directly in the runner workspace, runs targeted
+CPU tests, and **does not archive or package the build**. It retains the
+ignored build directory between checkouts for fast subsequent builds.
+For a real GPU smoke test, dispatch the workflow with `gpu_smoke`
+enabled from a desktop-session runner.
+
+You must first install/register the runner yourself in GitHub repository
+**Settings > Actions > Runners > New self-hosted runner**. Select Windows
+x64, follow the current GitHub-generated setup commands, add the
+`orbit-vulkan` label, and install Visual Studio C++ tools, CMake,
+Vulkan SDK and drivers. For interactive Vulkan-window tests, run
+the agent from your logged-in desktop rather than an isolated service.
+This workflow has no pull-request trigger (self-hosted execution of
+untrusted PRs would be unsafe).
 
 ### Manual build
 
@@ -108,7 +145,7 @@ captures the production terrain viewport.
 On a Vulkan-capable Windows development machine:
 
 ```bat
-run_terrain_ui_smoke.bat
+tools/validation/run_terrain_ui_smoke.bat
 ```
 
 Use `debug` or `release` to select the configuration, `nobuild` to reuse an
@@ -132,50 +169,18 @@ real render-device check must not silently fall back to a GPU-less hosted runner
 
 Orbit Studio also exposes build operations over its structured JSON-RPC/MCP bridge.
 
-The terrain sandbox remains a developer/test executable and is not a launcher or alternate Studio front end. Normal interactive authoring starts from the root `Orbit.exe`.
+### Driving Studio over MCP
 
-### Sandbox camera controls
-
-The terrain sandbox uses a free camera:
-
-- `W/A/S/D` — move relative to camera heading
-- Mouse — yaw/pitch look
-- `Q/E` — move down/up
-- `Left Shift` — movement boost
-- `F3` — toggle the debug HUD (FPS, altitude, terrain/cache/ocean stats)
-- `Esc` — quit
-
-Mouse capture is released automatically when the window loses focus.
-
-### Testing over MCP
-
-While `OrbitSandbox` is running, it listens on a loopback-only TCP
-dev server at `127.0.0.1:4319` (see `engine/dev_server`) that accepts
-line-based commands: `PING`, `STATS`, `SCREENSHOT <path>`,
-`TELEPORT <dirX> <dirY> <dirZ> <altitudeMeters>`,
-`SLEW <dirX> <dirY> <dirZ> <altitudeMeters> <durationSeconds>`,
-`DEBUG_OVERLAY <ON|OFF>`, `QUIT`.
-
-`TELEPORT` jumps instantly, which is fine for reading stats but
-leaves a stale, not-yet-restreamed frame on screen if you screenshot
-right after -- use `SLEW` instead to fly there smoothly over real
-frames when you actually need to see the clipmap streaming/morphing
-while moving, e.g. across several `SCREENSHOT` calls spaced a second
-or so apart during the flight.
-
-`tools/mcp_server/orbit_mcp_server.py` exposes those as MCP tools so
-an MCP client (Claude Code, Claude Desktop, ...) can drive and
-inspect a running Orbit process for automated testing:
+Orbit Studio listens on a loopback-only JSON-RPC endpoint (`127.0.0.1:4320`) and
+`tools/mcp_server/orbit_editor_mcp_server.py` exposes it as MCP tools, so an MCP client
+(Claude Code, Claude Desktop, ...) can drive and inspect a running Studio:
 
 ```powershell
 pip install -r tools/mcp_server/requirements.txt
-claude mcp add orbit -- python C:\path\to\asterra\tools\mcp_server\orbit_mcp_server.py
+claude mcp add orbit-editor -- python C:\path\to\asterra\tools\mcp_server\orbit_editor_mcp_server.py
 ```
 
-Launch `OrbitSandbox` separately only for this dedicated terrain-test workflow (the bridge only talks to an
-already-running process, it doesn't launch one). Screenshots read
-real desktop pixels, so the dev server briefly raises the Orbit
-window's Z-order before capturing to make sure it isn't occluded.
+See [docs/ORBIT_MCP.md](docs/ORBIT_MCP.md). The bridge only talks to an already-running Studio; it does not launch one.
 
 Read [docs/ORBIT_ARCHITECTURE.md](docs/ORBIT_ARCHITECTURE.md) and [docs/ORBIT_HOT_ITERATION.md](docs/ORBIT_HOT_ITERATION.md) before adding engine systems.
 
@@ -185,8 +190,7 @@ Known issues and their fix status are tracked in [docs/PROBLEMS.md](docs/PROBLEM
 
 The default terrain recipe combines domain-warped ridges, multifractal mountain
 detail, and footprint-filtered hills, with elevations bounded below 8 km above
-sea level. The sandbox starts over a mountain range with terrain-derived camera
-clearance. The implementation, measured CPU costs, and optimization research
+sea level. The implementation, measured CPU costs, and optimization research
 are documented in [the terrain research report](docs/research/TERRAIN_SYNTHESIS_AND_OPTIMIZATION.md).
 
 To run the deterministic height survey and CPU benchmark:
@@ -198,14 +202,12 @@ cmake --build build --config Release --target OrbitTerrainBenchmark
 
 ### Standing water
 
-The sandbox renders oceans and lakes on the terrain clipmap itself, sharing its
+Terrain rendering draws oceans and lakes on the terrain clipmap itself, sharing its
 sample cache, morphing and depth surface. Lake levels use coarse hydrology as
 one authority while fine regions continue to refine rivers and surrounding land.
 See [standing water rendering](docs/STANDING_WATER_RENDERING.md) for validation,
-storage costs and remaining limitations. The HUD reports `WATER TERRAIN`; the
-legacy ocean vertex and lake-cell counts no longer describe the active surface.
+storage costs and remaining limitations.
 
-F3 also reports committed full-grid rebuilds as `REBASE`: cumulative count,
-reason (`SOURCE`, `LOD`, or `MOVE`), number of levels, and elapsed seconds. `NOW`
-stays visible for two seconds. Source refreshes preserve sampling grid placement;
-coverage changes retain grids shared between the old and new resolutions.
+## Where to find debugging and tests
+
+In the unified Orbit Studio editor, open the **Debug** workspace tab for the canonical test and diagnostics entry point. Its categories link to the existing specialist tools; those tools remain authoritative. The first on-demand construction terrain validation checks only physical-page readiness, revision consistency and one finite height sample—not full GPU displacement or collision. See [`engine/studio_ui/docs/debug-center.md`](engine/studio_ui/docs/debug-center.md) for exact expectations and current limits.

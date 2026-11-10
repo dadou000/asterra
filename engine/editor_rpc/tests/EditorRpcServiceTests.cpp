@@ -8,6 +8,8 @@
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
 
 #include <cstdlib>
 #include <filesystem>
@@ -68,6 +70,36 @@ orbit::rpc::Value Call(
 
     Check(result != nullptr);
     return *result;
+}
+// Dispatches a request that must fail and returns the error object.
+orbit::rpc::Value CallError(
+    orbit::rpc::Dispatcher& dispatcher,
+    std::string id,
+    std::string method,
+    orbit::rpc::Value params)
+{
+    orbit::rpc::Value request(
+        orbit::rpc::Value::Object{
+            {"jsonrpc", "2.0"},
+            {"id", std::move(id)},
+            {"method", std::move(method)},
+            {"params", std::move(params)}
+        });
+
+    const auto response =
+        dispatcher.Dispatch(
+            orbit::rpc::Serialize(request));
+
+    Check(response.has_value());
+
+    orbit::rpc::Value document =
+        orbit::rpc::ParseValue(*response);
+
+    const auto* error =
+        document.Find("error");
+
+    Check(error != nullptr);
+    return *error;
 }
 } // namespace
 
@@ -1008,6 +1040,286 @@ int main()
     Check(
         !objects.Find(*pathEdgeObject).
             has_value());
+
+
+    {
+        using namespace orbit::world_model;
+
+        const auto worldObject =
+            commandService.CreateObject(
+                kWorldType,
+                "Atmosphere World");
+        const auto system =
+            commandService.CreateObject(
+                kCelestialSystemType,
+                "Atmosphere System",
+                worldObject);
+        const auto body =
+            commandService.CreateObject(
+                kCelestialBodyType,
+                "Atmosphere Planet",
+                system);
+
+        commandService.SetProperty(
+            body,
+            kBodyRadius,
+            6.371e6);
+        commandService.SetProperty(
+            body,
+            kBodyMass,
+            5.9722e24);
+
+        const auto atmosphere =
+            commandService.CreateObject(
+                kAtmosphereCapabilityType,
+                "Atmosphere",
+                body);
+
+        commandService.SetProperty(
+            atmosphere,
+            kCapabilityModel,
+            std::string{"Physical Scattering"});
+
+        const auto presets =
+            Call(
+                dispatcher,
+                "30",
+                "atmosphere.presets");
+
+        Check(presets.IsArray());
+        Check(presets.AsArray().size() == 4);
+        Check(presets.AsArray()[0].AsString() == "Earth-like");
+
+        const auto solveParams =
+            [&](const std::string& objectId)
+        {
+            return orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"atmosphere", objectId}
+                });
+        };
+
+        // Wrong object type, missing object and unknown preset are
+        // rejected with actionable errors and change nothing.
+        Check(
+            CallError(
+                dispatcher,
+                "31",
+                "atmosphere.solve",
+                solveParams(body.ToString())).
+                    Find("message")->AsString().find(
+                        "atmosphere capability") !=
+            std::string::npos);
+
+        Check(
+            CallError(
+                dispatcher,
+                "32",
+                "atmosphere.solve",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{})).
+                        Find("message") != nullptr);
+
+        const orbit::u64 revisionBeforePreset =
+            objects.Revision();
+
+        Check(
+            CallError(
+                dispatcher,
+                "33",
+                "atmosphere.apply_preset",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"atmosphere",
+                         atmosphere.ToString()},
+                        {"preset", "No Such Preset"}
+                    })).
+                Find("message")->AsString().find(
+                    "Unknown atmosphere preset") !=
+            std::string::npos);
+
+        Check(objects.Revision() == revisionBeforePreset);
+
+        // A raw expert field authored before provenance exists is
+        // locked, so the preset reports a conflict instead of
+        // overwriting it, and still derives the rest.
+        commandService.SetProperty(
+            atmosphere,
+            kAtmosphereTopRadiusMeters,
+            6.371e6 + 200000.0);
+
+        const auto applied =
+            Call(
+                dispatcher,
+                "34",
+                "atmosphere.apply_preset",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"atmosphere",
+                         atmosphere.ToString()},
+                        {"preset", "Earth-like"}
+                    }));
+
+        Check(applied.Find("has_conflict")->AsBool());
+        Check(!applied.Find("has_invalid_input")->AsBool());
+        Check(
+            applied.Find("derived_count")->AsNumber() >=
+            5.0);
+        Check(!applied.Find("events")->AsArray().empty());
+
+        bool sawConflict = false;
+
+        for (const auto& event :
+             applied.Find("events")->AsArray())
+        {
+            Check(event.Find("property") != nullptr);
+            Check(event.Find("explanation") != nullptr);
+            Check(
+                !event.Find("name")->AsString().empty());
+
+            sawConflict =
+                sawConflict ||
+                event.Find("outcome")->AsString() ==
+                    "conflict";
+        }
+
+        Check(sawConflict);
+
+        // The solve method on an already solved object derives
+        // nothing new.
+        const auto solved =
+            Call(
+                dispatcher,
+                "35",
+                "atmosphere.solve",
+                solveParams(atmosphere.ToString()));
+
+        Check(solved.Find("derived_count")->AsNumber() == 0.0);
+        Check(!solved.Find("has_invalid_input")->AsBool());
+    }
+
+
+    {
+        using namespace orbit::world_model;
+
+        const auto worldObject =
+            commandService.CreateObject(
+                kWorldType,
+                "Transform World");
+        const auto box =
+            commandService.CreateObject(
+                kPrimitiveType,
+                "Transform Box",
+                worldObject);
+        commandService.SetProperty(
+            box,
+            kPrimitivePositionMeters,
+            orbit::math::Double3{1.0, 2.0, 3.0});
+        commandService.SetProperty(
+            box,
+            kPrimitiveSizeMeters,
+            orbit::math::Double3{1.0, 1.0, 1.0});
+
+        const auto info =
+            Call(
+                dispatcher,
+                "40",
+                "object.transform_info",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"object", box.ToString()}}));
+        Check(info.Find("tools")->AsArray().size() == 3);
+        Check(info.Find("position")->AsArray()[1].AsNumber() == 2.0);
+
+        const auto transformParams =
+            [&](const std::string& tool,
+                const std::string& axis,
+                const double amount)
+        {
+            return orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"object", box.ToString()},
+                    {"tool", tool},
+                    {"axis", axis},
+                    {"amount", amount}});
+        };
+
+        const auto moved =
+            Call(
+                dispatcher,
+                "41",
+                "object.transform",
+                transformParams("translate", "x", 4.0));
+        Check(moved.Find("summary")->AsString().find("Move X") == 0);
+
+        const auto position =
+            std::get<orbit::math::Double3>(
+                *objects.GetProperty(box, kPrimitivePositionMeters));
+        Check(std::abs(position.x - 5.0) < 1.0e-9);
+        Check(std::abs(position.y - 2.0) < 1.0e-9);
+
+        static_cast<void>(
+            Call(
+                dispatcher,
+                "42",
+                "object.transform",
+                transformParams("rotate", "z", 90.0)));
+        const auto euler =
+            std::get<orbit::math::Double3>(
+                *objects.GetProperty(box, kPrimitiveEulerDegrees));
+        Check(std::abs(euler.z - 90.0) < 1.0e-6);
+
+        static_cast<void>(
+            Call(
+                dispatcher,
+                "43",
+                "object.transform",
+                transformParams("scale", "uniform", 3.0)));
+        const auto size =
+            std::get<orbit::math::Double3>(
+                *objects.GetProperty(box, kPrimitiveSizeMeters));
+        Check(std::abs(size.x - 3.0) < 1.0e-9);
+
+        // One undo step per call.
+        static_cast<void>(
+            Call(dispatcher, "44", "history.undo"));
+        const auto afterUndo =
+            std::get<orbit::math::Double3>(
+                *objects.GetProperty(box, kPrimitiveSizeMeters));
+        Check(std::abs(afterUndo.x - 1.0) < 1.0e-9);
+
+        // Bad requests are parameter errors and change nothing.
+        Check(
+            CallError(
+                dispatcher,
+                "45",
+                "object.transform",
+                transformParams("scale", "x", -2.0)).
+                    Find("code")->AsNumber() == -32602.0);
+        Check(
+            CallError(
+                dispatcher,
+                "46",
+                "object.transform",
+                transformParams("shear", "x", 1.0)).
+                    Find("code")->AsNumber() == -32602.0);
+        Check(
+            CallError(
+                dispatcher,
+                "47",
+                "object.transform",
+                transformParams("translate", "w", 1.0)).
+                    Find("code")->AsNumber() == -32602.0);
+        Check(
+            CallError(
+                dispatcher,
+                "48",
+                "object.transform_info",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"object", worldObject.ToString()}})).
+                    Find("code")->AsNumber() == -32602.0);
+    }
 
     }
 

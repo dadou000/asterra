@@ -37,6 +37,12 @@ int main()
     if(!(longAxis>shortAxis))
         return 4;
 
+    auto differentSeed=p;
+    differentSeed.seed+=1U;
+    if(EvaluateRadiusScale(p,{0.27,0.61,-0.74})==
+       EvaluateRadiusScale(differentSeed,{0.27,0.61,-0.74}))
+        return 7;
+
     const RoughSurfacePhotometryInput opposition{
         .normal={0.0,0.0,1.0},
         .lightDirection={0.0,0.0,1.0},

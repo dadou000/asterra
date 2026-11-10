@@ -415,6 +415,13 @@ inline void SaveLightingDisplaySettings(
         throw std::runtime_error("Failed while writing LightingDisplay.orbitcfg.");
     }
 
+    // Windows cannot rename a file that is still open, so close the temporary first.
+    output.close();
+    if (output.fail())
+    {
+        throw std::runtime_error("Failed while writing LightingDisplay.orbitcfg.");
+    }
+
     std::error_code error;
     std::filesystem::rename(temporary, path, error);
     if (error)

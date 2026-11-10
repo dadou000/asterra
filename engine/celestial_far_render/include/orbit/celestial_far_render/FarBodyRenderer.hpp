@@ -74,6 +74,8 @@ struct FarBodyDraw
     render_view::CameraState camera{};
     AppearanceSummary appearance{};
     f64 projectedRadiusPixels{1.0};
+    // NDC centre for disc/point proxies; full-globe rays use camera instead.
+    math::Float2 screenCenterNdc{};
     f32 opacity{1.0F};
     f32 radiometricIntensity{1.0F};
     math::Float3 lightDirectionBody{

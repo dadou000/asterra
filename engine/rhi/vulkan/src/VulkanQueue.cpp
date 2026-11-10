@@ -1,6 +1,7 @@
 #include <orbit/profiler/Profiler.hpp>
 #include "VulkanObjects.hpp"
 
+#include <cstdlib>
 #include <stdexcept>
 
 namespace orbit::rhi::vulkan::detail
@@ -59,12 +60,14 @@ VulkanQueue::VulkanQueue(
     const VkQueue nativeQueue,
     const u32 familyIndex,
     const QueueType type,
-    const DeviceFunctions& functions)
+    const DeviceFunctions& functions,
+    GpuProgress* const progress)
     : device_(device),
       nativeQueue_(nativeQueue),
       familyIndex_(familyIndex),
       type_(type),
-      functions_(&functions)
+      functions_(&functions),
+      progress_(progress)
 {
 }
 
@@ -123,11 +126,36 @@ void VulkanQueue::Submit(CommandList& commandList)
     waitInfo.stageMask =
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-    VkSemaphoreSubmitInfo signalInfo{};
-    signalInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-    signalInfo.semaphore = pendingRenderFinished_;
-    signalInfo.stageMask =
-        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    // Signals: the swapchain's render-finished semaphore (when a present
+    // is pending) and, always, the progress timeline at this submit's serial.
+    VkSemaphoreSubmitInfo signalInfos[2]{};
+    u32 signalCount = 0;
+    if (pendingRenderFinished_ != VK_NULL_HANDLE)
+    {
+        signalInfos[signalCount].sType =
+            VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        signalInfos[signalCount].semaphore = pendingRenderFinished_;
+        signalInfos[signalCount].stageMask =
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        ++signalCount;
+    }
+
+    u64 serial = 0;
+    if (progress_ != nullptr)
+    {
+        serial = progress_->BeginSubmit();
+        signalInfos[signalCount].sType =
+            VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        signalInfos[signalCount].semaphore = progress_->Timeline();
+        signalInfos[signalCount].value = serial;
+        signalInfos[signalCount].stageMask =
+            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        ++signalCount;
+
+        // Stamp before the submit is issued: a Map() racing this call sees
+        // the (not yet complete) serial and waits rather than slipping by.
+        vulkanCommandList->FinalizeSubmit(serial);
+    }
 
     VkSubmitInfo2 submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
@@ -140,10 +168,10 @@ void VulkanQueue::Submit(CommandList& commandList)
         submitInfo.pWaitSemaphoreInfos = &waitInfo;
     }
 
-    if (pendingRenderFinished_ != VK_NULL_HANDLE)
+    if (signalCount != 0U)
     {
-        submitInfo.signalSemaphoreInfoCount = 1;
-        submitInfo.pSignalSemaphoreInfos = &signalInfo;
+        submitInfo.signalSemaphoreInfoCount = signalCount;
+        submitInfo.pSignalSemaphoreInfos = signalInfos;
     }
 
     // Piggyback the "image-available semaphore is now safe to reuse
@@ -162,23 +190,45 @@ void VulkanQueue::Submit(CommandList& commandList)
             &submitInfo,
             pendingImageAvailableRetired_) != VK_SUCCESS)
     {
+        if (progress_ != nullptr)
+        {
+            // Never leave a waiter hanging on a serial that will not signal.
+            progress_->SignalFromHost(serial);
+        }
         throw std::runtime_error(
             "Orbit failed to submit a Vulkan command buffer.");
     }
 
-    // TEMPORARY UI-CORRUPTION DIAGNOSTIC:
-    // EditorUi currently rewrites one host-visible vertex/index-buffer pair
-    // every frame. Force the submitted GPU work to retire before the CPU can
-    // reach the next frame and overwrite those buffers. If the malformed text
-    // and menu geometry disappear with this guard in place, the corruption is
-    // confirmed to be a CPU/GPU lifetime race and EditorUi should be moved to
-    // per-frame-in-flight upload buffers. Do not keep this stall as the final
-    // performance solution.
-    if (vkQueueWaitIdle(nativeQueue_) != VK_SUCCESS)
+    // The queue is no longer idled after every submit. CPU/GPU lifetime is
+    // enforced precisely instead (see GpuProgress): Buffer::Map and
+    // CommandAllocator::Reset wait only for the submits that used them, and
+    // destruction is deferred past the submits that could reference it.
+    // ORBIT_RHI_SYNC_SUBMIT=1 restores the blanket idle, which is the first
+    // thing to try when a rendering corruption might be a lifetime bug. A
+    // queue without progress tracking always idles.
+    static const bool syncSubmit = []
+    {
+        char* value = nullptr;
+        std::size_t length = 0;
+        bool enabled = false;
+        if (_dupenv_s(&value, &length, "ORBIT_RHI_SYNC_SUBMIT") == 0 &&
+            value != nullptr)
+        {
+            enabled = value[0] == '1';
+            std::free(value);
+        }
+        return enabled;
+    }();
+    if ((syncSubmit || progress_ == nullptr) &&
+        vkQueueWaitIdle(nativeQueue_) != VK_SUCCESS)
     {
         throw std::runtime_error(
-            "Orbit failed while waiting for the Vulkan queue during the UI "
-            "buffer lifetime diagnostic.");
+            "Orbit failed while waiting for the Vulkan queue.");
+    }
+
+    if (progress_ != nullptr)
+    {
+        progress_->Collect();
     }
 
     pendingImageAvailable_ = VK_NULL_HANDLE;

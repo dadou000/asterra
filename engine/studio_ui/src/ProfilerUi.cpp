@@ -27,6 +27,14 @@ constexpr f32 kRuler = 20.0F;
 constexpr f32 kRowHeight = 15.0F;
 constexpr f32 kLaneGap = 4.0F;
 constexpr f32 kStripHeight = 54.0F;
+constexpr std::array<std::string_view, 4> kViewportCaptureResolutions{
+    "720p", "1080p", "1440p", "2160p"};
+constexpr std::array<std::string_view, 5> kViewportCaptureScenarios{
+    "static", "walk_1_94_mps", "surface_200_kmh",
+    "flight_2000_mps_5000m", "ground_to_orbit_20s"};
+constexpr std::array<std::string_view, 5> kViewportCaptureScenarioLabels{
+    "Static", "Walking (1.94 m/s)", "Surface travel (200 km/h)",
+    "Flight (2,000 m/s at 5 km)", "Ground to 500 km orbit (20 s)"};
 
 [[nodiscard]] f64 SteadySeconds()
 {
@@ -152,8 +160,7 @@ void ProfilerUi::DrawToolbar(PanelContext& context, const f64 now)
     if (model_.Paused())
     {
         if (context.PrimaryButton(
-                model_.Loaded() ? "Back to live##profiler-resume"
-                                : "Resume live##profiler-resume"))
+                "Resume##profiler-resume"))
         {
             model_.SetPaused(false, now);
         }
@@ -162,12 +169,43 @@ void ProfilerUi::DrawToolbar(PanelContext& context, const f64 now)
     {
         model_.SetPaused(true, now);
     }
-    context.SameLine();
-    if (context.Button("Reset view##profiler-reset-view"))
+    // Keep controls on independent rows: switching Pause to Resume must not
+    // push the trace and viewport capture controls outside a narrow dock.
+    if (context.Button("Fit all##profiler-fit-all"))
     {
         model_.ResetView();
     }
     context.SameLine();
+    if (context.Button("Zoom in##profiler-zoom-in"))
+    {
+        model_.ZoomAt(model_.ViewBeginMs() + model_.ViewSpanMs() * 0.5,
+            0.5, now);
+    }
+    context.SameLine();
+    if (context.Button("Zoom out##profiler-zoom-out"))
+    {
+        model_.ZoomAt(model_.ViewBeginMs() + model_.ViewSpanMs() * 0.5,
+            2.0, now);
+    }
+    context.SameLine();
+    if (context.Button("Previous##profiler-pan-left"))
+        model_.Pan(-model_.ViewSpanMs() * 0.5, now);
+    context.SameLine();
+    if (context.Button("Next##profiler-pan-right"))
+        model_.Pan(model_.ViewSpanMs() * 0.5, now);
+
+    if (const auto selected = model_.Selected(); selected.has_value())
+    {
+        if (context.Button("Focus selection##profiler-focus-selected"))
+            model_.ZoomToSlice(*selected, now);
+        context.SameLine();
+    }
+    if (context.Button("Focus slowest##profiler-focus-slowest"))
+    {
+        const auto slowest = model_.SlowestRefs(1U);
+        if (!slowest.empty()) model_.ZoomToSlice(slowest.front(), now);
+    }
+    context.MutedText("Timeline navigation: zoom about center, pan by half-window, or focus a selected/slowest scope.");
     if (context.Button("Write trace file##profiler-capture"))
     {
         try
@@ -181,6 +219,38 @@ void ProfilerUi::DrawToolbar(PanelContext& context, const f64 now)
         catch (const std::exception& exception)
         {
             captureError_ = exception.what();
+        }
+    }
+    ProfilerOptions captureOptions = model_.Options();
+    i32 captureScenarioIndex = static_cast<i32>(std::distance(
+        kViewportCaptureScenarios.begin(),
+        std::find(
+            kViewportCaptureScenarios.begin(),
+            kViewportCaptureScenarios.end(),
+            captureOptions.viewportCaptureScenario)));
+    if (context.Combo(
+            "Capture workload##profiler-capture-scenario",
+            kViewportCaptureScenarioLabels,
+            captureScenarioIndex))
+    {
+        captureOptions.viewportCaptureScenario =
+            kViewportCaptureScenarios[static_cast<std::size_t>(captureScenarioIndex)];
+        model_.SetOptions(captureOptions);
+    }
+    if (context.PrimaryButton("Capture viewport only##profiler-viewport-capture") &&
+        viewportOnlyCaptureAction_)
+    {
+        const auto& options = model_.Options();
+        if (!viewportOnlyCaptureAction_(
+                options.viewportCaptureDurationMs,
+                options.viewportCaptureResolution,
+                options.viewportCaptureScenario))
+        {
+            captureError_ = "Capture settings are invalid or this scenario needs a targeted camera.";
+        }
+        else
+        {
+            captureError_.clear();
         }
     }
 
@@ -241,6 +311,31 @@ void ProfilerUi::DrawOptions(PanelContext& context)
         changed = true;
     }
 
+    f64 captureDurationSeconds = options.viewportCaptureDurationMs / 1000.0;
+    if (context.SliderDouble(
+            "Viewport capture duration (s)##profiler-capture-duration",
+            captureDurationSeconds,
+            1.0,
+            30.0))
+    {
+        options.viewportCaptureDurationMs = captureDurationSeconds * 1000.0;
+        changed = true;
+    }
+    i32 captureResolutionIndex = static_cast<i32>(std::distance(
+        kViewportCaptureResolutions.begin(),
+        std::find(
+            kViewportCaptureResolutions.begin(),
+            kViewportCaptureResolutions.end(),
+            options.viewportCaptureResolution)));
+    if (context.Combo(
+            "Viewport capture resolution##profiler-capture-resolution",
+            kViewportCaptureResolutions,
+            captureResolutionIndex))
+    {
+        options.viewportCaptureResolution =
+            kViewportCaptureResolutions[static_cast<std::size_t>(captureResolutionIndex)];
+        changed = true;
+    }
     static constexpr std::array<std::string_view, 2> kGroupings{
         "By thread", "By core"};
     i32 grouping = options.grouping == ProfilerGrouping::Threads ? 0 : 1;

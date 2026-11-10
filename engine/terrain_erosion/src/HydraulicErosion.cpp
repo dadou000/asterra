@@ -289,6 +289,12 @@ bool HydraulicErosionConfig::IsValid() const noexcept
         timeStepSeconds > 0.0 &&
         std::isfinite(rainfallMetersPerSecond) &&
         rainfallMetersPerSecond >= 0.0 &&
+        std::isfinite(seasonalRainfallAmplitude) &&
+        seasonalRainfallAmplitude >= 0.0 &&
+        seasonalRainfallAmplitude <= 1.0 &&
+        std::isfinite(seasonalRainfallPeriodSeconds) &&
+        seasonalRainfallPeriodSeconds > 0.0 &&
+        std::isfinite(seasonalRainfallPhaseRadians) &&
         std::isfinite(gravityMetersPerSecondSquared) &&
         gravityMetersPerSecondSquared > 0.0 &&
         std::isfinite(pipeCrossSectionSquareMeters) &&

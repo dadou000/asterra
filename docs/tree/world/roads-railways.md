@@ -1,0 +1,74 @@
++++
+path = "/world/roads-railways"
+title = "Roads, railways and supported infrastructure: canonical specification"
+kind = "subsystem"
+status = "planned"
+summary = "Canonical architectural contract for Orbit's unified, editable road/rail/path infrastructure: authored networks, alignment, terrain and structural construction, frame-aware dynamics, persistence, editor automation and planet-scale LOD."
+keywords = ["roads", "railways", "infrastructure", "corridors", "alignment", "terrain grading", "moving frames", "bridges", "tunnels"]
+related = ["/world/paths", "/world/path-geometry", "/world/path-routing", "/editor/studio-ui/debug-center", "/world/roads-railways/alignment", "/world/roads-railways/construction", "/world/roads-railways/runtime-validation", "/world/roads-railways/transport-foundations", "/world/roads-railways/spec-completeness", "/world/roads-railways/road-junction-construction", "/world/roads-railways/pipeline", "/world/roads-railways/vehicle-world", "/world/roads-railways/editor-builder"]
++++
+
+# Status and provenance
+
+This is the **single canonical design specification**, consolidating user requirements from the Orbit roads/railways discussions and existing engine architecture. This is **not** an assertion that every feature below is implemented. The subdocuments distinguish architectural requirements from implementation sequencing. Any new road/rail feature should update these blocks and the owning module's documentation. User-established constraints take priority over implementation suggestions.
+
+## Product intent / non-negotiables
+
+1. **One unified corridor/network system** for roads, railways and reusable path infrastructure, not separate incompatible generators. Shared alignment, references, cross-section machinery, construction layers, terrain integration, caching, and authoring; mode-specific engineering rules, operating logic and assets.
+2. **Works on terrain AND on supported construction.** A road may lie on bedrock, a bridge, a viaduct, an upper deck, a moving ship or vehicle platform. Surface ownership and support are explicit—not inferred from a terrain raycast.
+3. **Authoring by nodes and curves.** Direct lines, editable Bézier/spline handles, terrain-aware routed paths, controllable arcs, smooth joins, split/merge/branch/junction edits. Curve evaluation and arc length must be stable.
+4. **Engineering assistance without loss of control.** User-selectable width, cross-section, grade, curve radius, transition, banking/superelevation, railway cant, surface and wear. Automatic speed-aware radius/slope transitions, curve easing and rail cant with useful previews/warnings; advanced override remains available.
+5. **Real physical geometry and contact.** Render surfaces, collision/contact and practical operating geometry must agree. Rail profile, wheel/rail contact, road cambers, ruts, cracks, potholes, sleepers and transitions can change actual contact where scale requires it; visual-only decoration is explicitly marked.
+6. **Construction changes the world coherently.** Cut/fill, embankments, retaining systems, bridge piers, tunnel excavation, foundation support, drainage, water interaction and adjacent terrain must share one authoritative composition order with nondestructive authored edits.
+7. **Player- and NPC-usable at game scale.** Vehicles, trains, AI routing, crossings, stations, signals, carriageways, sidewalks, parking, maintenance/damage and evolving infrastructure. Game-sensible simulation LOD rather than uniform expensive physical simulation.
+8. **Planet-scale streaming.** Authored network persists while disposable visual/physical outputs stream according to observer and activity. Far geometry is cheap; local fidelity stays high. No global re-bake for a local road edit.
+9. **Moving hierarchical reference frames.** A car aboard a cruise ship, a passenger within a train, a vehicle on a ferry or movable platform must behave coherently through support-frame changes, velocity and acceleration. Never assume every road is fixed to a planet.
+10. **Studio-first usability.** Fast contextual UI, previews, undo/redo, draggable control points, quality-of-life automation, tests in **Debug**, plus parity through supported RPC/MCP commands. Never a separate editor/launcher.
+
+## Domain ownership and data flow
+
+**Persistent source of truth:** `engine/paths` semantic `PathNetworkRecord`, profiles, nodes, edges, anchors, revisions and operations. An infrastructure record adds mode rules and construction intent; do not duplicate coordinates across runtime and render subsystems.
+
+**Derived caches:** `engine/path_geometry` alignment samples, lane/track references, swept cross-sections, junction patches; `path_routing` terrain-aware preferred alignment; `studio_session` construction registry, rebuild scheduling and residency; `terrain` composed material/surface changes; `terrain_gpu` physical-page products; distinct collision/nav and render caches. Derived outputs must be reproducible and disposable.
+
+Conceptual dependency chain:
+`Authored network + profile + support/constraints + time` → `resolved alignment & engineering checks` → `construction plan (cut/fill/structures)` → `authoritative surface/contact and drainage` → `meshes / physics / lane-rail graph / navigation / LOD` → `runtime and viewport`.
+
+The renderer never authors its own road geometry. Network graph, route and collision are separate representations with shared IDs and revision fingerprints. Stage results atomically: old valid generation remains visible while a replacement builds.
+
+## Explicit status boundary (Harmony 0.1.1)
+
+**Source modules exist:** `engine/paths`, `engine/path_geometry` (including `CorridorSweep`, `CorridorTerrainSource`), `studio_session/CorridorConstructionRegistry`, and physical-page GPU terrain integration. They are partial foundations, **not proof** of end-to-end roads/railways, structural/floating support, traffic, vehicle dynamics, junctions or full test UI. A prior Debug terrain sanity test only checks page publication/revision/one finite sample; it does not validate a road, rail or collision outcome. Integration compilation and performance validation are still mandatory.
+
+## Canonical detailed blocks
+
+- [Alignment, network and design rules](roads-railways/alignment.md)
+- [Construction, surface, infrastructure and representation](roads-railways/construction.md)
+- [Runtime, frame physics, editor UX, validation and staged delivery](roads-railways/runtime-validation.md)
+- [Implemented transport section and topology foundations](roads-railways/transport-foundations.md)
+- [Specification completeness, implementation evidence and acceptance gates](roads-railways/spec-completeness.md)
+- [Road junction trimmed construction product, exact seams and collision](roads-railways/road-junction-construction.md)
+- [Production pipeline architecture: graph → geometry → immutable scene packet → GPU/physics/navigation](roads-railways/pipeline.md)
+- [Transient road vehicle world, fixed stepping and explicit lane-route guidance](roads-railways/vehicle-world.md)
+
+No independent road/rail specification may silently supersede this root. New component documents should link back here and state scope.
+
+## Harmony implementation increment — shared road/rail sections and topology
+
+A new pure CPU layer in engine/path_geometry generates configurable road cross-sections and railway formation/railhead strips, with consistent cant-aware railhead contact references and bounded sleeper instance placement. A separate mode-aware network topology compiler processes stable node/edge IDs, produces directed arcs and connected components, validates broken links, and identifies intentional road/rail crossings without permitting road-to-rail navigation transfer. These functions do not mutate persisted path objects.
+
+These are foundations, not yet editor-visible placement, structural construction, actual rail-wheel dynamics, junction/switch mesh generation or headless integration with Studio RPC. Actual build and runtime smoke validation are pending. See the linked transport-foundations block.
+
+## Traceability policy
+
+The [spec-completeness matrix](roads-railways/spec-completeness.md) is the authoritative checklist for design coverage versus running features. Each requirement maps to a domain owner, working integration, test fixture and remaining acceptance gate; new work updates that matrix in the same change. Semantic domain operations remain separate from mesh/collision previews. A successful GitHub push, registered test target or editor control is not a verified physical subsystem.
+
+## Pipeline-level architecture implementation
+
+The production chain now goes beyond individual CPU preview objects: StudioSession builds an immutable per-frame road-junction publication set from raw path products and semantic incidence, merging two junction cuts on a shared road into one retained surface, contact and trimmed lane graph. The path geometry RPC can read the packet's replaced edge product. The package has a deterministic generation signature and explicit lifecycle invalidation; it remains distinct from the raw cache to prevent double trimming.
+
+**No Vulkan upload, runtime physics shape cooking, traffic dispatcher or end-to-end driving acceptance is implied by this CPU publication.** The precise owner, stage-by-stage contracts, next handoff types and gates are in [pipeline.md](roads-railways/pipeline.md).
+
+## Cities-style road authoring surface
+
+[Procedural Paths & Roads](roads-railways/editor-builder.md) is reachable through Build → Procedurals → Procedural Paths & Roads, or the Procedurals landing page. This opens the same docked panel as the expert infrastructure editor with a focused palette: five genuine road-width presets, ballasted rail and reference paths, cross-section preview, straight/Bezier/routed construction, ground/structural intent, design-speed and endpoint-snap controls, and a Start/Finish viewport-placement action. Multiple successive viewport clicks create a connected authored path chain in undoable transactions, using existing PathNetworkService authority. Native corridor construction receives body-fixed FramePoint anchors instead of unsupported surface anchors for this specific builder. Physical terrain-height matching, bridge/tunnel assembly and genuine City Skylines-style upgrade/demolish/road snapping are not implied.

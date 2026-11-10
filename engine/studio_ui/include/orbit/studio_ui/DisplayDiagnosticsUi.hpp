@@ -47,6 +47,12 @@ public:
     void Register(
         editor_ui::EditorUi& ui);
 
+    // Reuses the full renderer settings body in contextual Properties so the
+    // Explorer's virtual Lighting / Renderer item edits the same state.
+    void DrawRendererProperties(
+        editor_ui::PanelContext& context,
+        std::string_view viewportId = "studio.primary");
+
 private:
     // M40 preserves the M23-M29 diagnostics/control implementation and layers
     // project defaults + session lighting overrides around it.
@@ -55,12 +61,14 @@ private:
     void DrawViewportBase(
         editor_ui::PanelContext& context,
         std::string_view viewportId,
-        std::string_view label);
+        std::string_view label,
+        bool includeEyeAdaptation = true);
 
     void DrawViewport(
         editor_ui::PanelContext& context,
         std::string_view viewportId,
-        std::string_view label);
+        std::string_view label,
+        bool includeEyeAdaptation = true);
 
     StudioViewportRenderer* renderer_{nullptr};
     studio_session::StudioSession* inspectionSession_{nullptr};

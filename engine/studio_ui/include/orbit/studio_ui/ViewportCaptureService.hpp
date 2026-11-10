@@ -62,6 +62,9 @@ public:
         std::function<void(bool)> setSimulationPlaying;
         // True while the renderer still has terrain/streaming work pending.
         std::function<bool()> busy;
+        // Surface debug channels: 0=lit, 1=albedo, 2=normal, 3=emission.
+        std::function<u32()> debugMode;
+        std::function<void(u32)> setDebugMode;
         // Shows a folder or file in the platform file browser.
         std::function<void(const std::filesystem::path&)> openPath;
     };
@@ -73,7 +76,8 @@ public:
         Fullscreen,
         // 16K on the long side (15360 px), keeping the viewport's aspect.
         Ultra,
-        Custom
+        Custom,
+        AtmosphereDebug
     };
 
     struct Request
@@ -168,11 +172,13 @@ private:
         Settling,
         // Tiled capture: frames for the current tile.
         TileSettling,
+        DebugSettling,
         Restoring
     };
 
     void BeginTiles();
     void ShootTile();
+    void ShootDebugPanel();
     void Finish(std::string error);
     void ReleaseHolds();
 
@@ -193,6 +199,9 @@ private:
     std::string error_;
 
     bool tiled_{false};
+    u32 originalDebugMode_{0};
+    u32 debugPanel_{0};
+    std::vector<u8> debugComposite_;
     TilePlan plan_;
     std::size_t tileIndex_{0};
     std::vector<u8> output_;

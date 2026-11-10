@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <memory>
 
 namespace
 {
@@ -153,6 +154,56 @@ int main()
     if (std::abs(coarse.elevationMeters) > 1.0e-12)
     {
         std::cerr << "Terrain footprint filtering failed.\n";
+        return 1;
+    }
+
+    auto geologyPlanet = planet;
+    geologyPlanet.id = {.high = 0x47454F4C4F475930ULL, .low = 1U};
+    auto geologyDesc = orbit::terrain::AnalyticTerrainDesc{
+        .seed = 12345,
+        .macroAmplitudeMeters = 0.0,
+        .macroWavelengthMeters = 1'000'000.0,
+        .detailAmplitudeMeters = 0.0,
+        .detailWavelengthMeters = 1'000.0,
+        .detailOctaves = 0,
+        .global = {
+            .continentalAmplitudeMeters = 0.0,
+            .continentalBiasMeters = 0.0,
+            .mountainAmplitudeMeters = 0.0
+        },
+        .craters = {.enabled = false}
+    };
+    auto history = std::make_shared<orbit::terrain_impacts::ImpactFieldDefinition>();
+    history->id = {.high = 0x47454F4C4F475931ULL, .low = 1U};
+    history->planet = geologyPlanet.id;
+    history->name = "terrain source integration";
+    history->procedural = {.count = 0U};
+    history->authoredImpacts.push_back({
+        .id = {.high = 0x47454F4C4F475932ULL, .low = 1U},
+        .centerUnitDirection = terrainDirection,
+        .radiusMeters = 45'000.0,
+        .ageOrder = 1U
+    });
+    auto integratedDesc = geologyDesc;
+    integratedDesc.impactHistory = history;
+    const orbit::terrain::AnalyticTerrainSource unmodifiedTerrain(
+        geologyPlanet, geologyDesc);
+    const orbit::terrain::AnalyticTerrainSource integratedTerrain(
+        geologyPlanet, integratedDesc);
+    const auto unmodifiedSample = unmodifiedTerrain.Sample({
+        .unitDirection = terrainDirection,
+        .footprintMeters = 10.0
+    });
+    const auto integratedSample = integratedTerrain.Sample({
+        .unitDirection = terrainDirection,
+        .footprintMeters = 10.0
+    });
+    if (integratedTerrain.Revision() == unmodifiedTerrain.Revision() ||
+        !(integratedSample.elevationMeters < unmodifiedSample.elevationMeters - 100.0) ||
+        !(integratedSample.impactProcesses.excavationDepthMeters > 1'000.0) ||
+        integratedSample.impactProcesses.exposureAgeOrder == 0U)
+    {
+        std::cerr << "Chronological impact history was not integrated into analytic terrain sampling.\n";
         return 1;
     }
 

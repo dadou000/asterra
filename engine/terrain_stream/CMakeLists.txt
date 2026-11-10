@@ -1,5 +1,4 @@
 add_library(OrbitTerrainStream STATIC
-    src/UniformPlanetMesh.cpp
     src/TerrainMorphRefresh.cpp
     src/TerrainSampleStreamer.cpp
     src/ToroidalResidency.cpp

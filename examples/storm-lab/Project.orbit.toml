@@ -1,0 +1,16 @@
+asset_mount_points = [ 'Content' ]
+plugins = []
+script_entry_points = []
+
+[project]
+engine_compatibility = '0.0.7'
+id = 'c0a5e1b2-5707-4a1d-9c3e-570a0b1ab001'
+name = 'Storm Lab'
+schema_version = 1
+startup_world = 'Worlds/Main.orbitworld'
+
+[[build_profiles]]
+configuration = 'Development'
+name = 'Development Windows'
+platform = 'Windows'
+storefront = 'standalone'

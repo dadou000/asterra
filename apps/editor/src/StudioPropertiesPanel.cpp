@@ -1,0 +1,760 @@
+#include "StudioPanels.hpp"
+
+#include "EditorAppSupport.hpp"
+
+#include <orbit/build/BuildService.hpp>
+#include <orbit/commands/CommandRegistry.hpp>
+#include <orbit/commands/CommandService.hpp>
+#include <orbit/content/ContentService.hpp>
+#include <orbit/content/RuntimeTexture.hpp>
+#include <orbit/content_wic/WicTextureImporter.hpp>
+#include <orbit/core/Log.hpp>
+#include <orbit/core/ThreadName.hpp>
+#include <orbit/dev_server/DevServer.hpp>
+#include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/documents/WorldDatabase.hpp>
+#include <orbit/editor_model/AuthoringCommands.hpp>
+#include <orbit/editor_model/BuiltinSchemas.hpp>
+#include <orbit/editor_model/CommandSurfaces.hpp>
+#include <orbit/editor_model/ExplorerModel.hpp>
+#include <orbit/editor_model/InspectorModel.hpp>
+#include <orbit/editor_model/OutputLog.hpp>
+#include <orbit/editor_model/ShortcutRegistry.hpp>
+#include <orbit/editor_model/SurfaceAuthoringModel.hpp>
+#include <orbit/editor_rpc/EditorRpcService.hpp>
+#include <orbit/editor_rpc/ProfilerRpc.hpp>
+#include <orbit/editor_ui/BodyPreviewRenderer.hpp>
+#include <orbit/editor_ui/EditorUi.hpp>
+#include <orbit/frames/FrameGraph.hpp>
+#include <orbit/jobs/JobSystem.hpp>
+#include <orbit/lighting/LightingScheduler.hpp>
+#include <orbit/lighting/MaterialEmission.hpp>
+#include <orbit/path_geometry/PathDerived.hpp>
+#include <orbit/path_geometry/PathSource.hpp>
+#include <orbit/path_routing/RouteDomains.hpp>
+#include <orbit/path_routing/RoutePlanner.hpp>
+#include <orbit/paths/PathNetwork.hpp>
+#include <orbit/platform/FileBrowser.hpp>
+#include <orbit/platform/FileDialog.hpp>
+#include <orbit/platform/Paths.hpp>
+#include <orbit/platform_services/PlatformConfig.hpp>
+#include <orbit/plugins/PluginManager.hpp>
+#include <orbit/profiler/Profiler.hpp>
+#include <orbit/render_graph/GpuPassTimer.hpp>
+#include <orbit/render_graph/RenderGraph.hpp>
+#include <orbit/render_view/Capture.hpp>
+#include <orbit/render_view/RenderView.hpp>
+#include <orbit/rhi/vulkan/VulkanBackend.hpp>
+#include <orbit/rpc/JsonRpc.hpp>
+#include <orbit/runtime/RuntimeSession.hpp>
+#include <orbit/scene/ObjectStore.hpp>
+#include <orbit/schema/SchemaRegistry.hpp>
+#include <orbit/selection/SelectionService.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <orbit/shading/MaterialThumbnailCache.hpp>
+#include <orbit/shading/ShaderPreviewRenderer.hpp>
+#include <orbit/shading/ShadingCapture.hpp>
+#include <orbit/shading/ShadingRpc.hpp>
+#include <orbit/shading/ShadingWorkspace.hpp>
+#include <orbit/studio_session/StudioRuntimeBinding.hpp>
+#include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
+#include <orbit/studio_session/StudioWorkspace.hpp>
+#include <orbit/studio_ui/CelestialAuthoringUi.hpp>
+#include <orbit/studio_ui/DebugViewUi.hpp>
+#include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
+#include <orbit/studio_ui/DisplayEyeRpc.hpp>
+#include <orbit/studio_ui/ProfilerUi.hpp>
+#include <orbit/studio_ui/ProjectAuthoringUi.hpp>
+#include <orbit/studio_ui/ProjectSettingsUi.hpp>
+#include <orbit/studio_ui/ReportThumbnailCache.hpp>
+#include <orbit/studio_ui/ReportsUi.hpp>
+#include <orbit/studio_ui/ShadingUi.hpp>
+#include <orbit/studio_ui/SimulationControlsUi.hpp>
+#include <orbit/studio_ui/StudioFlatMapRpc.hpp>
+#include <orbit/studio_ui/StudioRenderViewRpc.hpp>
+#include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/studio_ui/StudioTextDiagnosticsHud.hpp>
+#include <orbit/studio_ui/StudioViewContinuity.hpp>
+#include <orbit/studio_ui/StudioViewportPanels.hpp>
+#include <orbit/studio_ui/StudioViewportRenderer.hpp>
+#include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
+#include <orbit/studio_ui/SystemViewUi.hpp>
+#include <orbit/studio_ui/ViewportCaptureService.hpp>
+#include <orbit/studio_ui/VolumeAuthoringUi.hpp>
+#include <orbit/studio_ui/WorldDocumentsUi.hpp>
+#include <orbit/universe/BodyRegistry.hpp>
+#include <orbit/universe/ReferenceSurface.hpp>
+#include <orbit/volume_fields/VolumeFieldStorage.hpp>
+#include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
+#include <orbit/world_model/MaterialAssignmentBinding.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <cstring>
+#include <filesystem>
+#include <format>
+#include <functional>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+namespace orbit::editor_app
+{
+using namespace support;
+
+void StudioPropertiesPanel::Register()
+{
+    ui.RegisterPanel({
+        .id = kPropertiesPanel,
+        .title = "Properties",
+        .defaultOpen = true,
+        .defaultDock = orbit::editor_ui::DockRegion::Right,
+        .dockOrder = 0,
+        .draw =
+            [this](
+                orbit::editor_ui::
+                    PanelContext& context)
+            {
+                const auto selected = worldSession.HasWorld()
+                    ? inspector().SelectedObjects()
+                    : std::vector<orbit::scene::ObjectRecord>{};
+
+                if (selected.empty() &&
+                    inspectorTarget.kind ==
+                        StudioInspectorTargetKind::ViewportCamera)
+                {
+                    context.Heading("Viewport Camera");
+                    context.MutedText(
+                        "Protected viewport camera · changes affect the active view.");
+                    f64 fov = studioViews.CameraFovDegrees(
+                        inspectorTarget.viewId);
+                    if (context.InputDouble("Vertical FOV (degrees)", fov))
+                    {
+                        try
+                        {
+                            static_cast<void>(studioViews.SetCameraFovDegrees(
+                                inspectorTarget.viewId, fov));
+                        }
+                        catch (const std::exception& exception)
+                        {
+                            context.ErrorText(exception.what());
+                        }
+                    }
+                    f64 focalLength = studioViews.CameraFocalLengthMillimeters(
+                        inspectorTarget.viewId);
+                    if (context.InputDouble("Focal Length (mm)", focalLength))
+                    {
+                        try
+                        {
+                            static_cast<void>(
+                                studioViews.SetCameraFocalLengthMillimeters(
+                                    inspectorTarget.viewId, focalLength));
+                        }
+                        catch (const std::exception& exception)
+                        {
+                            context.ErrorText(exception.what());
+                        }
+                    }
+                    context.KeyValue("Sensor height", "24 mm (full-frame)");
+                    context.MutedText(
+                        "FOV and focal length are linked; both use the viewport camera lens.");
+                    return;
+                }
+
+                if (selected.empty() &&
+                    (inspectorTarget.kind ==
+                         StudioInspectorTargetKind::LightingRenderer ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::GlobalIllumination ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::AntiAliasing ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::DirectLighting ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::Reflections ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::AtmosphereLighting ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::CloudLighting ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::SurfaceLighting ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::LightingDiagnostics))
+                {
+                    context.Heading("Lighting / Renderer");
+                    auto layers = studioViews.TerrainLayers(
+                        inspectorTarget.viewId);
+                    bool changed = false;
+                    const bool showGlobalIllumination =
+                        inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind ==
+                            StudioInspectorTargetKind::GlobalIllumination;
+                    const bool showAntiAliasing =
+                        inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind ==
+                            StudioInspectorTargetKind::AntiAliasing;
+                    const bool showDirectLighting = inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::DirectLighting;
+                    const bool showReflections = inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::Reflections;
+                    const bool showAtmosphere = inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::AtmosphereLighting;
+                    const bool showClouds = inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::CloudLighting;
+                    const bool showSurface = inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::SurfaceLighting;
+
+                    if (showGlobalIllumination)
+                    {
+                        context.Text("Global Illumination");
+                        f64 giIntensity = layers.giIntensity;
+                        changed |= context.InputDouble(
+                            "GI Intensity (0–16)", giIntensity);
+                        f64 renderScale = layers.renderScale;
+                        changed |= context.InputDouble(
+                            "Render scale (0.25–1)", renderScale);
+                        if (std::isfinite(renderScale))
+                        {
+                            layers.renderScale = static_cast<orbit::f32>(
+                                std::clamp(renderScale, 0.25, 1.0));
+                        }
+                        changed |= context.Checkbox(
+                            "GI Only View", layers.giOnlyView);
+                        changed |= context.Checkbox(
+                            "Indirect Coverage View",
+                            layers.indirectCoverageView);
+                        if (std::isfinite(giIntensity))
+                        {
+                            layers.giIntensity = static_cast<orbit::f32>(
+                                std::clamp(giIntensity, 0.0, 16.0));
+                        }
+                    }
+
+                    if (showAntiAliasing)
+                    {
+                        context.Separator();
+                        context.Text("Anti-Aliasing");
+                        static constexpr std::array<
+                            orbit::editor_ui::ToolbarChoice, 3> modes{{
+                            {"Off", orbit::editor_ui::ToolbarIcon::More},
+                            {"FXAA", orbit::editor_ui::ToolbarIcon::AntiAliasing},
+                            {"TAA", orbit::editor_ui::ToolbarIcon::Layers}}};
+                        i32 mode = static_cast<i32>(layers.antiAliasing);
+                        if (context.ToolbarChoices(
+                                "renderer-antialiasing", modes, mode))
+                        {
+                            layers.antiAliasing = static_cast<orbit::u8>(
+                                std::clamp(mode, 0, 2));
+                            changed = true;
+                        }
+                        context.MutedText(
+                            "TAA uses temporal history and falls back to FXAA while history is unavailable.");
+                    }
+
+                    const auto drawBypass = [&context, &changed](
+                        const char* label, bool& value)
+                    {
+                        const bool bypass = value;
+                        bool contributes = !bypass;
+                        if (context.Checkbox(label, contributes))
+                        {
+                            value = !contributes;
+                            changed = true;
+                        }
+                    };
+                    if (showDirectLighting)
+                    {
+                        context.Separator();
+                        context.Text("Direct Lighting & Shadows");
+                        context.Separator();
+                        context.Text("Atmosphere Integrator Council (temporary)");
+                        context.MutedText("Compare at identical camera, time and fixed exposure.");
+                        auto atmosphereAuditSwitch = [&](const char* label, u8 mode)
+                        {
+                            bool selected = layers.atmosphereAuditMode == mode;
+                            if (context.Checkbox(label, selected))
+                            {
+                                layers.atmosphereAuditMode = selected ? mode : 0U;
+                                changed = true;
+                            }
+                        };
+                        atmosphereAuditSwitch("1. Direct scattering only##atm-audit-direct", 1U);
+                        atmosphereAuditSwitch("2. Multiple scattering only##atm-audit-multi", 2U);
+                        atmosphereAuditSwitch("3. Solar shadow interval##atm-audit-shadow", 3U);
+                        atmosphereAuditSwitch("4. View-ray sample spacing##atm-audit-spacing", 4U);
+                        changed |= context.Checkbox("Atmosphere radiance only##atm-audit-radiance",
+                            layers.atmosphereAuditRadianceOnly);
+                        context.MutedText("All modes off = baseline; 3/4 replace the atmosphere output.");
+                        context.Separator();
+                        context.Text("Experimental Sun Authority Council (temporary)");
+                        context.MutedText("Exclusive A/B tests. All off restores original lighting.");
+                        context.MutedText("Colored stripe at top left confirms the method reached this viewport.");
+                        auto auditSwitch = [&](const char* label, u8 method)
+                        {
+                            bool enabled = layers.sunAuditMethod == method;
+                            if (context.Checkbox(label, enabled))
+                            {
+                                layers.sunAuditMethod = enabled ? method : 0U;
+                                changed = true;
+                            }
+                        };
+                        auditSwitch("1. Finite-disc planet occlusion##sun-audit-disc", 1U);
+                        changed |= context.Checkbox("Debug 1: boundary + G-buffer validity##sun-audit-d1",
+                            layers.sunAuditDiscDebug);
+                        auditSwitch("2. Body-fixed terrain sun rays##sun-audit-relief", 2U);
+                        changed |= context.Checkbox("Debug 2: terrain/planet/field validity##sun-audit-d2",
+                            layers.sunAuditReliefDebug);
+                        auditSwitch("3. Separate direct vs sky/GI sources##sun-audit-sources", 3U);
+                        changed |= context.Checkbox("Debug 3: full scene R=luminance G=metadata B=depth##sun-audit-d3",
+                            layers.sunAuditSourcesDebug);
+                        context.MutedText("Debug 1/2 isolate shadow geometry; Debug 3 inspects full scene inputs.");
+                        context.Separator();
+                        f64 softness = layers.meshShadowSoftness;
+                        changed |= context.InputDouble("Sun Shadow Softness", softness);
+                        if (std::isfinite(softness))
+                        {
+                            layers.meshShadowSoftness = static_cast<orbit::f32>(
+                                std::clamp(softness, 0.0, 8.0));
+                        }
+                        drawBypass("Cloud Shadows", layers.bypassCloudShadow);
+                        drawBypass("Proxy Sun Shadows", layers.bypassProxySunShadow);
+                        drawBypass("Sky Cache Fill", layers.bypassSkyCache);
+                        drawBypass("Visibility Proxy Surfaces", layers.bypassProxySurfaces);
+                        drawBypass("Imported Mesh Surfaces", layers.bypassMeshSurfaces);
+                    }
+                    if (showReflections)
+                    {
+                        context.Separator();
+                        context.Text("Reflections & Indirect Lighting");
+                        drawBypass("Indirect Lighting", layers.bypassIndirectLighting);
+                        drawBypass("Hybrid Reflections", layers.bypassHybridReflections);
+                        drawBypass("Radiance Cache Fallback", layers.bypassRadianceCache);
+                        drawBypass("SDF GI Fallback", layers.bypassSdfGi);
+                        drawBypass("SDF Terrain Contribution", layers.bypassSdfTerrain);
+                        drawBypass("SDF Proxy Contribution", layers.bypassSdfProxies);
+                    }
+                    if (showAtmosphere)
+                    {
+                        context.Separator();
+                        context.Text("Atmosphere");
+                        bool atmosphere = !layers.bypassAtmosphere;
+                        if (context.Checkbox("Atmosphere Enabled", atmosphere))
+                        {
+                            layers.bypassAtmosphere = !atmosphere;
+                            changed = true;
+                        }
+                        changed |= context.Checkbox(
+                            "Terrain-Occluded Sunlight (Experimental)##atmosphere-terrain-occlusion",
+                            layers.terrainOccludedAtmosphere);
+                        context.MutedText(
+                            "Body-fixed mountain shadows in atmospheric direct scattering. "
+                            "Indirect sky scattering remains; no timewarp catch-up.");
+                    }
+                    if (showClouds)
+                    {
+                        context.Separator();
+                        context.Text("Cloud Lighting");
+                        changed |= context.Checkbox("Clouds Enabled", layers.clouds);
+                        changed |= context.Checkbox("Temporal Accumulation", layers.cloudTemporal);
+                        changed |= context.Checkbox("Cloud Light Volume", layers.cloudLightVolume);
+                        f64 resolution = layers.cloudResolutionScale;
+                        f64 godrays = layers.cloudGodrayStrength;
+                        changed |= context.InputDouble("Resolution Scale", resolution);
+                        changed |= context.InputDouble("Godray Strength", godrays);
+                        if (std::isfinite(resolution)) layers.cloudResolutionScale = static_cast<orbit::f32>(std::clamp(resolution, 0.25, 1.0));
+                        if (std::isfinite(godrays)) layers.cloudGodrayStrength = static_cast<orbit::f32>(std::clamp(godrays, 0.0, 2.0));
+                        drawBypass("Cloud Shadows", layers.bypassCloudShadow);
+
+                        // Split view: the left of the viewport uses the cloud defines in use, the right these. The same operation
+                        // as clouds.split_set; the divider is dragged in the viewport.
+                        context.Separator();
+                        context.Text("Cloud Split View (A | B)");
+                        static std::string splitDefines;
+                        static bool splitDefinesSeeded = false;
+                        static std::string splitError;
+                        if (!splitDefinesSeeded)
+                        {
+                            splitDefines = studioViewportRenderer.CloudSplitDefines();
+                            splitDefinesSeeded = true;
+                        }
+                        bool splitOn = studioViewportRenderer.CloudSplitEnabled();
+                        if (context.Checkbox("Split View", splitOn))
+                        {
+                            splitError = studioViewportRenderer.SetCloudSplit(
+                                splitOn, splitDefines, studioViewportRenderer.CloudSplitPosition());
+                        }
+                        (void)context.InputText("B Defines", splitDefines);
+                        if (context.Button("Apply B Defines"))
+                        {
+                            splitError = studioViewportRenderer.SetCloudSplit(
+                                splitOn, splitDefines, studioViewportRenderer.CloudSplitPosition());
+                        }
+                        f64 splitPosition = studioViewportRenderer.CloudSplitPosition();
+                        if (context.SliderDouble("Divider", splitPosition, 0.02, 0.98))
+                        {
+                            splitError = studioViewportRenderer.SetCloudSplit(
+                                splitOn, splitDefines, static_cast<orbit::f32>(splitPosition));
+                        }
+                        context.MutedText(
+                            "A = Cloud Lighting defines in use (clouds.set_defines), B = the defines above, e.g. CLOUD_CHECKERBOARD=2;CLOUD_CB_CLAMP=1. Drag the white divider in the viewport.");
+                        if (!splitError.empty())
+                        {
+                            context.ErrorText("Split error: " + splitError);
+                        }
+                    }
+                    if (showSurface)
+                    {
+                        context.Separator();
+                        context.Text("Ocean & Surface Contributions");
+                        changed |= context.Checkbox("Ocean Enabled", layers.ocean);
+                        changed |= context.Checkbox("Surface Effects Enabled", layers.surfaceEffects);
+                        changed |= context.Checkbox("Production Surface", layers.productionSurface);
+                        drawBypass("Near Field Water", layers.bypassNearFieldWater);
+                    }
+
+                    if (changed)
+                    {
+                        studioViews.SetTerrainLayers(
+                            inspectorTarget.viewId, layers);
+                    }
+
+                    if (inspectorTarget.kind == StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::LightingDiagnostics)
+                    {
+                        context.Separator();
+                        displayDiagnosticsUi.DrawRendererProperties(
+                            context, inspectorTarget.viewId);
+                    }
+                    return;
+                }
+
+                if (selected.empty() &&
+                    inspectorTarget.kind ==
+                        StudioInspectorTargetKind::EyeAdaptation)
+                {
+                    context.Heading("Eye Adaptation");
+                    const auto diagnostics =
+                        studioViewportRenderer.LuminanceHistogramDiagnostics(
+                            inspectorTarget.viewId);
+                    if (!diagnostics.has_value())
+                    {
+                        context.MutedText(
+                            "Settings are available after this viewport renders its first metered frame.");
+                        return;
+                    }
+
+                    auto config = diagnostics->eyeConfig;
+                    bool changed = false;
+                    changed |= context.Checkbox(
+                        "Highlight Protection", config.highlightProtection);
+
+                    f64 glareThreshold = config.glareThresholdNits;
+                    changed |= context.InputDouble(
+                        "Glare Threshold (nits)", glareThreshold);
+                    f64 highlightAttack = config.highlightAttackSeconds;
+                    changed |= context.InputDouble(
+                        "Highlight Attack (seconds)", highlightAttack);
+                    f64 daylightAdaptation = config.daylightAdaptationNits;
+                    changed |= context.InputDouble(
+                        "Daylight Adaptation (nits)", daylightAdaptation);
+                    f64 maximumBoost = config.maximumBoostStops;
+                    changed |= context.InputDouble(
+                        "Maximum Boost (stops)", maximumBoost);
+                    f64 brightenSeconds = config.photopicBrightenSeconds;
+                    changed |= context.InputDouble(
+                        "Bright Adapt (seconds)", brightenSeconds);
+                    f64 darkenSeconds = config.photopicDarkenSeconds;
+                    changed |= context.InputDouble(
+                        "Darken Adapt (seconds)", darkenSeconds);
+                    f64 darkAdaptSeconds = config.darkAdaptSeconds;
+                    changed |= context.InputDouble(
+                        "Dark Adapt (seconds)", darkAdaptSeconds);
+
+                    if (changed)
+                    {
+                        const auto clampField = [](const f64 value,
+                                                   const f64 minimum,
+                                                   const f64 maximum)
+                        {
+                            return std::isfinite(value)
+                                ? std::clamp(value, minimum, maximum)
+                                : minimum;
+                        };
+                        config.glareThresholdNits = static_cast<orbit::f32>(
+                            clampField(glareThreshold, 1.0, 1.0e12));
+                        config.highlightAttackSeconds = static_cast<orbit::f32>(
+                            clampField(highlightAttack, 0.0, 60.0));
+                        config.daylightAdaptationNits = static_cast<orbit::f32>(
+                            clampField(daylightAdaptation, 1.0e-3, 1.0e9));
+                        config.maximumBoostStops = static_cast<orbit::f32>(
+                            clampField(maximumBoost, 0.0, 40.0));
+                        config.photopicBrightenSeconds = static_cast<orbit::f32>(
+                            clampField(brightenSeconds, 0.0, 600.0));
+                        config.photopicDarkenSeconds = static_cast<orbit::f32>(
+                            clampField(darkenSeconds, 0.0, 600.0));
+                        config.darkAdaptSeconds = static_cast<orbit::f32>(
+                            clampField(darkAdaptSeconds, 0.0, 3600.0));
+                        studioViewportRenderer.SetHumanEyeAdaptationConfig(
+                            inspectorTarget.viewId, config);
+                    }
+
+                    context.Separator();
+                    context.KeyValue(
+                        "Live exposure",
+                        std::format("{:.4f}", diagnostics->eyeState.exposureScale));
+                    context.KeyValue(
+                        "Brightest pixel",
+                        std::format("{:.1f} nits", diagnostics->eyeState.peakNits));
+                    return;
+                }
+
+                if (!worldSession.HasWorld())
+                {
+                    context.Text("No world is open.");
+                    return;
+                }
+
+                if (selected.empty())
+                {
+                    context.Text(
+                        "No selection");
+                    return;
+                }
+
+                context.Text(
+                    std::format(
+                        "{} object{} selected",
+                        selected.size(),
+                        selected.size() == 1
+                            ? ""
+                            : "s"));
+
+                const auto propertyActions =
+                    presentActions(
+                        "properties",
+                        orbit::editor_model::
+                            CommandSurfaceKind::
+                                Toolbar);
+
+                if (!propertyActions.empty())
+                {
+                    context.Toolbar(
+                        propertyActions);
+                }
+
+                context.Separator();
+
+                static_cast<void>(
+                    context.Checkbox(
+                        "Advanced Properties##properties-advanced",
+                        showAdvancedProperties));
+
+                if (!showAdvancedProperties)
+                {
+                    context.MutedText(
+                        "Advanced schema fields are hidden. Enable Advanced Properties to expose the full authoring contract.");
+                }
+
+                context.Separator();
+
+                for (auto property :
+                     inspector().CommonProperties())
+                {
+                    if (property.schema.advanced &&
+                        !showAdvancedProperties)
+                    {
+                        continue;
+                    }
+                    context.Text(
+                        std::format(
+                            "{}{}{}",
+                            property.schema.name,
+                            property.schema.unit.empty()
+                                ? ""
+                                : " [",
+                            property.schema.unit.empty()
+                                ? ""
+                                : property.schema.unit +
+                                    "]"));
+
+                    if (property.mixed)
+                    {
+                        context.Text(
+                            "<mixed>");
+                    }
+
+                    if (property.schema.readOnly)
+                    {
+                        context.Text(
+                            "<read only>");
+                        continue;
+                    }
+
+                    const std::string label =
+                        "##property-" +
+                        property.schema.id.
+                            ToString();
+
+                    bool changed = false;
+
+                    std::visit(
+                        [&](auto& value)
+                        {
+                            using Value =
+                                std::decay_t<
+                                    decltype(value)>;
+
+                            if constexpr (
+                                std::is_same_v<
+                                    Value,
+                                    bool>)
+                            {
+                                changed =
+                                    context.
+                                        Checkbox(
+                                            label,
+                                            value);
+                            }
+                            else if constexpr (
+                                std::is_same_v<
+                                    Value,
+                                    orbit::i64>)
+                            {
+                                changed =
+                                    context.
+                                        InputInteger(
+                                            label,
+                                            value);
+                            }
+                            else if constexpr (
+                                std::is_same_v<
+                                    Value,
+                                    orbit::f64>)
+                            {
+                                changed =
+                                    context.
+                                        InputDouble(
+                                            label,
+                                            value);
+                            }
+                            else if constexpr (
+                                std::is_same_v<
+                                    Value,
+                                    std::string>)
+                            {
+                                changed =
+                                    context.
+                                        InputText(
+                                            label,
+                                            value);
+                            }
+                            else if constexpr (
+                                std::is_same_v<
+                                    Value,
+                                    orbit::math::
+                                        Double3>)
+                            {
+                                changed =
+                                    context.
+                                        InputDouble3(
+                                            label,
+                                            value);
+                            }
+                            else
+                            {
+                                const orbit::scene::
+                                    ObjectId id{
+                                        .high =
+                                            value.high,
+                                        .low =
+                                            value.low
+                                    };
+
+                                context.Text(
+                                    id.IsValid()
+                                        ? id.ToString()
+                                        : "<none>");
+                            }
+                        },
+                        property.value);
+
+                    if (property.schema.id ==
+                            orbit::paths::
+                                kNetworkProfile ||
+                        property.schema.id ==
+                            orbit::paths::
+                                kEdgeProfileOverride)
+                    {
+                        if (const auto payload =
+                                context.AcceptDragPayload(
+                                    "ORBIT_ASSET");
+                            payload.has_value())
+                        {
+                            if (const auto assetId =
+                                    DecodeAssetId(
+                                        *payload);
+                                assetId.has_value())
+                            {
+                                const auto* asset =
+                                    content.Find(
+                                        *assetId);
+
+                                if (asset != nullptr &&
+                                    asset->kind ==
+                                        orbit::content::
+                                            AssetKind::PathProfile)
+                                {
+                                    property.value =
+                                        asset->id.
+                                            ToString();
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+
+                    if (changed)
+                    {
+                        try
+                        {
+                            inspector().
+                                SetForSelection(
+                                    property.schema.id,
+                                    property.value);
+                        }
+                        catch (
+                            const std::exception&
+                                exception)
+                        {
+                            orbit::log::Warning(
+                                exception.what());
+                        }
+                    }
+
+                    context.Separator();
+                }
+            }
+    });
+}
+} // namespace orbit::editor_app

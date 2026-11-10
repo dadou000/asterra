@@ -103,6 +103,10 @@ struct StudioTerrainLayerOptions
     // Ray-march the body's cloud layer in this view (ground to orbit). The
     // cloud field itself is still built and used for shadows/orbital globes.
     bool clouds{true};
+    // B1 experimental, independent System B GPU preview. This is NOT the
+    // finished A/B backend: its advanced sun cache, storm detail and temporal
+    // reconstruction have not yet been wired. A remains default and unchanged.
+    bool cloudBPreview{false};
     // Resolution of the cloud ray-march relative to the viewport, [0.25, 1]. The
     // default 0.5 marches at half resolution (cheap, soft); 1 marches every pixel
     // (crisp edges and fine detail, about four times the cost).
@@ -127,18 +131,72 @@ struct StudioTerrainLayerOptions
     bool bypassProxySunShadow{false};
     // Skips drawing authored Visibility Proxies as lit geometry (they stay invisible occluders).
     bool bypassProxySurfaces{false};
+    // Skips drawing imported Static Meshes (glTF/GLB) into the surface buffer.
+    bool bypassMeshSurfaces{false};
     // Skips the radiance cache's sky-only fill (sky irradiance occluded by terrain and proxies, added by direct lighting).
     bool bypassSkyCache{false};
     bool bypassIndirectLighting{false};
     bool bypassNearFieldWater{false};
     bool bypassAtmosphere{false};
+    // Body-fixed terrain visibility for direct air/cloud scattering.
+    bool terrainOccludedAtmosphere{true};
+    // Temporary per-viewport atmospheric integrator experiments.
+    // 0=original, 1=direct scattering only, 2=multiple scattering only,
+    // 3=shadow-interval diagnostic, 4=view-march step-size diagnostic.
+    u8 atmosphereAuditMode{0U};
+    bool atmosphereAuditRadianceOnly{false};
+    // Temporary, per-viewport sun-authority experiments (0 original,
+    // 1 analytic solar disc, 2 relief visibility, 3 source isolation).
+    u8 sunAuditMethod{0U};
+    bool sunAuditDiscDebug{false};
+    bool sunAuditReliefDebug{false};
+    bool sunAuditSourcesDebug{false};
     // Skips only the hybrid reflections stage (the final gather still runs); bypassIndirectLighting skips both.
     bool bypassHybridReflections{false};
+    // Smooth surfaces: one shared exact mesh scene for opaque reflections and
+    // analytic glass. Hardware is an optional traversal backend, same shading.
+    bool reflectionExactTriangles{true};
+    bool reflectionTemporal{true};
+    f32 reflectionMaximumRoughness{0.25F};
+    f32 reflectionDistanceMeters{40.0F};
+    u32 reflectionDebugView{0U}; // 0 scene, 1 radiance, 2 hit distance
+
     // Skips only the radiance-cache fallback that fills pixels the screen-space gather did not resolve.
     bool bypassRadianceCache{false};
     // Replaces the final gather's contribution with its coverage: red = confidence, green = gathered
     // brightness (log), magenta = the gather returned nothing for that pixel (it gets no indirect light).
     bool indirectCoverageView{false};
+    // Shows only the global illumination: the final gather and radiance-cache cascade light, with no
+    // direct sun, sky fill, emission or reflections. Needs indirect lighting on.
+    bool giOnlyView{false};
+    // Anti-aliasing of the HDR scene colour before tone mapping:
+    // 0 = off, 1 = FXAA, 2 = TAA (jittered camera, history reprojection; falls
+    // back to FXAA on frames without usable history). See post_process::AntiAliasingMode.
+    u8 antiAliasing{2U};
+    // Mesh distance-field debug view (sphere traces the merged field and shades it):
+    // 0 = off, 1 = shaded, 2 = step count heat map, 3 = distance, 4 = split (left SDF, right scene).
+    u8 sdfDebugView{0U};
+    // Skips the final gather's world-space fallback (rays the screen cannot resolve are traced
+    // through the mesh distance field), to compare with screen-space-only GI.
+    bool bypassSdfGi{false};
+    // Leave the terrain patch / Visibility Proxies out of the mesh distance
+    // field (A/B checks of what each contributes to the GI fallback).
+    bool bypassSdfTerrain{false};
+    bool bypassSdfProxies{false};
+    // Strength of the final gather's indirect light. The gather averages the radiance of what its
+    // rays hit and multiplies by albedo / pi, so a physically correct diffuse bounce
+    // (albedo x average radiance) needs pi here; lower values dim all gathered bounce light.
+    f32 giIntensity{1.0F};
+    // Internal render resolution as a fraction of the viewport panel (per axis, 0.25..1). Below 1
+    // the view renders fewer pixels and the panel shows it scaled up (bilinear): roughly 40% less
+    // GPU time at 0.75. 1 = native.
+    f32 renderScale{1.0F};
+    // Scales the TAA sub-pixel jitter (1 = full +-0.5 px, 0 = no jitter, which turns TAA into a
+    // plain temporal filter). Lower values trade anti-aliasing for less visible shimmer.
+    f32 taaJitterScale{1.0F};
+    // Multiplies the sun's angular size in the mesh sun shadow (PCSS): 1 = the real sun, 0 = hard
+    // shadows, larger values exaggerate the penumbra.
+    f32 meshShadowSoftness{1.0F};
     // > 0 draws a horizontal slice of the light volume at this altitude (metres) over the view as a
     // heatmap of the optical depth towards the sun (magenta = voxel not ready). 0 = off.
     f32 cloudVolumeDebugAltitude{0.0F};
@@ -150,6 +208,18 @@ struct StudioTerrainLayerOptions
     [[nodiscard]] constexpr bool operator==(
         const StudioTerrainLayerOptions&) const noexcept = default;
 };
+
+// A uses its existing macro-globe handoff. Independent System B always
+// permits a ray-marched atmosphere/cloud shell, including in orbital macro
+// mode. Keep the condition shared by main clouds AND receiver shadows so
+// the two passes cannot accidentally disagree about whether clouds exist.
+[[nodiscard]] constexpr bool ShouldRenderCloudVolume(
+    const StudioTerrainLayerOptions& layers) noexcept
+{
+    return layers.cloudBPreview ||
+        layers.fullClipmap ||
+        !layers.macroGlobe;
+}
 
 // The built cloud field of the view's target body (read-only diagnostics).
 struct StudioCloudReport

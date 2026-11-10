@@ -60,7 +60,8 @@ enum class TerrainRevisionDomain : u8
     Authoring,
     Biome,
     Water,
-    Processes
+    Processes,
+    HydrologyBoundary
 };
 
 // The only reasons a physical terrain product may be generated. A view may
@@ -83,6 +84,7 @@ struct TerrainGenerationRevisions
     u64 biome{0};
     u64 water{0};
     u64 processes{0};
+    u64 hydrologyBoundary{0};
 
     [[nodiscard]] constexpr bool operator==(
         const TerrainGenerationRevisions&) const noexcept = default;
@@ -106,6 +108,8 @@ struct TerrainGenerationRevisions
         return revisions.water;
     case TerrainRevisionDomain::Processes:
         return revisions.processes;
+    case TerrainRevisionDomain::HydrologyBoundary:
+        return revisions.hydrologyBoundary;
     }
 
     return 0;
@@ -166,6 +170,7 @@ struct PhysicalTerrainPageKey
     value = StableCombine64(value, revisions.biome);
     value = StableCombine64(value, revisions.water);
     value = StableCombine64(value, revisions.processes);
+    value = StableCombine64(value, revisions.hydrologyBoundary);
     return value;
 }
 

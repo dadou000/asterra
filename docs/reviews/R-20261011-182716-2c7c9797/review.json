@@ -1,0 +1,408 @@
+{
+ "id": "R-20261011-182716-2c7c9797",
+ "rubric": "v1",
+ "council": {
+  "title": "Cloud far-field early-out: skip noise fetches once the far-field blend has saturated",
+  "question": "Does skipping the point-sampled noise (base, billow, erosion fetches) for samples whose footprint has saturated baseBlend keep the image and cut Clouds cost?",
+  "chosen": "early",
+  "verdict": "Adopt the early-out, subject to one replicate with the launch order reversed. The image is the same in the four ground scenes (changed pixels inside the repeat-launch noise) and visually identical in orbit (8x difference image is nearly black, signed mean +0.08/255, 2239 vs 918 pixels over 6 for a repeat launch). Cost: frame time drifts upward with launch order (baseline 1st, early 2nd, repeats 3rd and 4th, each about 0.4 ms slower), so against the repeats early is 0.2 to 0.4 ms faster in the ground scenes, which is not resolved, but 1.2 ms (about 12 percent) faster in orbit, where the baseline was launched first and early still wins. It is the first change this session that cuts Clouds cost without removing a cloud. It is not exact (the noise mean replaces the sample in the tower-top height variation), so flip the default only with the old path one define away.",
+  "lenses": [
+   {
+    "name": "Ruthless Shader Artist",
+    "findings": "I cannot find the change in any of the five scenes, including the orbital storm cell and the horizon bank that the step-budget variants damaged. The 8x difference image shows speckle on cloud edges and nothing structured.",
+    "ratings": {
+     "baseline": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "reference"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "reference"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "reference"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "none seen"
+      ],
+      "scale_depth": [
+       8,
+       "medium",
+       "horizon bank intact"
+      ]
+     },
+     "early": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "indistinguishable"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "same"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "no new artefact in stills; temporal behaviour not assessable"
+      ],
+      "scale_depth": [
+       8,
+       "medium",
+       "horizon bank intact"
+      ]
+     }
+    }
+   },
+   {
+    "name": "Perceptual Realist / Color Scientist",
+    "findings": "No tone shift: signed mean difference +0.08/255 in orbit, not a bias. The only approximation is replacing the noise by its mean in a term (tower-top height variation of 4 to 8 percent) that the pixel footprint already averages over at those distances; a still cannot show shimmer, which could in principle change if the old noise was aliasing."
+   },
+   {
+    "name": "GPU Engineer",
+    "findings": "A far sample paid about 24 of the 32 buffer loads of a march sample for noise that the filtered table makes redundant. The saving appears in orbit (-1.2 ms) because most of its samples are far; on the ground most expense is near samples and the 2 to 3 percent gain is inside the drift. Whole-frame time only; no per-pass timer."
+   },
+   {
+    "name": "Architectural Skeptic",
+    "findings": "It uses the existing baseBlend as the switch and the existing far-field table, adds no second path or state, and is a three-line change behind a define."
+   },
+   {
+    "name": "Minimalist / Anti-Overengineering Guardian",
+    "findings": "Small, safe, measured in the one place it matters. Accept, but confirm with a launch-order-reversed replicate because the baseline was launched first and drift is monotone."
+   }
+  ],
+  "disagreements": [],
+  "hypotheses": [
+   "Ground-view saving is real but about 2 to 3 percent (unresolved against 0.2 to 1.3 ms drift).",
+   "Replacing the noise by 0.5 is unbiased; the signed mean difference (+0.08/255) is consistent with that but one scene is not proof."
+  ],
+  "verified_facts": [
+   "Changed pixels over 12 in the four ground scenes are inside the repeat-launch noise (68/1203/249/287 vs similar for repeats; the harness verdict is 'same as noise').",
+   "Orbit: mean difference 0.16/255, 311 pixels over 12; frame 8.88 ms vs 9.64 baseline and 9.88/10.27 repeats.",
+   "Frame time rises with launch order by about 0.4 ms per launch on this machine."
+  ],
+  "open_issues": [
+   "Needs a replicate with reversed launch order (default-on build vs the old path).",
+   "No per-pass GPU timing; temporal stability not assessable in stills.",
+   "Five scenes, no storm or dense-deck scene."
+  ],
+  "recommended_changes": [
+   "Make CLOUD_FAR_EARLYOUT=1 the default after the reversed-order replicate; keep CLOUD_FAR_EARLYOUT=0 as the A/B switch.",
+   "Next saving to try: skip the sun optical-depth work and the second extinction evaluation for far samples, and a coarse far representation that avoids marching empty far columns."
+  ],
+  "completed_changes": [
+   "CLOUD_FAR_EARLYOUT tunable in CloudRenderer.cpp (default 0 at the time of the experiment).",
+   "tools/ab_specs/cloud_far_early.json."
+  ]
+ },
+ "run": {
+  "baseline": "baseline",
+  "seconds": 263.0,
+  "provenance": {
+   "commit": "2c7c9797f429b8e79c108b451592cc183a69b072",
+   "branch": "0.1.1-Harmony",
+   "dirty_files": [
+    "ngine/celestial_clouds/src/CloudRenderer.cpp",
+    "tools/ab_specs/cloud_far_early.json"
+   ],
+   "exe": "C:\\Users\\david\\Documents\\GitHub\\asterra\\Orbit.exe",
+   "exe_sha256": "fb0af33dc97db921c54becd513a12d770ee77203ceb13f6ecc9b4f0bdddf8ae7",
+   "exe_mtime": "2026-10-11 18:21:50",
+   "gpu": "NVIDIA GeForce RTX 4090",
+   "date": "2026-10-11 18:26:21"
+  },
+  "variants": {
+   "baseline": {},
+   "early": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_FAR_EARLYOUT=1"
+   }
+  },
+  "spec": {
+   "_comment": "Exact-ish far-field early-out: CLOUD_FAR_EARLYOUT=1 skips the noise fetches once the footprint has saturated the far-field blend. Must keep the baseline image and lower the frame time. Two repeat launches give the cost noise floor.",
+   "world": "Worlds/Main.orbitworld",
+   "body": "Earth",
+   "baseline": "baseline",
+   "controls": 2,
+   "variants": {
+    "baseline": {
+     "env": {}
+    },
+    "early": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_FAR_EARLYOUT=1"
+     }
+    }
+   },
+   "scenes": [
+    {
+     "name": "sky_cumulus",
+     "time_microseconds": 18070405751,
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 42,
+      "yaw_deg": 0,
+      "pitch_deg": 20
+     }
+    },
+    {
+     "name": "horizon_bank",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 42,
+      "yaw_deg": 0,
+      "pitch_deg": 3
+     }
+    },
+    {
+     "name": "cumulus_far",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 1200,
+      "yaw_deg": 0,
+      "pitch_deg": 8
+     }
+    },
+    {
+     "name": "cumulus_near",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.05157,
+      "lon_deg": 0.03666,
+      "alt_m": 2600,
+      "yaw_deg": 35.3,
+      "pitch_deg": 21.74
+     }
+    },
+    {
+     "name": "orbit_deck",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "approach",
+      "target": {
+       "lat_deg": 5.3045,
+       "lon_deg": 0.0
+      },
+      "origin": {
+       "lat_deg": 0,
+       "lon_deg": 0,
+       "alt_km": 1590.95
+      },
+      "alt_km": 1500
+     }
+    }
+   ],
+   "project": "C:/Users/david/AppData/Local/Temp/claude/C--Users-david-Documents-GitHub-asterra/8929e869-7edf-4e5e-9d35-85da2894e8c6/scratchpad/proj"
+  },
+  "scenes": {
+   "sky_cumulus": {
+    "noise": [
+     {
+      "mean": 0.0313,
+      "max": 25.0,
+      "px_over": 46
+     },
+     {
+      "mean": 0.047,
+      "max": 29.0,
+      "px_over": 222
+     }
+    ],
+    "variants": {
+     "early": {
+      "mean": 0.036,
+      "max": 24.0,
+      "px_over": 68
+     }
+    },
+    "frame_ms": {
+     "baseline": 12.44,
+     "early": 12.95
+    },
+    "frame_ms_drift": [
+     0.72,
+     0.89
+    ],
+    "image_sha256": {
+     "baseline": "d24a5fd8a212951529875f8de99a526f41250933affcfea6ac5cd7f8d33e83f3",
+     "early": "dd427201fd45b6f6ed401375906be000f89c54cd521180ef0ee8911211e356cd"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "horizon_bank": {
+    "noise": [
+     {
+      "mean": 0.0544,
+      "max": 57.0,
+      "px_over": 3160
+     },
+     {
+      "mean": 0.0553,
+      "max": 57.0,
+      "px_over": 3220
+     }
+    ],
+    "variants": {
+     "early": {
+      "mean": 0.0449,
+      "max": 55.0,
+      "px_over": 1203
+     }
+    },
+    "frame_ms": {
+     "baseline": 10.9,
+     "early": 10.97
+    },
+    "frame_ms_drift": [
+     0.22,
+     0.3
+    ],
+    "image_sha256": {
+     "baseline": "26a40203939f78d2963b2021e3f9bd52ec181dac1e2a8bc83b8da956768b8837",
+     "early": "62b25fc62b84e76f6d4c343640ea91d6af2757e0dd77ed3aed8c27d8bf1504fb"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_far": {
+    "noise": [
+     {
+      "mean": 0.038,
+      "max": 28.0,
+      "px_over": 341
+     },
+     {
+      "mean": 0.0307,
+      "max": 24.0,
+      "px_over": 125
+     }
+    ],
+    "variants": {
+     "early": {
+      "mean": 0.0353,
+      "max": 24.0,
+      "px_over": 249
+     }
+    },
+    "frame_ms": {
+     "baseline": 13.64,
+     "early": 14.34
+    },
+    "frame_ms_drift": [
+     1.17,
+     1.04
+    ],
+    "image_sha256": {
+     "baseline": "3c7633035bdfe2ec1dd7e37e360cd68b2c6481b63740f426c84f6213b0a12652",
+     "early": "2994abf72d3ea283d2605e9b4358cc5b8ef9deb5eb44e12ed4aec9c1eb38b037"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_near": {
+    "noise": [
+     {
+      "mean": 0.0421,
+      "max": 51.0,
+      "px_over": 209
+     },
+     {
+      "mean": 0.0459,
+      "max": 31.0,
+      "px_over": 239
+     }
+    ],
+    "variants": {
+     "early": {
+      "mean": 0.0368,
+      "max": 33.0,
+      "px_over": 287
+     }
+    },
+    "frame_ms": {
+     "baseline": 16.75,
+     "early": 17.61
+    },
+    "frame_ms_drift": [
+     1.09,
+     1.34
+    ],
+    "image_sha256": {
+     "baseline": "58542837978e0f1fcedb1e2dbb96796e09e6dde8f6c1f0c5ead1c6a7339ce506",
+     "early": "59d995f7bfde05b9c7f84fbc2232e0725113833754b472f59882d42cf36c51aa"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "orbit_deck": {
+    "noise": [
+     {
+      "mean": 0.0406,
+      "max": 43.0,
+      "px_over": 265
+     },
+     {
+      "mean": 0.04,
+      "max": 51.0,
+      "px_over": 382
+     }
+    ],
+    "variants": {
+     "early": {
+      "mean": 0.1596,
+      "max": 45.0,
+      "px_over": 311
+     }
+    },
+    "frame_ms": {
+     "baseline": 9.64,
+     "early": 8.88
+    },
+    "frame_ms_drift": [
+     0.24,
+     0.63
+    ],
+    "image_sha256": {
+     "baseline": "95163b1ac8824b75ba19b17a5809366a0e28cf9719167eb72cf4024dcfecbf86",
+     "early": "aab05a2526c4bbc82f6795f985e3210560b98a30f7f15b23fd5ac810f89c2ab1"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   }
+  }
+ },
+ "images": "full-resolution PNGs stay outside git (see run.scenes[*].image_sha256 and the capture folder at C:\\Users\\david\\AppData\\Local\\Temp\\claude\\C--Users-david-Documents-GitHub-asterra\\8929e869-7edf-4e5e-9d35-85da2894e8c6\\scratchpad\\ab_early); sheet.png here is a downscaled contact sheet (top row variants, bottom row 5x difference vs baseline)"
+}

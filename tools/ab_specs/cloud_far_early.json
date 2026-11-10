@@ -1,0 +1,24 @@
+{
+  "_comment": "Exact-ish far-field early-out: CLOUD_FAR_EARLYOUT=1 skips the noise fetches once the footprint has saturated the far-field blend. Must keep the baseline image and lower the frame time. Two repeat launches give the cost noise floor.",
+  "world": "Worlds/Main.orbitworld",
+  "body": "Earth",
+  "baseline": "baseline",
+  "controls": 2,
+  "variants": {
+    "baseline": {"env": {}},
+    "early":    {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_FAR_EARLYOUT=1"}}
+  },
+  "scenes": [
+    {"name": "sky_cumulus", "time_microseconds": 18070405751, "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 42, "yaw_deg": 0, "pitch_deg": 20}},
+    {"name": "horizon_bank", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 42, "yaw_deg": 0, "pitch_deg": 3}},
+    {"name": "cumulus_far", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 1200, "yaw_deg": 0, "pitch_deg": 8}},
+    {"name": "cumulus_near", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.05157, "lon_deg": 0.03666, "alt_m": 2600, "yaw_deg": 35.3, "pitch_deg": 21.74}},
+    {"name": "orbit_deck", "local_time_seconds": 43200,
+     "pose": {"kind": "approach", "target": {"lat_deg": 5.3045, "lon_deg": 0.0},
+              "origin": {"lat_deg": 0, "lon_deg": 0, "alt_km": 1590.95}, "alt_km": 1500}}
+  ]
+}

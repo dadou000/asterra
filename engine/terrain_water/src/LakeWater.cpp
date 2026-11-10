@@ -1,4 +1,5 @@
 #include <orbit/terrain_water/LakeWater.hpp>
+#include <orbit/terrain/TerrainContracts.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -391,6 +392,237 @@ LakeWaterField BuildLakeWaterField(
         });
     }
 
+    return result;
+}
+
+LakeWaterField BuildLakeWaterField(
+    const terrain_hydrology::DrainagePage& drainage,
+    const terrain_material_column::MaterialColumnPage& material,
+    const LakeWaterConfig config)
+{
+    const u32 resolution = drainage.Resolution();
+    const std::size_t cellCount = static_cast<std::size_t>(resolution) * resolution;
+    if (resolution < 3U || material.Resolution() != resolution ||
+        std::abs(material.SpacingMeters() - drainage.SpacingMeters()) > 1.0e-9 ||
+        !std::isfinite(config.minimumWaterDepthMeters) ||
+        config.minimumWaterDepthMeters <= 0.0 || config.minimumCellsPerBasin == 0U)
+        throw std::invalid_argument("M09 lake extraction requires matching valid physical pages.");
+
+    LakeWaterField result{};
+    result.cellSpacingMeters = drainage.SpacingMeters();
+    result.coreHalfExtentMeters =
+        static_cast<f64>(resolution - 1U) * 0.5 * drainage.SpacingMeters();
+    result.resolution = resolution;
+    result.bedElevationsMeters.resize(cellCount, 0.0F);
+    result.depthsMeters.resize(cellCount, 0.0F);
+    result.bankInfluence.resize(cellCount, 0U);
+    for (u32 y = 0U; y < resolution; ++y)
+        for (u32 x = 0U; x < resolution; ++x)
+            result.bedElevationsMeters[CellIndex(resolution, x, y)] =
+                material.At(x, y).SurfaceHeightMeters();
+
+    std::vector<u8> wetCandidates(cellCount, 0U);
+    std::vector<u8> visited(cellCount, 0U);
+    std::vector<u8> inComponent(cellCount, 0U);
+    for (u32 y = 0U; y < resolution; ++y)
+        for (u32 x = 0U; x < resolution; ++x)
+        {
+            const auto& cell = drainage.At(x, y);
+            if (!cell.outlet && cell.depressionFillMeters >= config.minimumWaterDepthMeters)
+                wetCandidates[CellIndex(resolution, x, y)] = 1U;
+        }
+
+    constexpr i32 dx[4]{-1, 1, 0, 0};
+    constexpr i32 dy[4]{0, 0, -1, 1};
+    std::vector<u32> component;
+    std::queue<u32> frontier;
+    for (u32 seed = 0U; seed < cellCount; ++seed)
+    {
+        if (wetCandidates[seed] == 0U || visited[seed] != 0U) continue;
+        component.clear();
+        frontier.push(seed);
+        visited[seed] = 1U;
+        f64 lakeSurface = std::numeric_limits<f64>::max();
+        u32 minimumCell = seed;
+        while (!frontier.empty())
+        {
+            const u32 index = frontier.front();
+            frontier.pop();
+            component.push_back(index);
+            inComponent[index] = 1U;
+            minimumCell = std::min(minimumCell, index);
+            const auto& cell = drainage.At(index % resolution, index / resolution);
+            lakeSurface = std::min(lakeSurface, static_cast<f64>(cell.drainageElevationMeters));
+            const u32 x = index % resolution;
+            const u32 y = index / resolution;
+            for (u32 side = 0U; side < 4U; ++side)
+            {
+                const i32 nx = static_cast<i32>(x) + dx[side];
+                const i32 ny = static_cast<i32>(y) + dy[side];
+                if (!IsInside(nx, resolution) || !IsInside(ny, resolution)) continue;
+                const u32 neighbor = static_cast<u32>(CellIndex(
+                    resolution, static_cast<u32>(nx), static_cast<u32>(ny)));
+                if (wetCandidates[neighbor] == 0U || visited[neighbor] != 0U) continue;
+                visited[neighbor] = 1U;
+                frontier.push(neighbor);
+            }
+        }
+
+        u32 spillCell = std::numeric_limits<u32>::max();
+        u32 outletCell = std::numeric_limits<u32>::max();
+        bool spillExitsPage = false;
+        f64 lowestSpillElevation = std::numeric_limits<f64>::max();
+        u32 sufficientlyDeepCells = 0U;
+        f64 maximumDepth = 0.0;
+        for (const u32 index : component)
+        {
+            const u32 x = index % resolution;
+            const u32 y = index / resolution;
+            const auto& cell = drainage.At(x, y);
+            const f64 bed = result.bedElevationsMeters[index];
+            const f64 depth = lakeSurface - bed;
+            if (depth >= config.minimumWaterDepthMeters) ++sufficientlyDeepCells;
+            if (cell.flow.HasDownstream())
+            {
+                const i32 nx = static_cast<i32>(x) + cell.flow.dx;
+                const i32 ny = static_cast<i32>(y) + cell.flow.dy;
+                const bool exits = cell.flow.exitsPage || !IsInside(nx, resolution) || !IsInside(ny, resolution);
+                const u32 downstream = exits ? std::numeric_limits<u32>::max() :
+                    static_cast<u32>(CellIndex(resolution, static_cast<u32>(nx), static_cast<u32>(ny)));
+                if (exits || downstream >= cellCount || inComponent[downstream] == 0U)
+                {
+                    const f64 candidateElevation = cell.drainageElevationMeters;
+                    if (candidateElevation < lowestSpillElevation)
+                    {
+                        lowestSpillElevation = candidateElevation;
+                        spillCell = index;
+                        outletCell = exits ? std::numeric_limits<u32>::max() : downstream;
+                        spillExitsPage = exits;
+                    }
+                }
+            }
+        }
+        if (sufficientlyDeepCells < config.minimumCellsPerBasin)
+        {
+            for (const u32 index : component) inComponent[index] = 0U;
+            continue;
+        }
+
+        u64 id = terrain::StableCombine64(0x4F52424C414B4531ULL, drainage.SourcePage().address.planet.high);
+        id = terrain::StableCombine64(id, drainage.SourcePage().address.planet.low);
+        id = terrain::StableCombine64(id, static_cast<u64>(drainage.SourcePage().address.tile.face));
+        id = terrain::StableCombine64(id, drainage.SourcePage().address.tile.level);
+        id = terrain::StableCombine64(id, drainage.SourcePage().address.tile.x);
+        id = terrain::StableCombine64(id, drainage.SourcePage().address.tile.y);
+        id = terrain::StableCombine64(id, minimumCell);
+
+        const u32 basinIndex = static_cast<u32>(result.basins.size());
+        const u32 firstCell = static_cast<u32>(result.cells.size());
+        for (const u32 index : component)
+        {
+            const f64 depth = lakeSurface - result.bedElevationsMeters[index];
+            if (depth <= 0.0) continue;
+            result.depthsMeters[index] = static_cast<f32>(depth);
+            const u32 x = index % resolution;
+            const u32 y = index / resolution;
+            for (i32 oy = -1; oy <= 1; ++oy)
+                for (i32 ox = -1; ox <= 1; ++ox)
+                {
+                    const i32 nx = static_cast<i32>(x) + ox;
+                    const i32 ny = static_cast<i32>(y) + oy;
+                    if (IsInside(nx, resolution) && IsInside(ny, resolution))
+                        result.bankInfluence[CellIndex(resolution, static_cast<u32>(nx), static_cast<u32>(ny))] = 1U;
+                }
+            const math::Double2 offset = CellOffset(resolution, result.cellSpacingMeters, x, y);
+            maximumDepth = std::max(maximumDepth, depth);
+            result.cells.push_back({
+                .sourceCellIndex = index,
+                .offsetMeters = offset,
+                .terrainElevationMeters = result.bedElevationsMeters[index],
+                .surfaceElevationMeters = static_cast<f32>(lakeSurface),
+                .depthMeters = static_cast<f32>(depth),
+                .basinIndex = basinIndex});
+        }
+        if (result.cells.size() == firstCell)
+        {
+            for (const u32 index : component) inComponent[index] = 0U;
+            continue;
+        }
+        const f64 area = static_cast<f64>(result.cells.size() - firstCell) *
+            result.cellSpacingMeters * result.cellSpacingMeters;
+        result.basins.push_back({
+            .surfaceElevationMeters = static_cast<f32>(lakeSurface),
+            .maximumDepthMeters = static_cast<f32>(maximumDepth),
+            .areaSquareMeters = area,
+            .firstCell = firstCell,
+            .cellCount = static_cast<u32>(result.cells.size() - firstCell),
+            .id = id,
+            .spillCellIndex = spillCell,
+            .outletCellIndex = outletCell,
+            .spillExitsPage = spillExitsPage});
+        for (const u32 index : component) inComponent[index] = 0U;
+    }
+    return result;
+}
+
+LakeWaterField BuildLakeWaterField(
+    const terrain_hydrology::DrainagePage& drainage,
+    const terrain_material_column::MaterialColumnPage& material,
+    const terrain_erosion::RiverNetwork& rivers,
+    const LakeWaterConfig config)
+{
+    if (rivers.sourcePage.address != drainage.SourcePage().address ||
+        rivers.resolution != drainage.Resolution() ||
+        std::abs(rivers.spacingMeters - drainage.SpacingMeters()) > 1.0e-9)
+    {
+        throw std::invalid_argument(
+            "M09 lake basins and M16 river graph must describe the same physical page.");
+    }
+
+    LakeWaterField result = BuildLakeWaterField(drainage, material, config);
+    const std::size_t cellCount = static_cast<std::size_t>(result.resolution) * result.resolution;
+    std::vector<terrain_erosion::RiverNodeId> nodeAtCell(cellCount);
+    for (const auto& node : rivers.nodes)
+    {
+        if (node.sourceX < result.resolution && node.sourceY < result.resolution)
+            nodeAtCell[CellIndex(result.resolution, node.sourceX, node.sourceY)] = node.id;
+    }
+
+    for (auto& basin : result.basins)
+    {
+        if (basin.spillExitsPage)
+            basin.downstreamRiverExitsPage = true;
+        if (basin.outletCellIndex >= cellCount)
+            continue;
+
+        u32 cursor = basin.outletCellIndex;
+        for (u32 step = 0U; step < cellCount; ++step)
+        {
+            const auto node = nodeAtCell[cursor];
+            if (node.IsValid())
+            {
+                basin.downstreamRiverNode = node;
+                basin.downstreamRiverCellCount = step;
+                break;
+            }
+
+            const u32 x = cursor % result.resolution;
+            const u32 y = cursor / result.resolution;
+            const auto& cell = drainage.At(x, y);
+            if (!cell.flow.HasDownstream())
+                break;
+            const i32 nextX = static_cast<i32>(x) + cell.flow.dx;
+            const i32 nextY = static_cast<i32>(y) + cell.flow.dy;
+            if (cell.flow.exitsPage || !IsInside(nextX, result.resolution) ||
+                !IsInside(nextY, result.resolution))
+            {
+                basin.downstreamRiverExitsPage = true;
+                break;
+            }
+            cursor = static_cast<u32>(CellIndex(
+                result.resolution, static_cast<u32>(nextX), static_cast<u32>(nextY)));
+        }
+    }
     return result;
 }
 
