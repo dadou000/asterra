@@ -109,30 +109,45 @@ float TerrainSunVisibility(ByteAddressBuffer field, float3 position, float3 sun,
     const float along = dot(position, sun);
     const float3 perpendicular = position - along * sun;
     const float perpendicular2 = dot(perpendicular, perpendicular);
+    // Open water is not terrain-shadowed (v152 reference trace): a point on
+    // the sea surface only sees the planet's sea-level sphere.
+    const float ownElevation = TerrainShadowElevation(field, position, width, height);
+    if (ownElevation <= 0.0 && length(position) - radius <= bias * 4.0)
+    {
+        const float sea = radius - bias;
+        if (angularRadius > 0.0) return SphereStellarVisibility(position, sun, sea, angularRadius);
+        return (along < 0.0 && perpendicular2 < sea * sea) ? 0.0 : 1.0;
+    }
     const float inner = radius + minimumElevation - bias;
-    float visibility = angularRadius > 0.0 ? SphereStellarVisibility(position, sun, inner, angularRadius) : 1.0;
+    float visibility = angularRadius > 0.0 ? SphereStellarVisibility(position, sun, inner, angularRadius) :
+        ((along < 0.0 && perpendicular2 < inner * inner) ? 0.0 : 1.0);
     // Find the terrain envelope for both stellar limbs along one body-fixed
     // ray, then integrate the visible disc exactly once.
     float minimumClearanceSlope = 1.0e20;
     const float fullOcclusionSlope = -tan(angularRadius);
     if (visibility <= 0.0) return 0.0;
-    if (angularRadius <= 0.0 && along < 0.0 && perpendicular2 < inner * inner) return 0.0;
     const float outer = radius + maximumElevation + bias + length(position) * sin(angularRadius);
     const float discriminant = outer * outer - perpendicular2;
     if (discriminant <= 0.0) return visibility;
     const float root = sqrt(discriminant);
     const float start = max(-along - root, 0.0), end = -along + root;
     if (end <= start) return visibility;
-    const float stepLength = max(asfloat(field.Load(20u)) * 0.5, (end - start) / 510.0);
-    // Samples lie on planes fixed to the body origin along the sun axis.
-    // Camera movement or a caster leaving the framebuffer cannot move them.
-    float t = max(start, ceil((along + start) / stepLength) * stepLength - along);
+    // Reference trace: log-spaced steps, dense near the sample and no wider
+    // than a field cell far away. Reach is the peak-to-peak horizon distance.
+    const float spacing = asfloat(field.Load(20u));
+    const float reach = max(2.0 * sqrt(2.0 * radius * max(maximumElevation, 0.0)), spacing);
+    const float limit = min(end, start + reach);
+    const float minimumStep = max(bias * 4.0, min(350.0, spacing * 0.25));
+    // Start from the coarse field's own ground so the pixel cannot self-shadow
+    // against a smoothed surface above its true height.
+    const float groundDeficit = max(0.0, ownElevation - (length(position) - radius));
+    float t = start + minimumStep;
     [loop]
-    for (uint i = 0u; i < 512u && t <= end; ++i, t += stepLength)
+    for (uint i = 0u; i < 512u && t <= limit; ++i)
     {
         const float3 probe = position + sun * t;
         const float surface = radius + TerrainShadowElevation(field, probe, width, height);
-        const float clearance = length(probe) - surface + bias;
+        const float clearance = length(probe) - surface + bias + groundDeficit;
         if (angularRadius <= 0.0)
         {
             if (clearance < 0.0) return 0.0;
@@ -142,6 +157,7 @@ float TerrainSunVisibility(ByteAddressBuffer field, float3 position, float3 sun,
             minimumClearanceSlope = min(minimumClearanceSlope, clearance / t);
             if (minimumClearanceSlope <= fullOcclusionSlope) return 0.0;
         }
+        t += min((t - start) * 0.2, max(spacing, minimumStep));
     }
     if (angularRadius > 0.0 && minimumClearanceSlope < 1.0e19)
         visibility = min(visibility, StellarDiscFraction(atan(minimumClearanceSlope), angularRadius));

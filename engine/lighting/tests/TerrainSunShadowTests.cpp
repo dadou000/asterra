@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 #include <stop_token>
 
@@ -29,11 +30,51 @@ public:
     }
     orbit::u64 Revision() const noexcept override { return revision.load(); }
 };
+
+// A coastal shelf (sea or land) with a ridge ~300 m ahead along the equator.
+class Coast final : public orbit::terrain::TerrainSource
+{
+public:
+    bool sea{false};
+    double land{5.0};
+    orbit::terrain::TerrainSample Sample(const orbit::terrain::TerrainQuery& q) const noexcept override
+    {
+        const double lon = std::atan2(q.unitDirection.z, q.unitDirection.x);
+        const double y = q.unitDirection.y / 0.3;
+        const double lonRidge = (lon - 0.29) / 0.03;
+        const double ridge = 100.0 * std::exp(-lonRidge * lonRidge - y * y);
+        const bool shelf = std::abs(lon) < 0.1 && std::abs(q.unitDirection.y) < 0.3;
+        return {.elevationMeters = ridge + (shelf ? (sea ? -20.0 : land) : 0.0)};
+    }
+    orbit::u64 Revision() const noexcept override { return 7U; }
+};
 }
 
 int main()
 {
     using namespace orbit::lighting;
+    {
+        // Grazing sun (2 degrees) toward a ridge: land is shadowed, but a point
+        // on open water is not terrain-shadowed (v152 reference trace).
+        Coast coast;
+        const double elevation = std::numbers::pi / 90.0;
+        const orbit::math::Double3 sun{std::sin(elevation), 0.0, std::cos(elevation)};
+        coast.sea = false;
+        const auto landField = BuildTerrainSunShadowField(coast, 1000.0, 512U, 256U);
+        coast.sea = true;
+        const auto seaField = BuildTerrainSunShadowField(coast, 1000.0, 512U, 256U);
+        if (TerrainSunVisibility(landField, {1005.5, 0.0, 0.0}, sun) != 0.0) return 30;
+        if (TerrainSunVisibility(seaField, {1000.5, 0.0, 0.0}, sun) != 1.0) return 31;
+        // The same sea point, lifted clear of the water, is shadowed again.
+        if (TerrainSunVisibility(seaField, {1030.0, 0.0, 0.0}, sun) == 1.0) return 32;
+        // A pixel below the smoothed field ground (true terrain lower than the
+        // coarse caster) must not self-shadow: sun 30 degrees up, away from the ridge.
+        coast.sea = false;
+        coast.land = 50.0;
+        const auto hillField = BuildTerrainSunShadowField(coast, 1000.0, 512U, 256U);
+        const orbit::math::Double3 away{0.5, 0.0, -0.8660254037844386};
+        if (TerrainSunVisibility(hillField, {1010.0, 0.0, 0.0}, away) != 1.0) return 33;
+    }
     Source source;
     const auto flat = BuildTerrainSunShadowField(source, 1000.0, 128U, 64U);
     if (flat.sourceRevision != 42U || flat.minimumElevationMeters != 0.0 ||

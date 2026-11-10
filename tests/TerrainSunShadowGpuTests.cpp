@@ -43,6 +43,11 @@ int main()
         std::array<math::Float4, count> points{};
         for (u32 i = 0U; i < count; ++i)
             points[i] = {1000500.0F + static_cast<f32>(i) * 60.0F, -200000.0F, 0.0F, 0.001F};
+        // The last four are open-water surface points (elevation 0 at sea level):
+        // the ridge's shadow must not reach them on CPU or GPU.
+        for (u32 i = count - 4U; i < count; ++i)
+            points[i] = {1000000.5F, -1000.0F * static_cast<f32>(i - (count - 5U)), 0.0F,
+                (i & 1U) != 0U ? 0.001F : 0.0F};
         auto inputs = device->CreateBuffer({.sizeBytes = sizeof(points),
             .usage = rhi::BufferUsage::Structured, .memory = rhi::MemoryUsage::HostVisible,
             .initialState = rhi::ResourceState::ShaderResource});

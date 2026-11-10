@@ -95,15 +95,28 @@ f64 TerrainSunVisibility(const TerrainSunShadowField& field, const math::Double3
     // expensive overlap integral only once after the traversal.
     f64 minimumClearanceSlope = std::numeric_limits<f64>::infinity();
     const f64 fullOcclusionSlope = -std::tan(angularRadius);
-    if (angularRadius > 0.0)
+    const auto sphereVisibility = [&](const f64 sphereRadius)
     {
-        constexpr f64 sourceDistance = 1.0e15;
-        visibility = celestial_lighting::FiniteDiscOccultation(
-            {.centerFromObserverMeters = sun * sourceDistance, .radiusMeters = sourceDistance * std::sin(angularRadius)},
-            {.centerFromObserverMeters = position * -1.0, .radiusMeters = inner}).visibleFraction;
-        if (visibility <= 0.0) return 0.0;
-    }
-    else if (along < 0.0 && perpendicular2 < inner * inner) return 0.0;
+        if (angularRadius > 0.0)
+        {
+            constexpr f64 sourceDistance = 1.0e15;
+            return celestial_lighting::FiniteDiscOccultation(
+                {.centerFromObserverMeters = sun * sourceDistance,
+                    .radiusMeters = sourceDistance * std::sin(angularRadius)},
+                {.centerFromObserverMeters = position * -1.0,
+                    .radiusMeters = sphereRadius}).visibleFraction;
+        }
+        return along < 0.0 && perpendicular2 < sphereRadius * sphereRadius ? 0.0 : 1.0;
+    };
+    // Open water is not terrain-shadowed (as in the v152 reference trace): a
+    // point on the sea surface only sees the planet's sea-level sphere, so a
+    // coast's relief cannot cast long bands across the ocean.
+    const f64 ownElevation = Elevation(field, position);
+    if (ownElevation <= 0.0 &&
+        math::Length(position) - field.radiusMeters <= bias * 4.0)
+        return sphereVisibility(field.radiusMeters - bias);
+    visibility = sphereVisibility(inner);
+    if (visibility <= 0.0) return 0.0;
     const f64 outer = field.radiusMeters + field.maximumElevationMeters + bias +
         math::Length(position) * std::sin(angularRadius);
     const f64 discriminant = outer * outer - perpendicular2;
@@ -111,13 +124,25 @@ f64 TerrainSunVisibility(const TerrainSunShadowField& field, const math::Double3
     const f64 root = std::sqrt(discriminant);
     const f64 start = std::max(-along - root, 0.0), end = -along + root;
     if (end <= start) return visibility;
-    const f64 step = std::max(field.spacingMeters * 0.5, (end - start) / 510.0);
-    // Anchor sun-ray samples to the body origin, independent of the camera.
-    f64 t = std::max(start, std::ceil((along + start) / step) * step - along);
-    for (u32 i = 0; i < 512U && t <= end; ++i, t += step)
+    // Reference trace: log-spaced steps, dense near the sample and no wider
+    // than a field cell far away. Reach is the peak-to-peak horizon distance,
+    // beyond which curvature hides any caster.
+    const f64 reach = std::max(2.0 * std::sqrt(2.0 * field.radiusMeters *
+        std::max(field.maximumElevationMeters, 0.0)), field.spacingMeters);
+    const f64 limit = std::min(end, start + reach);
+    const f64 minimumStep = std::max(bias * 4.0, std::min(350.0, field.spacingMeters * 0.25));
+    // The field is a smoothed, coarse caster. A pixel whose true height lies
+    // below the field's own ground would self-shadow on the first step, so
+    // start the trace from the field's ground, as the reference does (it
+    // evaluates the start height and every sample with one function).
+    const f64 groundDeficit = std::max(0.0,
+        ownElevation - (math::Length(position) - field.radiusMeters));
+    f64 t = start + minimumStep;
+    for (u32 i = 0; i < 512U && t <= limit; ++i)
     {
         const auto p = position + sun * t;
-        const f64 clearance = math::Length(p) - field.radiusMeters - Elevation(field, p) + bias;
+        const f64 clearance = math::Length(p) - field.radiusMeters - Elevation(field, p) +
+            bias + groundDeficit;
         if (angularRadius <= 0.0)
         {
             if (clearance < 0.0) return 0.0;
@@ -129,6 +154,7 @@ f64 TerrainSunVisibility(const TerrainSunShadowField& field, const math::Double3
             minimumClearanceSlope = std::min(minimumClearanceSlope, clearance / t);
             if (minimumClearanceSlope <= fullOcclusionSlope) return 0.0;
         }
+        t += std::min((t - start) * 0.2, std::max(field.spacingMeters, minimumStep));
     }
     if (angularRadius > 0.0 && std::isfinite(minimumClearanceSlope))
         visibility = std::min(visibility, celestial_lighting::DiscHorizonVisibleFraction(
