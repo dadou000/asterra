@@ -59,8 +59,35 @@ int main()
     // morph (morphToCoarser = false) -- keeps this first real test to
     // the core noise/tectonics/climate/biome path.
     constexpr u32 kResolution = 17;
-    const world::SurfaceFrame frame = world::MakeSurfaceFrame(
-        math::Normalize(math::Double3{0.365111510558, 0.187057495117, -0.911977564625}));
+    // Find a real mountain sample where the new kernel changes elevation.
+    // Otherwise the test could pass while silently exercising only the
+    // zero-erosion ocean/coastal fallback.
+    auto baselineDesc = desc;
+    baselineDesc.phacelle.strength = 0.0;
+    const terrain::AnalyticTerrainSource baseline(planet, baselineDesc);
+    math::Double3 probeDirection{0.365111510558, 0.187057495117, -0.911977564625};
+    f64 strongestEffect = 0.0;
+    constexpr u32 kProbeCount = 512;
+    for (u32 i = 0; i < kProbeCount; ++i)
+    {
+        const f64 y = 1.0 - 2.0 * (static_cast<f64>(i) + 0.5) / kProbeCount;
+        const f64 a = 2.39996322972865332 * static_cast<f64>(i);
+        const f64 radius = std::sqrt(1.0 - y * y);
+        const math::Double3 direction{radius * std::cos(a), y, radius * std::sin(a)};
+        const f64 effect = std::abs(source.Sample({direction, 50.0}).elevationMeters -
+                                    baseline.Sample({direction, 50.0}).elevationMeters);
+        if (effect > strongestEffect)
+        {
+            strongestEffect = effect;
+            probeDirection = direction;
+        }
+    }
+    if (strongestEffect < 1.0)
+    {
+        std::cerr << "GPU Phacelle parity test found no active erosion sample.\\n";
+        return 1;
+    }
+    const world::SurfaceFrame frame = world::MakeSurfaceFrame(probeDirection);
 
     terrain_gpu::GpuFieldRequest request{};
     request.resolution = kResolution;
