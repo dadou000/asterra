@@ -1654,8 +1654,10 @@ void OpenCanonicalWorkspace(
         });
 
     OpenCanonicalBrowser(ui, g_browserMode);
-    OpenPanels(ui, centerPanels);
+    // EditorUi keeps ONE pending-focus slot: the last panel focused wins. The
+    // side panel goes first so the workspace's own centre panel ends up focused.
     OpenPanels(ui, {"Properties"});
+    OpenPanels(ui, centerPanels);
 }
 
 void ActivateWorkspace(
@@ -1692,14 +1694,16 @@ void ActivateWorkspace(
         OpenCanonicalBrowser(ui, BrowserMode::Assets);
         OpenPanels(
             ui,
-            {"Shading", "Properties"});
+            {"Properties", "Shading"});
         break;
 
     case WorkspaceMode::Planning:
         CloseSpecialistPanels(ui);
         ClosePanels(ui, {"Viewport", "Build", "Output"});
         OpenCanonicalBrowser(ui, BrowserMode::World);
-        OpenPanels(ui, {"Planning", "Properties"});
+        // Last focus wins: Planning must come after Properties, otherwise the
+        // centre dock keeps showing Project Browser and Planning looks closed.
+        OpenPanels(ui, {"Properties", "Planning"});
         break;
 
     case WorkspaceMode::Debug:
@@ -1712,7 +1716,7 @@ void ActivateWorkspace(
         CloseSpecialistPanels(ui);
         ClosePanels(ui, {"Viewport", "Build", "Output"});
         OpenCanonicalBrowser(ui, BrowserMode::Assets);
-        OpenPanels(ui, {"Plugins", "Properties"});
+        OpenPanels(ui, {"Properties", "Plugins"});
         break;
     }
 }
