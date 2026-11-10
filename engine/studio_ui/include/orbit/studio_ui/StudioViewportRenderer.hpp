@@ -662,10 +662,16 @@ private:
         u64 revision{0U};
         std::shared_ptr<rhi::Buffer> buffer;
         std::future<lighting::TerrainSunShadowField> pending;
+        std::unique_ptr<lighting::TerrainSunShadowField> stagedField;
+        std::shared_ptr<rhi::Buffer> stagedBuffer;
+        std::size_t uploadedSamples{0U};
         std::chrono::steady_clock::time_point retryAfter{};
     };
     std::map<std::string, TerrainSunShadowPresentation, std::less<>>
         terrainSunShadowPresentations_;
+    // Bounded low-priority producer; job completion is polled, never waited on
+    // from the rendering path. Drains safely before renderer destruction.
+    std::unique_ptr<jobs::JobSystem> terrainSunShadowPool_;
 
     struct AtmospherePresentation
     {
