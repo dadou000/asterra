@@ -1,6 +1,7 @@
 #include "StudioViewportInternals.hpp"
 #include <orbit/core/Log.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <future>
@@ -14,7 +15,24 @@ std::shared_ptr<rhi::Buffer> StudioViewportRenderer::EnsureTerrainSunShadow(
     const std::string_view viewportId, const universe::BodyId body,
     const std::shared_ptr<const terrain::TerrainSource>& source, const f64 radius)
 {
-    auto& cache = terrainSunShadowPresentations_[std::string(viewportId)];
+    static_cast<void>(viewportId);
+    // Camera/viewport identity is deliberately absent: one authoritative
+    // body-fixed field is shared by ground, orbit and auxiliary viewports.
+    auto found = std::find_if(terrainSunShadowPresentations_.begin(),
+        terrainSunShadowPresentations_.end(), [&](const TerrainSunShadowPresentation& candidate)
+        {
+            return candidate.keyBody == body && candidate.keySource == source &&
+                candidate.keyRadius == radius;
+        });
+    if (found == terrainSunShadowPresentations_.end())
+    {
+        terrainSunShadowPresentations_.emplace_back();
+        found = terrainSunShadowPresentations_.end() - 1;
+        found->keyBody = body;
+        found->keySource = source;
+        found->keyRadius = radius;
+    }
+    auto& cache = *found;
     const auto revision = source->Revision();
 
     // A promise-backed future does not join its worker on destruction.
