@@ -40,7 +40,12 @@ static_assert(sizeof(SampleRecord) == 32);
 int main()
 {
     const world::PlanetDefinition planet{.radiusMeters = 6'000'000.0};
-    const terrain::AnalyticTerrainDesc desc{.seed = 0xA57E22AULL};
+    // Exercise the optional Phacelle CPU/GPU heightfield path as well as
+    // the original octave/tectonics backend. The active check is CPU vs GPU,
+    // not just a successful shader compilation.
+    terrain::AnalyticTerrainDesc desc{.seed = 0xA57E22AULL};
+    desc.phacelle.strength = 0.85;
+    desc.phacelle.lowlandFadeMeters = 0.0;
     const terrain::AnalyticTerrainSource source(planet, desc);
 
     const auto device = rhi::vulkan::CreateDevice({.enableValidation = true});
