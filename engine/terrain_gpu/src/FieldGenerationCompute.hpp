@@ -91,6 +91,10 @@ static const uint kParamCraterCumulativeExponent = 50;
 static const uint kParamLocalCraterLevels = 51;
 static const uint kParamLocalCraterBaseSpacingMeters = 52;
 static const uint kParamLocalCraterDensity = 53;
+static const uint kParamPhacelleStrength = 54;
+static const uint kParamPhacelleScale = 55;
+static const uint kParamPhacelleOctaves = 56;
+static const uint kParamPhacelleLowlandFade = 57;
 
 static const uint kMaxHotspotAgeSteps = 6u;
 static const uint kPlateStrideBytes = 36u;
@@ -660,6 +664,123 @@ float MountainShape(float3 direction, float footprintMeters)
     return ShapeRidge(sum / max(ParamFloat(kParamMountainNormalization), 1.0));
 }
 
+// === Planet-continuous, optional Phacelle erosion ===
+// Adapted from ORBIT v153's slope-guided Phacelle erosion filter.
+// Original filter: Rune Skovbo Johansen (2025), MPL-2.0.
+// See engine/terrain/src/PhacelleErosion.hpp for licensing notes.
+uint ErosionAvalanche(uint v)
+{
+    v ^= v >> 16u; v *= 0x7feb352du; v ^= v >> 15u;
+    v *= 0x846ca68bu; return v ^ (v >> 16u);
+}
+float2 ErosionHash(int2 xy)
+{
+    uint k=uint(xy.x)*0x9e3779b1u ^ uint(xy.y)*0x85ebca77u;
+    return float2(ErosionAvalanche(k)&0xffffffu,ErosionAvalanche(k^0x68bc21ebu)&0xffffffu)/8388608.0-1.0;
+}
+float3 ErosionGradient(float2 p)
+{
+    int2 ip=int2(floor(p)); float2 f=frac(p);
+    float2 u=f*f*f*(f*(f*6.0-15.0)+10.0);
+    float2 du=30.0*f*f*(f*(f-2.0)+1.0);
+    float2 a=ErosionHash(ip),b=ErosionHash(ip+int2(1,0)),c=ErosionHash(ip+int2(0,1)),d=ErosionHash(ip+int2(1,1));
+    float va=dot(a,f),vb=dot(b,f-float2(1,0)),vc=dot(c,f-float2(0,1)),vd=dot(d,f-1.0);
+    float q=va-vb-vc+vd;
+    float value=va+u.x*(vb-va)+u.y*(vc-va)+u.x*u.y*q;
+    float2 slope=a+u.x*(b-a)+u.y*(c-a)+u.x*u.y*(a-b-c+d);
+    slope.x+=du.x*(u.y*q+vb-va);
+    slope.y+=du.y*(u.x*q+vc-va);
+    return float3(value,slope);
+}
+float3 ErosionFbm(float2 p)
+{
+    float3 sum=0.0;float f=3.0,amplitude=1.0;
+    [unroll] for(int i=0;i<3;i++)
+    {
+        float3 g=ErosionGradient(p*f);
+        sum+=float3(g.x,g.yz*f)*amplitude;
+        f*=2.0;amplitude*=0.1;
+    }
+    return sum;
+}
+float2 ErosionPhacelle(float2 p,float2 dir)
+{
+    static const float tau=6.283185307179586;
+    float2 sd=float2(-dir.y,dir.x)*(.7*tau);
+    int2 ij=int2(floor(p));float2 fr=frac(p);
+    float re=0.0,im=0.0,total=0.0;
+    [loop] for(int dy=-1;dy<=2;dy++)
+    [loop] for(int dx=-1;dx<=2;dx++)
+    {
+        int2 offset=int2(dx,dy);
+        float2 cell=ErosionHash(ij+offset);
+        float2 v=fr-float2(offset)-cell*.5;
+        float w=max(0.0,exp(-2.0*dot(v,v))-.01111);
+        if(w<1e-8)continue;
+        float phase=dot(v,sd)+.25*tau;
+        re+=cos(phase)*w;im+=sin(phase)*w;total+=w;
+    }
+    if(total<1e-10)return float2(0,0);
+    float2 value=float2(re,im)/total;
+    return value/max(.5,length(value));
+}
+float ErosionEaseOut(float t){float v=1.0-saturate(t);return 1.0-v*v;}
+float ErosionSmoothStart(float x,float s){if(s<=1e-10)return max(0.0,x);if(x>=s)return x-.5*s;return .5*x*x/s;}
+float ErosionPowInv(float t,float power){return 1.0-pow(1.0-saturate(t),power);}
+float ErosionChart(float2 p,float footprint,float scale,float erosionStrength,uint octaves)
+{
+    float3 f=ErosionFbm(p);
+    float height=.125*f.x*.5+.5,initialHeight=height;
+    float2 slope0=f.yz*.0625;
+    float len=max(length(slope0),1e-10);
+    float2 slope=slope0*(.7/len);
+    float fade=clamp(f.x/.6,-1.0,1.0);
+    float combi=ErosionEaseOut(ErosionSmoothStart(len*1.25,.01*saturate(fade+.5)*1.25));
+    float baseScale=.15*scale;
+    float frequency=1.0/max(1e-4,baseScale*.7);
+    float strength=.22*baseScale*erosionStrength;
+    float magnitude=0.0,roundingMultiplier=1.0;
+    [loop] for(uint k=0u;k<5u;k++)
+    {
+        if(k>=octaves)break;
+        float w=DetailWeight(2700.0/scale/exp2(float(k)),footprint);
+        if(w<=0.0)break;
+        float sl=length(slope);
+        float2 dir=sl>1e-10?slope/sl:float2(0,0);
+        float2 cell=ErosionPhacelle(p*frequency,dir);
+        float2 side=float2(dir.y,-dir.x)*(.7*6.28318530718*frequency);
+        float signCell=cell.y<0.0?-1.0:1.0;
+        slope+=signCell*side*strength*.5;
+        float faded=lerp(fade,cell.x*.5,combi);
+        height+=faded*strength*w;
+        magnitude+=strength*w;
+        fade=faded;
+        float rounding=.1*saturate(cell.x+.5)*roundingMultiplier;
+        combi=ErosionPowInv(combi,1.5)*ErosionEaseOut(ErosionSmoothStart(abs(cell.y)*1.25,rounding*1.25));
+        strength*=.5;frequency*=2.0;roundingMultiplier*=2.0;
+    }
+    return (height-initialHeight-.65*magnitude)*85000.0*.45;
+}
+float PhacelleErosionDeltaMeters(float3 direction,float footprint)
+{
+    float strength=ParamFloat(kParamPhacelleStrength);
+    uint octaves=ParamUint(kParamPhacelleOctaves);
+    if(strength<=0.0||octaves==0u)return 0.0;
+    float scale=ParamFloat(kParamPhacelleScale);
+    float3 w=pow(abs(direction),4.0);
+    float sum=max(1e-15,w.x+w.y+w.z);
+    w*=float3(SmoothStepCubic(0.0,.003,w.x/sum),
+              SmoothStepCubic(0.0,.003,w.y/sum),
+              SmoothStepCubic(0.0,.003,w.z/sum));
+    w/=max(1e-15,w.x+w.y+w.z);
+    float m=ParamFloat(kParamPlanetRadiusMeters)/18000.0;
+    float delta=0.0;
+    if(w.x>1e-12)delta+=w.x*ErosionChart(direction.yz*m,footprint,scale,strength,octaves);
+    if(w.y>1e-12)delta+=w.y*ErosionChart(direction.xz*m,footprint,scale,strength,octaves);
+    if(w.z>1e-12)delta+=w.z*ErosionChart(direction.xy*m,footprint,scale,strength,octaves);
+    return delta;
+}
+
 // === Rain shadow probe helpers (AnalyticTerrainSource.cpp) ===
 
 float ZonalWindSign(float latitudeDeg, float transitionDegrees)
@@ -1025,6 +1146,23 @@ FullSample GenerateSample(float3 direction, float footprintMeters)
 
     elevation += ProceduralCraterHeight(direction, footprintMeters) +
         LocalCraterHeight(direction, footprintMeters);
+
+    // Identical CPU/GPU recipe, applied to the canonical heightfield before
+    // the normal and material passes. Never evaluate this in the draw shader.
+    if (ParamFloat(kParamPhacelleStrength) > 0.0 &&
+        ParamUint(kParamPhacelleOctaves) > 0u && mountainMask > 1.0e-4)
+    {
+        float fadeRange = ParamFloat(kParamPhacelleLowlandFade);
+        float altitude = max(0.0, elevation - seaLevel);
+        float fade = fadeRange <= 0.0 ? 1.0 : Smooth(altitude / fadeRange);
+        if (fade > 0.0)
+        {
+            float delta = PhacelleErosionDeltaMeters(direction, footprintMeters);
+            float headroom = max(0.0, ceiling - elevation);
+            elevation += mountainMask * fade *
+                clamp(delta, -1000.0, min(1000.0, headroom));
+        }
+    }
 
     float coarseElevation = elevation;
     float detailAmplitude = ParamFloat(kParamDetailAmplitudeMeters);
