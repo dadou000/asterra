@@ -310,6 +310,26 @@ inline constexpr schema::PropertyId kTerrainLocalCraterDensity{
     .low = 0x4c4f43435244454eULL
 };
 
+inline constexpr schema::PropertyId kTerrainPhacelleStrength{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x504841435354524eULL
+};
+
+inline constexpr schema::PropertyId kTerrainPhacelleScale{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x504841435343414cULL
+};
+
+inline constexpr schema::PropertyId kTerrainPhacelleOctaves{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x504841434f435456ULL
+};
+
+inline constexpr schema::PropertyId kTerrainPhacelleLowlandFadeMeters{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x5048414346414445ULL
+};
+
 // M11 authored terrain-process configuration. The semantic record owns
 // service policy; physical pages/products remain derived runtime state.
 inline constexpr schema::PropertyId kProcessStreamPowerEnabled{

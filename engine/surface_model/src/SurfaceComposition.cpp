@@ -1218,6 +1218,23 @@ ConstraintSetFor(
     result.craters.localDensity = PropertyOr<f64>(
         objects, object, world_model::kTerrainLocalCraterDensity, 0.22);
 
+    result.phacelle.strength = PropertyOr<f64>(
+        objects, object, world_model::kTerrainPhacelleStrength, 0.85);
+    result.phacelle.scale = PropertyOr<f64>(
+        objects, object, world_model::kTerrainPhacelleScale, 1.0);
+    const i64 phacelleOctaves = PropertyOr<i64>(
+        objects, object, world_model::kTerrainPhacelleOctaves, i64{4});
+    if (phacelleOctaves < 0 || phacelleOctaves > 5)
+    {
+        throw std::runtime_error(
+            "Phacelle octave count must be between 0 and 5 on object " +
+            object.ToString() + ".");
+    }
+    result.phacelle.octaves = static_cast<u32>(phacelleOctaves);
+    result.phacelle.lowlandFadeMeters = PropertyOr<f64>(
+        objects, object, world_model::kTerrainPhacelleLowlandFadeMeters,
+        2'500.0);
+
     if (result.macroAmplitudeMeters < 0.0 ||
         result.detailAmplitudeMeters < 0.0 ||
         result.macroWavelengthMeters <= 0.0 ||

@@ -279,6 +279,37 @@ void RegisterSchemas(
                 .kind = schema::PropertyKind::Float,
                 .defaultValue = 0.22,
                 .range = {.minimum = 0.0, .maximum = 1.0}
+            },
+            // Phacelle gully erosion (v153), on by default in the integrated
+            // world. Strength 0 restores the pre-Phacelle terrain.
+            schema::PropertySchema{
+                .id = kTerrainPhacelleStrength,
+                .name = "Phacelle Erosion Strength",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.85,
+                .range = {.minimum = 0.0, .maximum = 2.0}
+            },
+            schema::PropertySchema{
+                .id = kTerrainPhacelleScale,
+                .name = "Phacelle Erosion Scale",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.0,
+                .range = {.minimum = 0.01, .maximum = 8.0}
+            },
+            schema::PropertySchema{
+                .id = kTerrainPhacelleOctaves,
+                .name = "Phacelle Erosion Octaves",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{4},
+                .range = {.minimum = 0.0, .maximum = 5.0}
+            },
+            schema::PropertySchema{
+                .id = kTerrainPhacelleLowlandFadeMeters,
+                .name = "Phacelle Lowland Fade",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 2'500.0,
+                .range = {.minimum = 0.0}
             }
         }
     });
