@@ -728,6 +728,9 @@ private:
         bool hasHistory{false};
         lighting::LightingView previousView{};
         u64 lightingFingerprint{0U};
+        // Whether the sun was above the camera's horizon when the cache was
+        // last relit; a drop below it flushes held (daylight) cell values.
+        bool sunAboveHorizon{true};
         lighting::EmissiveInvalidationTracker emissiveInvalidationTracker;
         std::unique_ptr<lighting::RadianceClipmapResidency> radianceResidency;
         // Smoothed CPU cost of estimating one radiance cell (ms); sizes the

@@ -96,6 +96,13 @@ public:
     // last valid value for GPU fallback until the refresh reaches them.
     void RequestGlobalRefresh() noexcept;
 
+    // Like RequestGlobalRefresh, but stops holding the last one-bounce light:
+    // every resident cell's L1 is zeroed (the cell stays valid and scheduled
+    // for relighting, and its geometry-only sky channel is kept). For lighting
+    // changes that make the held value actively wrong, such as the sun
+    // setting, where stale daylight would otherwise linger.
+    void DropHeldValues() noexcept;
+
     [[nodiscard]] std::vector<RadianceUpdateCandidate>
     BuildUpdateList(
         const math::Double3& observerInFrameMeters,

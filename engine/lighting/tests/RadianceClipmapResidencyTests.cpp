@@ -114,6 +114,38 @@ int main()
         return 6;
     }
 
+    // Dropping held values (the sun set) must stop showing the last one-bounce
+    // light on the GPU, keep the cells valid (so the sky channel still works)
+    // and keep every cell scheduled for relighting.
+    residency.DropHeldValues();
+    const auto droppedSnapshot =
+        residency.BuildGpuSnapshot(view);
+    bool anyUsable = false;
+    bool anyStillLit = false;
+
+    for (const auto& cell : droppedSnapshot.cells)
+    {
+        if (cell.irradiance0.w > 0.5F)
+        {
+            anyUsable = true;
+            anyStillLit =
+                anyStillLit ||
+                cell.irradiance0.x != 0.0F ||
+                cell.irradiance0.y != 0.0F ||
+                cell.irradiance0.z != 0.0F ||
+                cell.irradianceX.x != 0.0F ||
+                cell.irradianceY.y != 0.0F ||
+                cell.irradianceZ.z != 0.0F;
+        }
+    }
+
+    if (!anyUsable || anyStillLit ||
+        residency.Stats().dirtyCells == 0U ||
+        residency.BuildUpdateList({0.0, 0.0, 0.0}, 4U).empty())
+    {
+        return 60;
+    }
+
     // CPU Lookup remains strict and rejects dirty cells, even though the GPU
     // snapshot may reuse their last valid irradiance while refresh is pending.
     while (true)

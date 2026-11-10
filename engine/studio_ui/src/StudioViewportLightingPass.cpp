@@ -819,6 +819,40 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
             RequestGlobalRefresh();
     }
 
+    // Held cell values are normally kept until each cell is re-estimated, so a
+    // large cache converges under a fixed budget. When the sun sets that keeps
+    // daylight bounce on the ground for tens of seconds in whole un-refreshed
+    // blocks. Zero the held one-bounce light once the sun is clearly below the
+    // camera's horizon
+    // (hysteresis: up above the horizon, down below about -3 degrees).
+    {
+        const math::Double3 cameraRadial =
+            lightingView.cameraPositionInFrameMeters;
+        const f64 radialLength =
+            math::Length(cameraRadial);
+
+        if (radialLength > 1.0)
+        {
+            const f64 sunElevationSine =
+                (cameraRadial.x * directLight.directionToLight.x +
+                 cameraRadial.y * directLight.directionToLight.y +
+                 cameraRadial.z * directLight.directionToLight.z) /
+                radialLength;
+            const bool sunNowAbove =
+                finalGather.sunAboveHorizon
+                    ? sunElevationSine > -0.05
+                    : sunElevationSine > 0.0;
+
+            if (finalGather.sunAboveHorizon && !sunNowAbove)
+            {
+                finalGather.radianceResidency->
+                    DropHeldValues();
+            }
+
+            finalGather.sunAboveHorizon = sunNowAbove;
+        }
+    }
+
     finalGather.lightingFingerprint =
         lightingFingerprint;
 

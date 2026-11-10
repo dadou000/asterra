@@ -586,6 +586,38 @@ void RadianceClipmapResidency::RequestGlobalRefresh() noexcept
     }
 }
 
+void RadianceClipmapResidency::DropHeldValues() noexcept
+{
+    scanNeeded_ = true;
+    candidateCacheFramesLeft_ = 0U;
+    for (auto& level : levels_)
+    {
+        for (auto& slot : level.slots)
+        {
+            if (!slot.occupied ||
+                !BelongsToCurrentWindow(slot.key))
+            {
+                continue;
+            }
+
+            slot.dirty = true;
+            slot.invalidationPriorityBoost =
+                std::max(
+                    slot.invalidationPriorityBoost,
+                    0.25F);
+
+            if (slot.cell.valid || slot.staleReusable)
+            {
+                slot.cell.irradiance =
+                    DirectionalIrradianceL1{};
+                UpdateGpuSnapshotCell(
+                    level.level,
+                    PhysicalIndex(slot.key));
+            }
+        }
+    }
+}
+
 std::vector<RadianceUpdateCandidate>
 RadianceClipmapResidency::BuildUpdateList(
     const math::Double3& observerInFrameMeters,
