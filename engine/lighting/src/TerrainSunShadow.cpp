@@ -84,6 +84,10 @@ f64 TerrainSunVisibility(const TerrainSunShadowField& field, const math::Double3
     const f64 bias = std::max(0.5, field.radiusMeters * 2.0e-7);
     const f64 inner = field.radiusMeters + field.minimumElevationMeters - bias;
     f64 visibility = 1.0;
+    // Both solar-limb contact envelopes share the same heightfield ray.
+    // The limiting horizon angle is monotone in disc area, so evaluate the
+    // expensive overlap integral only once after the traversal.
+    f64 minimumClearanceAngle = std::numeric_limits<f64>::infinity();
     if (angularRadius > 0.0)
     {
         constexpr f64 sourceDistance = 1.0e15;
@@ -113,11 +117,15 @@ f64 TerrainSunVisibility(const TerrainSunShadowField& field, const math::Double3
         }
         else if (t > bias * 4.0)
         {
-            visibility = std::min(visibility, celestial_lighting::DiscHorizonVisibleFraction(
-                std::atan2(clearance, t), angularRadius));
-            if (visibility <= 0.0) return 0.0;
+            minimumClearanceAngle = std::min(minimumClearanceAngle, std::atan2(clearance, t));
+            // The trailing stellar limb is below the terrain horizon:
+            // no part of the finite disc remains visible.
+            if (minimumClearanceAngle <= -angularRadius) return 0.0;
         }
     }
+    if (angularRadius > 0.0 && std::isfinite(minimumClearanceAngle))
+        visibility = std::min(visibility, celestial_lighting::DiscHorizonVisibleFraction(
+            minimumClearanceAngle, angularRadius));
     return visibility;
 }
 
