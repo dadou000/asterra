@@ -97,7 +97,7 @@ inline float Chart(V2 p,float footprint,float scale,float erosionStrength,std::u
     float baseScale=.15f*scale;
     float frequency=1.f/std::max(1e-4f,baseScale*.7f);
     float strength=.22f*baseScale*erosionStrength;
-    float magnitude=0.f,roundingMultiplier=1.f;
+    float roundingMultiplier=1.f;
     for(std::uint32_t k=0;k<octaves;k++)
     {
         float weight=DetailWeight(2700.f/scale/std::exp2(static_cast<float>(k)),footprint);
@@ -111,13 +111,15 @@ inline float Chart(V2 p,float footprint,float scale,float erosionStrength,std::u
         slope.y+=signCell*side.y*strength*.5f;
         float faded=fade*(1.f-combi)+cell.x*.5f*combi;
         height+=faded*strength*weight;
-        magnitude+=strength*weight;
         fade=faded;
         float rounding=.1f*Clamp(cell.x+.5f,0.f,1.f)*roundingMultiplier;
         combi=PowInv(combi,1.5f)*EaseOut(SmoothStart(std::abs(cell.y)*1.25f,rounding*1.25f));
         strength*=.5f;frequency*=2.f;roundingMultiplier*=2.f;
     }
-    return (height-initialHeight-.65f*magnitude)*85000.f*.45f;
+    // The HTML subtracts a baseline because it replaces its mountain model.
+    // Orbit *adds* this modifier to its existing mountains, so preserve
+    // mean elevation and apply only the signed gully displacement.
+    return (height-initialHeight)*85000.f*.45f;
 }
 } // namespace phacelle
 
