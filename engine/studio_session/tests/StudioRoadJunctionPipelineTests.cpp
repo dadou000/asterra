@@ -121,7 +121,7 @@ int main()
                 {"params",rpc::Value::Object{
                     {"action","step"},{"node",centre.id.ToString()},
                     {"steps",static_cast<i64>(1)}}
-            });
+            }});
             const auto reply=studio.DispatchRpc(rpc::Serialize(step));
             CHECK(reply.has_value());
             const auto value=rpc::ParseValue(*reply);
@@ -174,7 +174,7 @@ int main()
                 {"method","infrastructure.vehicle_world"},
                 {"params",rpc::Value::Object{
                     {"action","spawn"},{"node",centre.id.ToString()}}
-            });
+            }});
             const auto reply=studio.DispatchRpc(rpc::Serialize(spawn));
             CHECK(reply.has_value());
             const auto parsed=rpc::ParseValue(*reply);
@@ -193,7 +193,7 @@ int main()
                 {"params",rpc::Value::Object{
                     {"action","step"},{"node",centre.id.ToString()},
                     {"steps",static_cast<i64>(60)}}
-            });
+            }});
             const auto stepped=studio.DispatchRpc(rpc::Serialize(step));
             CHECK(stepped.has_value());
             const auto stepValue=rpc::ParseValue(*stepped);

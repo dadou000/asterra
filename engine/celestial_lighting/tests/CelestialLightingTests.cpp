@@ -255,8 +255,8 @@ int main()
 
         // No overlap and total eclipse are unchanged by darkening.
         if (FiniteDiscOccultation(sourceWith(u), occluderAt(3.0, 0.0, 0.3)).obscuredFraction != 0.0) return FailCode(14);
-        const auto total = FiniteDiscOccultation(sourceWith(u), occluderAt(0.0, 0.0, 1.5));
-        if (!total.total || !Near(total.obscuredFraction, 1.0, 1.0e-12)) return FailCode(15);
+        const auto totalEclipse = FiniteDiscOccultation(sourceWith(u), occluderAt(0.0, 0.0, 1.5));
+        if (!totalEclipse.total || !Near(totalEclipse.obscuredFraction, 1.0, 1.0e-12)) return FailCode(15);
 
         // Two overlapping occluders: the union, not the product of their separate visibilities.
         const std::vector<ApparentDisc> pair{occluderAt(0.15, 0.0, 0.5), occluderAt(0.25, 0.1, 0.5)};
