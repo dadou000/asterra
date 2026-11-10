@@ -70,6 +70,7 @@
 #include <orbit/world_model/CelestialLightingService.hpp>
 
 #include <future>
+#include <stop_token>
 #include <array>
 #include <atomic>
 #include <set>
@@ -666,6 +667,7 @@ private:
         u64 revision{0U};
         std::shared_ptr<rhi::Buffer> buffer;
         std::future<lighting::TerrainSunShadowField> pending;
+        std::stop_source cancelBuild;
         std::unique_ptr<lighting::TerrainSunShadowField> stagedField;
         std::shared_ptr<rhi::Buffer> stagedBuffer;
         std::size_t uploadedSamples{0U};
