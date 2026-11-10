@@ -11,7 +11,7 @@ symbols = ["TerrainSunShadowField", "BuildTerrainSunShadowField", "TerrainSunVis
 invariants = [
   "TerrainSource, radius and source revision are authoritative; the 1024x512 heightfield is a disposable derived product. Camera, screen depth, render LOD and sun direction are absent from its key.",
   "The field samples opaque ground elevation, with longitude wrapping and bilinear interpolation. Standing water is not raised into an opaque mountain caster.",
-  "CPU and GPU traverse at half the field spacing, with a 512-sample safety cap. A maximum-relief sphere rejects fully sunlit queries before height reads; the limiting horizon angle is accumulated along the ray and the finite stellar-disc integral is evaluated once for both solar limbs.",
+  "CPU and GPU traverse at half the field spacing, with a 512-sample safety cap. A maximum-relief sphere rejects fully sunlit queries before height reads; the minimum horizon slope is accumulated along the ray and its angle and finite stellar-disc integral are evaluated once for both solar limbs.",
   "The normal direct-light path uses this field when ready. The existing sun-audit methods retain their explicit comparison/debug behavior.",
   "Air interpolates extra terrain attenuation separately from the analytic planet eclipse. Cloud light-volume voxels cache extra terrain attenuation beside optical depth; the planetary disc remains analytic at every scattering point. Unavailable cache data uses the shared query.",
   "A single bounded low-priority job worker builds shadow fields without render-thread waits; builds are shared between viewports for the same body/source/radius and old generations may be canceled. Source revisions are checked during generation and before publishing.",
@@ -35,8 +35,8 @@ bilinearly blended into extinction near the terminator.
 
 ## Terminator experiment and scheduling limitations (2026-11-10)
 
-The CPU and HLSL paths now obtain a single minimum signed horizon angle per
-ray. A uniform stellar disc becomes fully illuminated when the minimum angle
+The CPU and HLSL paths now obtain a single minimum clearance-to-distance slope
+per ray, converting it to a signed horizon angle only after traversal. A uniform stellar disc becomes fully illuminated when the minimum angle
 is above its angular radius, fully occluded below its negative angular radius,
 and partially visible between those two *solar-limb* envelopes. This is
 algebraically equivalent to applying the monotone disc fraction at every ray
