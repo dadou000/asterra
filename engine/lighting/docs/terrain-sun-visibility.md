@@ -11,10 +11,12 @@ symbols = ["TerrainSunShadowField", "BuildTerrainSunShadowField", "TerrainSunVis
 invariants = [
   "TerrainSource, radius and source revision are authoritative; the 1024x512 heightfield is a disposable derived product. Camera, screen depth, render LOD and sun direction are absent from its key.",
   "The field samples opaque ground elevation, with longitude wrapping and bilinear interpolation. Standing water is not raised into an opaque mountain caster.",
-  "CPU and GPU traverse at half the field spacing, with a 512-sample safety cap. A maximum-relief sphere rejects fully sunlit queries before height reads; finite stellar disc area provides penumbra, not a hard depth comparison.",
+  "CPU and GPU traverse at half the field spacing, with a 512-sample safety cap. A maximum-relief sphere rejects fully sunlit queries before height reads; the limiting horizon angle is accumulated along the ray and the finite stellar-disc integral is evaluated once for both solar limbs.",
   "The normal direct-light path uses this field when ready. The existing sun-audit methods retain their explicit comparison/debug behavior.",
   "Air interpolates extra terrain attenuation separately from the analytic planet eclipse. Cloud light-volume voxels cache extra terrain attenuation beside optical depth; the planetary disc remains analytic at every scattering point. Unavailable cache data uses the shared query.",
-  "Candidate fields build asynchronously and activate only for the matching body/source/revision/radius. Render graph closures pin buffers used by commands; an implementation edit uses the central Studio-generation handoff and a failed candidate leaves the running Studio usable."
+  "A single bounded low-priority job worker builds shadow fields without render-thread waits; builds are shared between viewports for the same body/source/radius and old generations may be canceled. Source revisions are checked during generation and before publishing.",
+  "Unpublished GPU candidates are populated in bounded 65536-sample chunks per frame; no incomplete buffer is bound to a render graph. GPU resource creation and per-frame buffer mapping remain RHI operations and require GPU stall profiling.",
+  "Candidates activate only for the exact body/source/revision/radius. Render graph closures pin published buffers; hot native changes use central Studio-generation handoff, preserving the previous valid generation on failed candidate builds."
 ]
 related = ["/rendering/atmosphere", "/rendering/clouds/shadows-and-light-volume", "/rendering/lighting/visibility-and-reflections"]
 verify = ["ctest -R Orbit.TerrainSunShadow: CPU ridges, offscreen occlusion, longitude seams and finite-disc partial visibility.", "ctest -R Orbit.TerrainSunShadowGpu: real Vulkan shader versus the CPU reference across umbra, penumbra and full sunlight.", "python tools/orbit_report_rendering.py --reports 10 11 12 13 --out build/report-fixes/verified: replay saved report scenes with fixed exposure and repeat/reference controls."]
@@ -30,3 +32,32 @@ Atmospheric extinction uses a horizon-relative transmittance lookup inspired by
 [Bruneton's separation of transmittance and ground intersections](https://ebruneton.github.io/precomputed_atmospheric_scattering/atmosphere/functions.glsl.html).
 Finite-disc visibility is applied separately; ground-blocked zeros must not be
 bilinearly blended into extinction near the terminator.
+
+## Terminator experiment and scheduling limitations (2026-11-10)
+
+The CPU and HLSL paths now obtain a single minimum signed horizon angle per
+ray. A uniform stellar disc becomes fully illuminated when the minimum angle
+is above its angular radius, fully occluded below its negative angular radius,
+and partially visible between those two *solar-limb* envelopes. This is
+algebraically equivalent to applying the monotone disc fraction at every ray
+sample, but removes expensive repeated inverse-trigonometric disc integrals.
+The heightfield remains body-fixed; neither camera movement nor a clipmap
+recenter changes the terminator silhouette.
+
+The 1024x512 field is a coarse global caster representation. It cannot reproduce
+fine erosion ridges, metre-scale terrain shadows, or cloud volumetric occlusion
+by itself. A future local relief hierarchy must share TerrainSource authority
+and conservative min/max visibility rather than inventing a second terrain
+mesh or a screen-space-only terrain shadow path.
+
+The worker pool bounds CPU concurrency to one background producer per renderer.
+The ready future is polled with zero timeout, outdated work may be canceled,
+and terrain buffer transfers are throttled to 256 KiB of elevations per frame.
+This does **not** prove that CreateBuffer or Map/Unmap are nonblocking on every
+RHI/device; only a timeline-fence-backed transfer queue can make that stronger
+guarantee. Revisions must never publish partial terrain-shadow buffers.
+
+The existing `verified` field identifies the last previously GPU-validated
+revision. This new experiment needs actual Vulkan shader tests, a Studio
+frame-time capture, and an erosion-heavy terminator sweep before it can be
+marked visually verified.
