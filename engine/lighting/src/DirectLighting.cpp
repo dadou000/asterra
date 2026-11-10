@@ -214,6 +214,16 @@ float4 CacheSkyIrradiance(float3 position, float3 normal, uint levelCount)
             continue;
         }
 
+        // A cell estimated while the sky summary was zero (start-up, night)
+        // is valid but holds no sky at all (skyIrradiance.w = 0). Treating it
+        // as a hit would show black sky fill until the cache gets round to
+        // re-estimating it; treat it as missing so the clipmap terrain
+        // ambient (current sky, immediate) takes over.
+        if (cell.skyIrradiance.w <= 1.0e-6)
+        {
+            continue;
+        }
+
         // skyIrradiance.w is the sky luminance the cell was baked with; divide
         // it out so the caller's current-sky scale replaces it (a cell that
         // has not been re-estimated since the sky changed must not keep the
@@ -701,19 +711,27 @@ float4 main(VSOutput input) : SV_Target0
         const float3 skyPosition =
             ReconstructSurfacePosition(depth, cameraRay, cameraForward);
 
-        // The 3D cache is exact near the camera (it also sees authored
-        // structures) but dense only within about a kilometre. Beyond its fine
-        // levels the clipmap's own sky-visibility channel covers the terrain at
-        // the resolution of the level that draws it; with that available the
-        // cache's coarse levels are not consulted for the sky.
-        const uint cacheSkyLevels = terrainAmbientLevels > 0u
-            ? min(skyLevelCount, 3u) : skyLevelCount;
-        const float4 skySample = cacheSkyLevels > 0u
-            ? CacheSkyIrradiance(skyPosition, n, cacheSkyLevels)
+        const float3 bodyPosition =
+            skyPosition + g.cameraFrameAndParticleGrid.xyz;
+        const float3 bodyUp = normalize(bodyPosition);
+        // Terrain sky visibility from the finest clipmap level covering this
+        // point: geometry only, cosine-weighted (what irradiance needs), and
+        // always at the current sky. It is the primary source wherever it
+        // exists. The 3D cache's own sky channel is a uniform-hemisphere
+        // fraction that over-weights low horizon rays, so it reads about half
+        // as bright on open terrain; mixing the two paints bright and dark
+        // chunks as the cache fills. The cache is the fallback where the
+        // clipmap has nothing (and keeps the sky for anything it alone sees).
+        const float4 terrainSky = terrainAmbientLevels > 0u
+            ? TerrainAmbientLookup(g_terrainAmbientLevels, g_terrainAmbient,
+                terrainAmbientLevels, bodyPosition)
+            : float4(-1.0, 0.0, 0.0, 0.0);
+        const float4 skySample = terrainSky.x < 0.0 && skyLevelCount > 0u
+            ? CacheSkyIrradiance(skyPosition, n, skyLevelCount)
             : float4(0.0, 0.0, 0.0, 0.0);
         float3 skyContribution;
 
-        if (skySample.w > 0.5)
+        if (terrainSky.x < 0.0 && skySample.w > 0.5)
         {
             skyContribution =
                 baseColor *
@@ -723,15 +741,6 @@ float4 main(VSOutput input) : SV_Target0
         }
         else
         {
-            const float3 bodyPosition =
-                skyPosition + g.cameraFrameAndParticleGrid.xyz;
-            const float3 bodyUp = normalize(bodyPosition);
-            // Terrain sky visibility from the finest clipmap level covering
-            // this point: geometry only, so the current sky scales it here.
-            const float4 terrainSky = terrainAmbientLevels > 0u
-                ? TerrainAmbientLookup(g_terrainAmbientLevels, g_terrainAmbient,
-                    terrainAmbientLevels, bodyPosition)
-                : float4(-1.0, 0.0, 0.0, 0.0);
             // Where nothing covers the point a coarse analytic ambient is far
             // better than none: a flat 70% open fraction and the local up.
             const float openness = terrainSky.x >= 0.0 ? terrainSky.x : 0.7;
