@@ -10,6 +10,12 @@ target_link_libraries(OrbitTerrainBenchmark PRIVATE Orbit::TerrainCache)
 target_compile_features(OrbitTerrainBenchmark PRIVATE cxx_std_23)
 orbit_enable_warnings(OrbitTerrainBenchmark)
 
+add_executable(OrbitPhacelleErosionTests PhacelleErosionTests.cpp)
+target_link_libraries(OrbitPhacelleErosionTests PRIVATE Orbit::Terrain)
+target_compile_features(OrbitPhacelleErosionTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitPhacelleErosionTests)
+add_test(NAME Orbit.PhacelleErosion COMMAND OrbitPhacelleErosionTests)
+
 add_executable(OrbitTerrainMountainTests TerrainMountainTests.cpp)
 target_link_libraries(OrbitTerrainMountainTests PRIVATE Orbit::Terrain)
 target_compile_features(OrbitTerrainMountainTests PRIVATE cxx_std_23)
