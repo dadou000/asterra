@@ -26,6 +26,14 @@ std::shared_ptr<rhi::Buffer> StudioViewportRenderer::EnsureTerrainSunShadow(
         });
     if (found == terrainSunShadowPresentations_.end())
     {
+        // Bound old source generations. Evicted jobs receive cancellation;
+        // their promise futures never make the render thread join a worker.
+        constexpr std::size_t kMaximumResidentFields = 8U;
+        if (terrainSunShadowPresentations_.size() >= kMaximumResidentFields)
+        {
+            terrainSunShadowPresentations_.front().cancelBuild.request_stop();
+            terrainSunShadowPresentations_.erase(terrainSunShadowPresentations_.begin());
+        }
         terrainSunShadowPresentations_.emplace_back();
         found = terrainSunShadowPresentations_.end() - 1;
         found->keyBody = body;
@@ -132,15 +140,18 @@ std::shared_ptr<rhi::Buffer> StudioViewportRenderer::EnsureTerrainSunShadow(
         cache.pendingSource = source;
         cache.pendingBody = body;
         cache.pendingRadius = radius;
+        cache.cancelBuild = std::stop_source{};
+        const auto cancellation = cache.cancelBuild.get_token();
         try
         {
             terrainSunShadowPool_->Submit(jobs::JobPriority::Low,
-                [source, radius, completion]
+                [source, radius, completion, cancellation]
                 {
                     try
                     {
                         completion->set_value(
-                            lighting::BuildTerrainSunShadowField(*source, radius));
+                            lighting::BuildTerrainSunShadowField(*source, radius,
+                                1024U, 512U, cancellation));
                     }
                     catch (...)
                     {
