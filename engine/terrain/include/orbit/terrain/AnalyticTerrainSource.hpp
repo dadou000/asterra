@@ -47,6 +47,16 @@ struct GpuProceduralCrater
     f64 boundingCosine{-1.0};
 };
 
+// Procedural gullies from the v153 playground. This modifies the canonical
+// generated elevation; it does not replace hydraulic/thermal erosion passes.
+struct PhacelleErosionDesc
+{
+    f64 strength{0.0};       // Off by default: existing worlds retain their terrain.
+    f64 scale{1.0};          // Frequency multiplier; v153 uses 1.0.
+    u32 octaves{4};          // Maximum 5; each filtered by spatial footprint.
+    f64 lowlandFadeMeters{2'500.0};
+};
+
 struct AnalyticTerrainDesc
 {
     u64 seed{0x41535445525241ULL};
@@ -63,6 +73,7 @@ struct AnalyticTerrainDesc
     GlobalTerrainFieldDesc global{};
     MountainTerrainDesc mountains{};
     ProceduralCraterTerrainDesc craters{};
+    PhacelleErosionDesc phacelle{};
     // Mountain relief and local detail share the available elevation headroom.
     f64 maximumElevationAboveSeaLevelMeters{8'000.0};
 };
