@@ -782,6 +782,7 @@ float PhacelleErosionDeltaMeters(float3 direction,float footprint)
     return delta;
 }
 
+)" R"(
 // === Rain shadow probe helpers (AnalyticTerrainSource.cpp) ===
 
 float ZonalWindSign(float latitudeDeg, float transitionDegrees)
