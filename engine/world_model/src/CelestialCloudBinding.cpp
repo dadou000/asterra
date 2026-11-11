@@ -4,6 +4,7 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -12,6 +13,23 @@ namespace orbit::world_model
 {
 namespace
 {
+// The same limits celestial_clouds::CloudField validates its layers against.
+// A layer outside them (for example a top altitude at or below its base from
+// hand-edited or older project data) used to throw while the viewport built its
+// cloud field and took the whole application down; it is left out instead.
+[[nodiscard]] bool IsRenderableLayer(const celestial_clouds::CloudLayerParameters& p) noexcept
+{
+    return std::isfinite(p.baseAltitudeMeters) && std::isfinite(p.topAltitudeMeters) &&
+           p.baseAltitudeMeters >= 0.0 && p.topAltitudeMeters > p.baseAltitudeMeters &&
+           std::isfinite(p.coverageBias) && p.coverageBias >= -1.0 && p.coverageBias <= 1.0 &&
+           std::isfinite(p.peakOpticalDepth) && p.peakOpticalDepth >= 0.0 &&
+           std::isfinite(p.singleScatteringAlbedo) && p.singleScatteringAlbedo >= 0.0 &&
+           p.singleScatteringAlbedo <= 1.0 && std::isfinite(p.anisotropy) &&
+           p.anisotropy > -1.0 && p.anisotropy < 1.0 && std::isfinite(p.densityExponent) &&
+           p.densityExponent > 0.0 && std::isfinite(p.weatherScale) && p.weatherScale > 0.0 &&
+           std::isfinite(p.detailScale) && p.detailScale > 0.0;
+}
+
 template <typename T>
 [[nodiscard]] T PropertyOr(
     const scene::ObjectStore& objects,
@@ -220,6 +238,11 @@ ResolveCloudLayers(
                     kCloudOrbitalRepresentation,
                     true)
         };
+
+        if (!IsRenderableLayer(p))
+        {
+            continue;
+        }
 
         result.push_back({
             .body = body,

@@ -617,6 +617,71 @@ void TestBoundedRequestBudgetAcrossPages()
         "A one-request frame budget must leave at least one dirty page unscheduled.");
 }
 
+void TestPageGateSerializesDependentPages()
+{
+    Fixture fixture({
+        .editDebounceSeconds = 0.0,
+        .maxBuildRequestsPerTick = 4U
+    });
+
+    const auto first = MakeAddress(31U, 32U);
+    const auto second = MakeAddress(32U, 32U);
+    fixture.scheduler.RegisterPage(first, InitialRevisions());
+    fixture.scheduler.RegisterPage(second, InitialRevisions());
+
+    const auto inFlight =
+        [&fixture](const terrain::PhysicalTerrainPageAddress& address)
+    {
+        const auto status = fixture.scheduler.PageStatus(address);
+        return status.has_value() &&
+            (status->state == studio_session::TerrainRebuildState::Queued ||
+             status->state == studio_session::TerrainRebuildState::BuildingCpu ||
+             status->state == studio_session::TerrainRebuildState::BuildingGpu);
+    };
+
+    // Each page may start only while its neighbour is idle. Requests made
+    // earlier in the same tick are visible to the gate, so even with a budget
+    // of four requests only one of the two pages can be submitted.
+    fixture.scheduler.SetPageGate(
+        [&](const terrain::PhysicalTerrainPageAddress& address)
+        {
+            return !inFlight(address == first ? second : first);
+        });
+
+    fixture.scheduler.RebuildDirty();
+
+    const auto a = fixture.scheduler.PageStatus(first);
+    const auto b = fixture.scheduler.PageStatus(second);
+    Require(a.has_value() && b.has_value(), "Gate test pages must be registered.");
+    Require(
+        a->state != studio_session::TerrainRebuildState::Dirty,
+        "The first page must be submitted when its neighbour is idle.");
+    Require(
+        b->state == studio_session::TerrainRebuildState::Dirty,
+        "The second page must wait while its neighbour is building.");
+
+    DriveReady(fixture, first);
+    DriveReady(fixture, second);
+    const auto done = fixture.scheduler.PageStatus(second);
+    Require(
+        done.has_value() &&
+            done->state == studio_session::TerrainRebuildState::Ready,
+        "A gated page must build once its neighbour has finished.");
+
+    // A gate that always refuses blocks every build; clearing it releases them.
+    const auto third = MakeAddress(33U, 32U);
+    fixture.scheduler.RegisterPage(third, InitialRevisions());
+    fixture.scheduler.SetPageGate(
+        [](const terrain::PhysicalTerrainPageAddress&) { return false; });
+    fixture.scheduler.RebuildDirty();
+    Require(
+        fixture.scheduler.PageStatus(third)->state ==
+            studio_session::TerrainRebuildState::Dirty,
+        "A refusing gate must not let the page build.");
+    fixture.scheduler.SetPageGate({});
+    DriveReady(fixture, third);
+}
+
 void TestStaleBuildIsReplacedByLatestRevision()
 {
     Fixture fixture({
@@ -998,6 +1063,7 @@ int main()
     TestM27DescendantsOnly();
     TestCpuAndGpuBuildStates();
     TestBoundedRequestBudgetAcrossPages();
+    TestPageGateSerializesDependentPages();
     TestStaleBuildIsReplacedByLatestRevision();
     TestM16LatencyAndPeakQueueDiagnostics();
     TestStaleUploadCannotCommitOverNewRevision();

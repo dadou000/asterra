@@ -126,20 +126,13 @@ public:
     Settings(
         scene::ObjectId volume);
 
-#ifndef ORBIT_VOLUME_RENDER_BASE_IMPLEMENTATION
     [[nodiscard]] VolumeRenderDiagnostics
     Diagnostics(
         scene::ObjectId volume) const noexcept;
-#else
-    [[nodiscard]] VolumeRenderDiagnostics
-    LiveDiagnostics(
-        scene::ObjectId volume) const noexcept;
-#endif
 
     void RemoveMissing(
         const scene::ObjectStore& objects);
 
-#ifndef ORBIT_VOLUME_RENDER_BASE_IMPLEMENTATION
     void AddPasses(
         render_graph::RenderGraph& graph,
         std::string_view prefix,
@@ -160,31 +153,8 @@ public:
         u32 radianceLevelCount,
         render_graph::BufferHandle particleLightGrid,
         bool resetHistory);
-#else
-    void AddLivePasses(
-        render_graph::RenderGraph& graph,
-        std::string_view prefix,
-        std::string_view viewportId,
-        render_graph::TextureHandle sceneColor,
-        render_graph::TextureHandle depth,
-        u32 width,
-        u32 height,
-        const render_view::CameraState& camera,
-        const lighting::LightingView& lightingView,
-        const world_model::ResolvedVolumeDomain& domain,
-        volume_fields::VolumeFieldStorage& storage,
-        const volume_fields::ImportedVolumeFields& fields,
-        const lighting::DirectionalLight& stellar,
-        std::span<const lighting::ResolvedLocalLight> localLights,
-        render_graph::BufferHandle radianceCells,
-        render_graph::BufferHandle radianceLevels,
-        u32 radianceLevelCount,
-        render_graph::BufferHandle particleLightGrid,
-        bool resetHistory);
-#endif
 
     // Available to the M36 policy wrapper; this is the unchanged M35 backend.
-#ifndef ORBIT_VOLUME_RENDER_BASE_IMPLEMENTATION
     [[nodiscard]] VolumeRenderDiagnostics
     LiveDiagnostics(
         scene::ObjectId volume) const noexcept;
@@ -209,7 +179,6 @@ public:
         u32 radianceLevelCount,
         render_graph::BufferHandle particleLightGrid,
         bool resetHistory);
-#endif
 
 private:
     class Impl;

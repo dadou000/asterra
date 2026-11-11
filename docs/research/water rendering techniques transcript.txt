@@ -1,0 +1,798 @@
+source https://github.com/GarrettGunnell/Water
+[00:06] hello everyone when you think of the
+[00:08] best video game water you probably think
+[00:10] of sea of Thieves it might surprise you
+[00:12] to hear that their water looks so good
+[00:14] because it is a genuine simulation of
+[00:16] the ocean it might also surprise you to
+[00:18] hear that csds didn't do it first in
+[00:21] fact Assassin's Creed Black Flag and
+[00:23] crisis both notably made use of the same
+[00:25] techniques as sea of Thieves and even
+[00:27] the movie Titanic did it for their ocean
+[00:29] CGI so how did they do it and can I do
+[00:31] any better
+[00:39] before we get started this video heavily
+[00:41] Builds on topics presented in my last
+[00:43] video so you should go watch that and
+[00:44] come back but if you don't want to
+[00:46] here's a quick recap
+[00:49] we finished the last video with a bunch
+[00:52] of fractionally summed up sine waves
+[00:54] that happens to look like the surface of
+[00:55] moving water my GPU can handle around 64
+[00:58] waves directly in the water Shader
+[01:00] itself without using too many resources
+[01:02] which is plenty of waves for a small
+[01:04] body of water but when we wanted to
+[01:06] model something like the ocean we could
+[01:08] not have a detailed water surface
+[01:09] without a lot of tiling which breaks the
+[01:12] illusion many people offered their own
+[01:14] Solutions such as using noise to prevent
+[01:16] repetition but noise is too expensive to
+[01:18] compute in real time and you would
+[01:20] instead use a noise texture which itself
+[01:21] has to tile across the ocean and will
+[01:24] repeat just like everything else the
+[01:26] reality is that mostly everything in
+[01:27] real time is going to repeat eventually
+[01:29] so we need to shift our goal from having
+[01:31] no tiling to tiling just enough that
+[01:34] it's not very noticeable this is easily
+[01:36] measured by reducing the tiling in the
+[01:38] field of view rather than reducing the
+[01:39] tiling from above because you'll always
+[01:41] be able to see it from far enough away
+[01:43] anyways since the fov is now involved we
+[01:46] have the option of creating some sort of
+[01:47] complex level of detail system where we
+[01:50] have multiple sets of waves that are
+[01:51] chosen based on the distance from the
+[01:53] camera that way there is more visual
+[01:54] Variety in the distance and the
+[01:56] discontinuity in the waves wouldn't be
+[01:58] noticeable that sounds like a lot more
+[02:00] work though so I think I'll just go with
+[02:01] the much simpler solution which is
+[02:03] throwing more waves at the water to
+[02:05] reframe our problem we can't have our
+[02:07] cake and eat it too the more space we
+[02:09] ask our waves to cover the more ways we
+[02:11] need to fill in the gaps and get those
+[02:13] fine details back this has a
+[02:15] computational limit the GPU can only
+[02:17] handle so many waves for me the limit is
+[02:20] 650 waves before the FPS dips below 60.
+[02:23] this means that if we dedicated all of
+[02:25] our gpu's resources to water we would
+[02:27] only have 650 waves to work with which
+[02:30] still tiles almost immediately at this
+[02:32] point a normal person would probably
+[02:34] give up and go down the other path of
+[02:36] wave cascading but if I gave up then I
+[02:38] wouldn't be able to tell you that the
+[02:39] water I showed at the beginning of the
+[02:41] video is 4.2 million waves at 150 fps to
+[02:46] understand how this could even remotely
+[02:48] be possible let's think about our water
+[02:49] in Reverse imagine the surface of our
+[02:52] water is described by some unknown
+[02:54] periodic function we could then say that
+[02:56] the sum of every trig function in our
+[02:58] fluid simulation is an approximation of
+[03:00] that water surface function a series of
+[03:02] trig functions that approximates a
+[03:04] periodic function is called a Fourier
+[03:06] series but that's a bit of an
+[03:08] oversimplification taking a signal and
+[03:10] decomposing it into all the frequencies
+[03:12] that went into it is known as the
+[03:14] Fourier transform and if math were the
+[03:16] DND magic system the Fourier transform
+[03:18] would be a level 9 spell to understand
+[03:21] just how magical it is it's like if you
+[03:23] took a piece of matter and decomposed it
+[03:25] into a representation of all the
+[03:27] molecules that went into it you can then
+[03:29] do whatever you want with the molecules
+[03:31] Because the actual magical part of the
+[03:33] Fourier transform is that you can go
+[03:35] back the inverse Fourier transform takes
+[03:38] the frequency representation of a
+[03:39] function and converts it back into the
+[03:41] original function this is a lossless
+[03:43] transformation so you can go back and
+[03:45] forth forever as much as you want and
+[03:47] everything stays preserved this
+[03:48] symbolically means that if you put a
+[03:50] little too much salt in your pasta you
+[03:52] could decompose your pasta get rid of
+[03:54] some of the sodium and convert it back
+[03:56] into the pasta a more real world
+[03:57] application would be if you had a sample
+[03:59] wave of a piano cord you could take the
+[04:01] Fourier transform and decompose that
+[04:03] wave into all the frequencies that went
+[04:05] into it with that we'd be able to tell
+[04:07] what keys were used to make the sound
+[04:09] you could then chop off one of the q's
+[04:11] frequencies and take the inverse Fourier
+[04:12] transform to turn the frequencies back
+[04:14] into the original music wave but now
+[04:16] without one of those keys there are a
+[04:18] ton of amazing resources on the Fourier
+[04:20] transform for you to appreciate and
+[04:22] admire that I will link in the
+[04:24] description but the core concept that
+[04:25] makes it all work is complex numbers and
+[04:28] if you aren't familiar with complex
+[04:29] numbers then I'd love to tell you about
+[04:31] a free and easy way to get introduced to
+[04:33] them with this video's sponsor brilliant
+[04:36] brilliant is the best way to learn math
+[04:38] data science and computer science
+[04:40] interactively brilliant offers thousands
+[04:42] of lessons from basic to Advanced so if
+[04:45] you're just getting started learning
+[04:46] math or are brushing up on your linear
+[04:48] algebra for Shader programming brilliant
+[04:50] has something for you even if you don't
+[04:52] know where to start that's no problem
+[04:53] brilliant customizes its content to fit
+[04:56] what you need just take a quick quiz
+[04:58] when you sign up and Brilliant will
+[04:59] match you with lessons that fit your
+[05:01] interests and level of expertise in the
+[05:04] past two weeks I had to learn everything
+[05:05] I needed for this video and Brilliant
+[05:07] gave me the perfect jump start on
+[05:09] complex numbers to better understand how
+[05:11] the Fourier transform was actually
+[05:13] working you can even immediately apply
+[05:15] this knowledge to create beautiful
+[05:16] fractal shaders be sure to try out
+[05:18] everything brilliant has to offer with a
+[05:20] free 30-day trial and 20 off an annual
+[05:23] plan when you visit brilliant.org
+[05:25] forward slash Ace Rolla or click the
+[05:27] link in the description thanks so much
+[05:29] to brilliant for sponsoring this video
+[05:31] okay so the Fourier transform takes a
+[05:33] function and decomposes it into all of
+[05:36] the individual waves that went into it
+[05:37] while the inverse Fourier transform
+[05:39] takes all of those waves and turns it
+[05:41] back into the original function for our
+[05:43] water we are interested in that inverse
+[05:45] functionality taking a lot of
+[05:47] frequencies and turning it into the
+[05:48] ocean but but before we can do that we
+[05:51] must come to terms with two important
+[05:53] Concepts the time domain and the
+[05:55] frequency domain the time domain
+[05:56] representation of a wave is how you
+[05:58] would normally think about it the x-axis
+[06:00] is time and so it describes the
+[06:02] amplitude of the wave as time moves
+[06:03] forward in the context of our water this
+[06:05] would be the height of a Vertex at any
+[06:07] given time T the frequency domain on the
+[06:10] other hand represents the wave with
+[06:11] frequency on the x-axis instead of
+[06:14] inputting a time we input a frequency
+[06:16] and it tells us what the amplitude is
+[06:17] for that frequency remember that the
+[06:20] frequency of a wave is the distance
+[06:21] between its Peaks and the amplitude is
+[06:23] how tall the peak is for a simple sine
+[06:25] wave with frequency and amplitude 1 the
+[06:28] time domain graph is what you're used to
+[06:30] but the frequency domain graph is going
+[06:32] to be a flat line with a single point at
+[06:34] 1 1. this is because at frequency 1 the
+[06:37] amplitude is 1 but at all other
+[06:38] frequencies the amplitude is zero but if
+[06:41] we added a sine wave with frequency 2
+[06:43] and amplitude 2 the time domain graph
+[06:46] would change meaningfully and the
+[06:47] frequency domain graph would have a new
+[06:49] point at 2-2 thinking back to our very
+[06:52] complex fractional Brownian motion sum
+[06:54] of signs the time domain graph is crazy
+[06:56] but the frequency domain graph would
+[06:58] actually be quite simple since our waves
+[07:00] start with amplitude 1 and exponentially
+[07:02] decrease as frequency increases this
+[07:05] frequency domain graph is also referred
+[07:07] to as the spectrum of our water and we
+[07:09] reference it as H hat so if such a
+[07:12] simple function can generate such a
+[07:14] complex looking fluid simulation the
+[07:16] logic would track that if we got a
+[07:17] little bit more sophisticated we could
+[07:19] probably Model A very convincing ocean
+[07:21] as it turns out this is exactly what
+[07:24] Jerry tessendorf presented in his 2004
+[07:26] paper simulating ocean water in this
+[07:29] paper tessendorf explains methods used
+[07:31] by several movies for water CGI like
+[07:34] Waterworld and Titanic
+[07:37] skip skip but when does this game get
+[07:40] [ __ ] good
+[07:43] tessendorf states that oceanographic
+[07:46] literature tends to downplay gerstner
+[07:48] waves as a realistic model of the ocean
+[07:50] so just know that my opinion of gerstner
+[07:52] waves on the last video is now backed by
+[07:54] the oceanographic literature moving on
+[07:57] tessendorf informs us that
+[07:58] oceanographers have basically done all
+[08:01] of the work for us with data taken from
+[08:03] buoys photographs and radar measurements
+[08:05] researchers have defined several
+[08:07] Spectrum functions that can encapsulate
+[08:09] all the possible frequencies and their
+[08:11] corresponding amplitudes present in a
+[08:13] fully developed sea we Define a fully
+[08:15] developed sea as a sea produced by winds
+[08:18] blowing steadily over hundreds of miles
+[08:19] for several days tessendorf makes use of
+[08:22] the Philips Spectrum which takes a
+[08:24] single parameter as the wind speed the
+[08:26] greater the wind speed the greater the
+[08:28] largest possible wave as far as I'm
+[08:29] aware sea of Thieves also makes use of
+[08:31] the Philips Spectrum it turns out the
+[08:33] Philips Spectrum kind of sucks the
+[08:36] developers of Atlas in their GDC talk
+[08:38] presented their experience with the
+[08:40] Philips spectrum and instead proposed
+[08:42] the use of the John swap Spectrum John
+[08:44] swap stands for joint North Sea wave
+[08:46] observation project and has a lot more
+[08:48] control over the state of the ocean such
+[08:50] as wind speed wind direction wind fetch
+[08:53] the peak of the spectrum directional
+[08:54] distribution and artistic amplitude
+[08:56] override and a low pass filter all built
+[08:58] in so it's basically better in like
+[09:00] every conceivable fashion our goal is
+[09:02] now to build a random ocean wave height
+[09:04] field directly in the frequency domain
+[09:06] by randomly sampling our Spectrum
+[09:08] function and storing it into a texture
+[09:10] this sounds complicated but actually it
+[09:12] just means generating two random numbers
+[09:14] and multiplying it with the John swap at
+[09:17] every pixel of the texture an example
+[09:18] output looks like so we've only looked
+[09:21] at one-dimensional spectrums so how do
+[09:23] we interpret this two-dimensional
+[09:24] Spectrum the origin is in the center of
+[09:26] the texture the pixel value is the
+[09:28] amplitude and the distance from the
+[09:30] origin is the frequency the direction of
+[09:32] the pixel from the origin is going to be
+[09:34] the direction of the wave notice how
+[09:36] this logic sort of lines up with our
+[09:38] observations in the last video where we
+[09:40] wanted our lower frequency waves to be
+[09:42] tall and our higher frequency waves to
+[09:43] be very short to get fine details
+[09:46] without the chaos while we used
+[09:47] fractional Brownian motion to fix that
+[09:49] last time by iteratively reducing our
+[09:51] amplitude as frequency increased we are
+[09:54] now instead generating a legitimate
+[09:55] oceanographic Spectrum derived from Real
+[09:58] World observational data that is capable
+[10:00] of realistically simulating every
+[10:02] possible kind of Ocean State we'd like
+[10:04] but in order to actually see the state
+[10:06] of the ocean we have to do one final
+[10:08] task which is apply the inverse Fourier
+[10:10] transform to convert our frequency
+[10:12] domain representation of the ocean to
+[10:14] the time domain despite how scary the
+[10:16] Fourier transform seems it's actually
+[10:18] very simple and elegant to generate a
+[10:20] height map from our Spectrum texture we
+[10:22] just sum up every single frequency in
+[10:24] the Spectrum for each pixel of our
+[10:25] height map just like the sum of signs
+[10:27] here vector k is the position in the
+[10:30] Spectrum texture and Vector X is the
+[10:32] current position in the height map that
+[10:33] we are summing everything up for then
+[10:35] for our partial derivatives to calculate
+[10:37] the surface normals we just do another
+[10:39] Fourier transform this is now a context
+[10:41] in which it would actually be a great
+[10:43] idea to do central difference normals as
+[10:45] I presented in the last video because a
+[10:47] Fourier transform is going to be much
+[10:49] more expensive but in favor of having
+[10:51] the best visuals possible I will be
+[10:53] doing the extra Fourier transforms for
+[10:55] exact normal vectors the result of our
+[10:57] sums is then what we expect a height map
+[10:59] with partial derivatives since we are no
+[11:01] longer doing the water logic directly in
+[11:03] the vertex and fragment Shader and the
+[11:05] data is stored in textures all our
+[11:07] watershader needs to do is sample the
+[11:08] height map at each vertex and the slope
+[11:10] map at each fragment and we have our
+[11:12] ocean
+[11:16] um Mr Rolla why isn't it moving what a
+[11:19] great question that's because we forgot
+[11:20] the time part of the time domain
+[11:22] conversion I lied to you moments ago the
+[11:25] Fourier transform is not simple it's
+[11:27] actually quite complex
+[11:29] [Applause]
+[11:41] the frequency representation of a
+[11:43] function has a second complex part to it
+[11:45] you should think of it like a vector
+[11:46] where the first component is a real
+[11:48] number and the second component points
+[11:50] into the complex plane earlier I said
+[11:52] we'd generate two numbers to sample our
+[11:54] Spectrum function because we want a
+[11:55] random real value and a random complex
+[11:57] value it's this complex part of the
+[12:00] frequency domain that defines the phase
+[12:01] if you recall from last video the phase
+[12:03] of a wave is what moves the wave forward
+[12:05] to then move our ocean forward through
+[12:07] time we need to evolve our frequencies
+[12:09] every frame by multiplying each hat with
+[12:12] Euler's formula despite its simple
+[12:14] appearance this formula is basically God
+[12:16] Richard Feynman himself said that
+[12:18] Euler's formula is the most remarkable
+[12:20] formula in mathematics this is because
+[12:23] this simple complex exponential function
+[12:25] is equivalent to these two trig
+[12:27] functions which when multiplied with our
+[12:29] complex valued frequency is going to
+[12:31] rotate it around into the complex plane
+[12:33] evolving our frequency up to the time we
+[12:35] want this is conceptually difficult to
+[12:38] grasp so it's easy to think about
+[12:39] Euler's formula like a hand and crank on
+[12:42] a projector that is displaying our
+[12:43] animated ocean although it's more like
+[12:45] you are sitting in Plato's Cave the
+[12:47] ocean is the projected shadow on the
+[12:49] wall and the complex plane is casting
+[12:51] the Shadows we can control the speed of
+[12:53] our ocean by multiplying time with a
+[12:55] constant intest endorsed paper this is
+[12:57] referred to as the dispersion relation
+[12:59] which is equivalent to the square root
+[13:00] of the gravity constant times the
+[13:02] magnitude of vector k if you care about
+[13:04] how this is derived from the navier
+[13:06] Stokes equations he explains that in the
+[13:07] paper with the immense power of Euler's
+[13:10] formula and the Fourier transform we are
+[13:12] able to calculate the surface of the
+[13:13] ocean at any point in time we want which
+[13:16] if that's not cool to you I don't know
+[13:18] what is this means you could probably
+[13:19] make a game with some sick time
+[13:21] manipulation mechanics but generally
+[13:23] we're just going to move time forward
+[13:24] like normal people wow look at that
+[13:27] beautiful water let's check the
+[13:29] performance
+[13:32] oh
+[13:35] oh my God at the moment we are doing a
+[13:37] 256 by 256 simulation which is 65 000
+[13:42] waves and it's taking almost 40
+[13:44] milliseconds this is of course
+[13:45] unacceptable for real-time rendering so
+[13:48] we have to diagnose the problem
+[13:49] thankfully the problem is quite obvious
+[13:51] earlier when I explained how the inverse
+[13:53] Fourier transform works it's clearly an
+[13:55] n-squared algorithm and is going to be
+[13:57] extremely slow for high values of n this
+[14:00] is the unfortunate reality of the basic
+[14:02] Discrete Fourier transform or DFT for
+[14:05] short in order to make our ocean
+[14:06] simulation fast enough for real time
+[14:08] we'll have to upgrade to the fast
+[14:10] Fourier transform so how does the fast
+[14:13] Fourier transform work
+[14:15] look sometimes we have to figure things
+[14:18] out ourselves so I just want to take
+[14:20] this time to remind you that you're
+[14:22] capable of achieving amazing things
+[14:25] don't let self-doubt hold you back or
+[14:27] obstacles discourage you every step you
+[14:30] take no matter how small is a step four
+[14:32] when you Embrace challenges your
+[14:34] opportunities grow I know that you've
+[14:36] got the determination the passion and
+[14:39] the strength within you to overcome
+[14:41] anything believe in yourself and your
+[14:43] journey keep pushing forward and keep
+[14:45] shining brightly with that in mind
+[14:47] another YouTuber by the name of jump
+[14:49] trajectory it provided me with their
+[14:51] optimized fft compute Shader which is
+[14:53] based on Nvidia wave works so it's the
+[14:55] real deal definitely check out their
+[14:57] video for their own approach to topics
+[14:59] presented in this video the fft is so
+[15:01] important because it's algorithmic
+[15:03] complexity is n log n back in our
+[15:05] project the fft has reduced the run time
+[15:07] from 40 milliseconds to practically
+[15:09] nothing we can even go all the way up to
+[15:11] a 1024 by 1024 simulation for just over
+[15:14] a million way caves and still have no
+[15:16] issues with performance since we can do
+[15:18] Fourier transforms like it's nothing now
+[15:20] the last thing tessendorf tells us about
+[15:22] ocean rendering is how to get choppier
+[15:24] waves if you look at the ocean with just
+[15:27] height displacement it looks kind of
+[15:28] weird and the movement feels too linear
+[15:30] we'd like some horizontal displacement
+[15:32] in addition to the vertical displacement
+[15:34] thankfully we can get the horizontal
+[15:36] displacement Vector with another fft and
+[15:39] when we add it to our vertices it makes
+[15:40] a pretty big difference another amazing
+[15:42] aspect of the fast Fourier transform is
+[15:45] that the output is perfectly periodic
+[15:47] outside its domain meaning it tiles no
+[15:49] matter what I never mentioned it but
+[15:51] when you're working with the basic sum
+[15:52] of signs there are some frustrating
+[15:54] limitations to get it to tile within a
+[15:56] texture which the fft doesn't have
+[15:58] issues with let's also take a quick
+[15:59] moment to optimize our ocean mesh now
+[16:01] that we're getting more performance
+[16:03] intensive when we're working with meshes
+[16:04] this large with so many vertices out of
+[16:07] camera view we want to take advantage of
+[16:08] GPU tessellation to cool triangles
+[16:11] outside of view and dynamically increase
+[16:12] the triangle resolution of triangles
+[16:14] that are closer to to the camera this
+[16:16] has tons of benefits we will no longer
+[16:18] waste resources on all the vertices that
+[16:20] we can't see and we can devote more
+[16:22] resources to triangles that are closer
+[16:24] to the camera and do less work in the
+[16:26] distance you can see the effect of the
+[16:27] dynamic tessellation here more triangles
+[16:29] means a more accurate representation of
+[16:31] our fft displacement map if you're
+[16:33] interested in how this works in depth
+[16:35] check out my video on the subject that's
+[16:37] pretty much all there is to the ocean
+[16:38] simulation side of things with this we
+[16:41] now have the same animation logic as sea
+[16:43] of Thieves but if we want our water to
+[16:45] actually look as good we'll have to
+[16:46] upgrade our basic lighting model let's
+[16:48] revisit our current light model we have
+[16:50] a constant ambient light plus the
+[16:52] diffuse reflectance plus the specular
+[16:54] reflectance plus the indirect light from
+[16:55] the environment Reflections combined
+[16:57] this produces a decent looking water
+[16:59] surface mainly because of the
+[17:01] environment Reflections doing a lot of
+[17:03] heavy lifting without them we are left
+[17:05] with the starter kit blinfong lighting
+[17:07] model that I presented in depth last
+[17:09] video which makes our water sort of look
+[17:11] like plastic in truth this is because
+[17:14] our lighting model has for forgotten how
+[17:16] light works so let's go back to the
+[17:18] drawing board diffuse reflectance is
+[17:20] mainly for opaque materials but as we
+[17:22] all know water is not opaque it is a
+[17:24] transparent volume this means light rays
+[17:27] do not immediately diffusely reflect off
+[17:29] the surface the Rays will penetrate the
+[17:31] water and scatter around dispersing and
+[17:33] losing energy this is known as
+[17:34] subsurface scattering so let's drop the
+[17:37] diffuse and replace it with a scatter
+[17:39] term this extremely abstract equation
+[17:41] then describes the appearance of our
+[17:43] water as the sum of inwardly scattered
+[17:45] light directly reflected light and
+[17:47] indirectly reflected light with this as
+[17:48] a baseline we can now think critically
+[17:50] about how we want to achieve this output
+[17:52] with different rendering algorithms
+[17:54] because there's no exact way to go about
+[17:55] it if this was blender or some other not
+[17:58] real-time rendering context we would
+[18:00] just go with the most expensive
+[18:01] algorithms for the best appearance but
+[18:03] working in real-time rendering is like
+[18:04] you have 14.32 cents at a five-star
+[18:07] restaurant and so you usually go with
+[18:09] the free salad but every few years we
+[18:12] get another dollar to work with like I
+[18:14] mentioned earlier sub surface scattering
+[18:16] is a phenomenon in which light rays
+[18:18] enter a material bounce around and then
+[18:20] exit this generally requires complex
+[18:22] rendering techniques like Ray marching
+[18:24] and doing stuff like I talked about in
+[18:25] my video on smoke rendering but
+[18:27] thankfully in the context of the ocean
+[18:29] we can sort of fake it pretty easily
+[18:31] this is because the ocean is so huge
+[18:33] that nearly all the light that enters it
+[18:35] is going to never be seen again the only
+[18:37] time this isn't the case is when the sun
+[18:39] is pointing at the water at a grazing
+[18:41] angle so there's a high chance that
+[18:43] light rays can bounce upwards or when
+[18:45] the wave Peaks are high so we can assume
+[18:47] that less light is being absorbed
+[18:48] through those wave beaks the developers
+[18:50] of Atlas were kind enough to show us
+[18:52] their scattered light approximation
+[18:54] which is kind of just a bunch of
+[18:55] [ __ ] so let's piece it together the
+[18:57] first term is how much scattering occurs
+[18:59] because of wave height the second term
+[19:01] is how visible the normal is to the
+[19:03] camera the third term is Lambert's
+[19:05] cosine law which we are now so familiar
+[19:07] with and the last term is an ambient
+[19:09] light value each of these terms is
+[19:10] Multiplied with a scatter color the sun
+[19:13] color and an ambient light color the
+[19:14] scatter color of real life water is
+[19:16] generally blue because water absorbs red
+[19:19] and green wavelengths resulting in
+[19:20] scattered blue light when combined we
+[19:23] get an approximation of subsurface
+[19:24] scattering it looks decently convincing
+[19:26] because it Blends the color of the sun
+[19:28] based on the angle of incidence which
+[19:30] gives us the greenish blue hues that we
+[19:32] see in real life water now that we've
+[19:34] got our scatter term we can think about
+[19:35] the specular term to improve this we
+[19:37] would upgrade from blinfong to a more
+[19:40] physically based approach which I have
+[19:41] done off screen and you can see the
+[19:43] difference here I initially planned on
+[19:45] having a segment on physically based
+[19:47] rendering but it dragged on too long and
+[19:49] I didn't like it so instead I plan on
+[19:51] releasing a separate video on the
+[19:52] subject with Disney's principled brdf so
+[19:55] please look forward to it lastly I won't
+[19:57] be making any improvements to the
+[19:58] environment reflection part of our
+[20:00] Shader so we can just tack those on with
+[20:02] our new and improved lighting model the
+[20:03] ocean is looking a lot more physically
+[20:05] plausible and less like plastic when
+[20:07] compared to our original surface Shader
+[20:09] did you think we were done
+[20:11] no unfortunately there's still one major
+[20:14] Shader feature that's separating our
+[20:16] water from sea of Thieves here's an
+[20:18] example video of sea of Thieves water
+[20:20] can you spot the major difference
+[20:22] between their water and ours that's
+[20:24] right the foam ocean foam is the secret
+[20:26] sauce to making the ocean look cool and
+[20:29] interesting and stylized the developers
+[20:31] of sea of Thieves presented their own
+[20:33] experience with stylizing water and
+[20:35] found that any attempt to reduce the
+[20:36] fine detail of the ocean simulation
+[20:38] kinda made it look bad so they chose to
+[20:40] keep the water looking realistic and
+[20:42] stylized the foam instead let's also
+[20:44] take a moment to discern between sea
+[20:46] foam and sea spray Sea Foam is going to
+[20:49] stay on the surface of the water while
+[20:50] sea spray is going to be the particles
+[20:52] that shoot off from breaking waves for
+[20:54] best visuals we'd model both seafoam and
+[20:57] sea spray which is what sea of Thieves
+[20:58] does but for my project I will be
+[21:00] cutting the sea spray because this video
+[21:02] is already complicated enough and I
+[21:04] don't want to add particle systems on
+[21:05] top of it all because it's not a simple
+[21:07] mechanism thankfully seafoam is pretty
+[21:09] simple but what actually is it depend
+[21:11] depending on the environment seafoam is
+[21:13] a mixture of decomposed organic matter
+[21:15] and Bubbles the organic matter is going
+[21:18] to build up and collect along the ocean
+[21:20] currents and will be deposited somewhere
+[21:22] eventually and the bubbles will come
+[21:24] from breaking waves where air is
+[21:25] injected into the water if we wanted a
+[21:27] genuine ocean foam we would need a much
+[21:30] more sophisticated ocean simulation
+[21:31] complete with currents and turbulent
+[21:33] flow models which modern day math can
+[21:35] barely handle so let's bring our
+[21:37] expectations down a bit what we can
+[21:39] detect is breaking waves where the
+[21:41] bubbles would form a breaking wave
+[21:43] occurs when two large waves sort of
+[21:45] collide with each other causing the peak
+[21:47] of the wave to literally break in real
+[21:49] life this would result in sea spray and
+[21:51] water particles shooting upwards but in
+[21:53] our simulation the displacement vectors
+[21:55] result in a wave Peak that has curled in
+[21:57] on itself so how do we detect this
+[21:59] inward curling with more math of course
+[22:01] we can compute the Jacobian of our water
+[22:04] displacement vectors in order to see
+[22:06] where we need to draw a foam the
+[22:07] Jacobian describes the uniqueness of a
+[22:09] transformation which kind of sounds like
+[22:11] bullsh [ __ ] but just go with it if we
+[22:13] look at a graph of the Jacobian against
+[22:15] the graph of the water surface we can
+[22:17] see that the Jacobian goes negative
+[22:19] where the wave Peaks curl in on each
+[22:21] other so then it would seem that all we
+[22:22] have to do is detect if the Jacobian is
+[22:24] negative and if so we have foam we can
+[22:27] also very easily get more foam by
+[22:29] biasing the Jacobian down so that we get
+[22:31] more negative results this already makes
+[22:33] our water look more interesting but to
+[22:35] really sell it we need to accumulate
+[22:37] foam rather than draw it only where the
+[22:39] Jacobian is negative in order to do this
+[22:41] we need to keep track of our film
+[22:42] simulation over time by storing it in a
+[22:45] texture when the Jacobian of a point on
+[22:47] the water goes negative we add a little
+[22:48] bit of foam into the texture in every
+[22:51] frame we apply an exponential decay
+[22:53] function to the whole texture this means
+[22:55] that the parts of the water that are
+[22:56] really turbulent are going to have a
+[22:58] negative Jacobian for several frames
+[23:00] resulting in a lot of foam being
+[23:01] injected into the foam texture when the
+[23:04] Jacobian is no longer negative in that
+[23:06] space then the Decay function will
+[23:07] slowly dissolve the foam rather than the
+[23:09] foam instantly disappearing this gives
+[23:11] the illusion of foam accumulating in
+[23:13] busier areas of the water which looks
+[23:15] more correct working with the parameters
+[23:17] is pretty difficult and it can be hard
+[23:19] to get the foam to look good but when
+[23:21] it's just right then it really takes the
+[23:22] Shader home sea of Thieves employs a
+[23:24] stylized foam texture but I'm just using
+[23:27] a flat color for the foam after playing
+[23:29] with it for a few hours here's a little
+[23:30] ocean scene I've come up with our ocean
+[23:33] is finished at this point we have pretty
+[23:35] much completely recreated sea of Thieves
+[23:37] water just without sea spray and like
+[23:40] that whole Boat Part wait what's that
+[23:43] you can still see the tiling
+[23:45] [Music]
+[23:46] well that's not good the allegations are
+[23:49] true the tiling is still obvious even
+[23:51] with our new fancy Tech if you look into
+[23:53] the distance diagonally you can see the
+[23:55] tiling pretty easily the reality is that
+[23:57] we still can't have our cake and eat it
+[23:59] too even with a million waves we can't
+[24:01] cover a large enough distance while
+[24:03] maintaining the finer details so how do
+[24:05] we solve this dilemma well by baking
+[24:08] more cakes obviously the fft is so
+[24:11] efficient that we can afford to simulate
+[24:13] multiple ocean spectrums at the same
+[24:15] time if we had four simulations of
+[24:17] differing scales going in parallel then
+[24:19] we can layer them on top of each other
+[24:21] with different tiling rates to mitigate
+[24:23] the visual patterns this will let us
+[24:24] model giant rolling waves in addition to
+[24:27] very small detail waves and when it's
+[24:29] all added together we get the benefits
+[24:31] of both while also pretty much
+[24:32] eliminating any visible tiling in the
+[24:34] field of view we also get really high
+[24:36] quality foam due to the sheer density of
+[24:38] the waves with four 1024 by 1024
+[24:41] simulations we have over 4 million waves
+[24:43] the amount of detail on the water is so
+[24:46] high that you can even really see it in
+[24:47] this video due to encoding limitations
+[24:49] as well as YouTube compression so if you
+[24:52] have a Windows machine and would like a
+[24:54] build to look at there's one posted on
+[24:55] my patreon if you're interested in
+[24:57] supporting the channel you can get
+[24:58] access to these builds and vote on the
+[25:01] next video topic as usual a huge thank
+[25:03] you to all my current patrons without
+[25:04] your support I wouldn't be able to spend
+[25:06] 20 hours a day reading esoteric research
+[25:09] papers at this point you might be
+[25:10] thinking Hmm wow Ace roller 4 million
+[25:14] waves no way that's real time viable on
+[25:17] my 1660 the ocean simulation part of it
+[25:19] all is taking about 6.6 milliseconds
+[25:22] which is 150 FPS it is true that in
+[25:24] practice you definitely would not do for
+[25:26] 1024 by 1024 simulations and would
+[25:29] instead do maybe four 256 by 256
+[25:32] simulations but if my mid-range GPU can
+[25:35] handle 4 million waves then it would be
+[25:37] totally possible to have this level of
+[25:39] quality available as a graphics setting
+[25:41] for higher end gpus because a 30 or 40
+[25:44] series would be able to tank this like
+[25:46] it's nothing and let's not forget where
+[25:48] we came from either the naive sum of
+[25:50] science had a hard limit of 650 waves on
+[25:53] my GPU but now with the power of the
+[25:55] fast Fourier transform and some adult
+[25:57] mathematics our water is now 650 000
+[26:00] more detailed and still runs almost
+[26:02] three times as fast having multiple
+[26:05] simulations at once also allows us to
+[26:07] model pretty much any state of the ocean
+[26:09] we could want from huge stormy choppy
+[26:11] waves to something much more calm and
+[26:13] relaxing yet still visually diverse and
+[26:15] interesting here's a few different
+[26:16] scenes I've put together unfortunately
+[26:18] there's about a hundred parameters so
+[26:20] it's very time consuming to work with
+[26:22] but quite frankly I can stare at this
+[26:24] for hours anyways if you'd like to see
+[26:25] some more videos you can find them on my
+[26:27] Twitter well that was a lot of stuff I
+[26:30] had to learn and Implement in about two
+[26:31] weeks while we have technically
+[26:33] surpassed the quality of sea of Thieves
+[26:35] water we should remind ourselves that
+[26:37] the Xbox one has a GPU equivalent of a
+[26:39] 750 so they did the best they could with
+[26:42] the hardware they had the road to a
+[26:44] complete Recreation of their water is
+[26:45] still much longer though we need to add
+[26:47] sea spray particles a buoyancy
+[26:49] assimilation handle underwater rendering
+[26:51] and also simulate the interaction of a
+[26:54] boat with the water to create wakes each
+[26:56] of these things is decently complicated
+[26:58] in its own right but eventually these
+[26:59] topics will pop up in the patreon polls
+[27:02] for future videos for the moment though
+[27:03] I think I'm a little tired of the Water
+[27:05] by the way I'm streaming right now over
+[27:08] on Twitch I'm remastering my Minecraft
+[27:10] shaders so if you have any questions on
+[27:12] the video come ask away that's all from
+[27:14] me I hope you have a great rest of your
+[27:15] day and I'll see you next time

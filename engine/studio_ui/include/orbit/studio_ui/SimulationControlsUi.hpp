@@ -3,6 +3,7 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/SimulationClock.hpp>
+#include <orbit/studio_session/StudioSession.hpp>
 
 #include <functional>
 #include <string>
@@ -52,7 +53,9 @@ private:
 class SimulationControlsUi
 {
 public:
-    explicit SimulationControlsUi(SimulationControls& controls) noexcept;
+    explicit SimulationControlsUi(
+        SimulationControls& controls,
+        studio_session::StudioSession& session) noexcept;
     ~SimulationControlsUi();
 
     SimulationControlsUi(const SimulationControlsUi&) = delete;
@@ -62,6 +65,14 @@ public:
 
     // Adds a "Report issue" button to the band.
     void SetReportIssueHandler(std::function<void()> handler);
+    // Extra on/off buttons for the band (the lightning helpers): a label, its current state and how to change it.
+    struct BandToggle
+    {
+        std::string label;
+        std::function<bool()> get;
+        std::function<void(bool)> set;
+    };
+    void SetBandToggles(std::vector<BandToggle> toggles);
 
     inline static constexpr const char* kBandId = "orbit.simulation";
 
@@ -69,7 +80,9 @@ private:
     void Draw(editor_ui::PanelContext& context);
 
     SimulationControls* controls_{nullptr};
+    studio_session::StudioSession* session_{nullptr};
     std::function<void()> reportIssue_;
+    std::vector<BandToggle> toggles_;
     bool registered_{false};
     i32 stepIndex_{2};
     i32 rateIndex_{1};
@@ -79,5 +92,6 @@ private:
 // time.get / time.set / time.step: the RPC face of the transport.
 void RegisterSimulationRpc(
     rpc::Dispatcher& dispatcher,
-    SimulationControls& controls);
+    SimulationControls& controls,
+    studio_session::StudioSession& session);
 } // namespace orbit::studio_ui

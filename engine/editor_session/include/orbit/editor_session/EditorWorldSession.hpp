@@ -108,6 +108,10 @@ public:
     [[nodiscard]] world_model::UniverseCompositionStats
     RebuildUniverse();
     [[nodiscard]] bool RefreshUniverseIfChanged();
+    // A viewport gizmo commit changes only render-authored transforms
+    // (primitives, proxies or lights); the live render preview already
+    // consumed it, so celestial composition keeps its current identity.
+    void AcknowledgeViewportTransformCommit() noexcept;
     [[nodiscard]] const world_model::UniverseCompositionStats&
     UniverseStats() const;
     [[nodiscard]] const surface_model::SurfaceCompositionStats&

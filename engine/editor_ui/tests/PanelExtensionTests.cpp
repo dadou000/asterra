@@ -51,6 +51,18 @@ int main()
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
 
+    // There is no renderer backend here, so build the font atlas explicitly: ImGui
+    // 1.91 dereferences the atlas' default font in NewFrame().
+    {
+        unsigned char* pixels = nullptr;
+        int width = 0;
+        int height = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(
+            &pixels,
+            &width,
+            &height);
+    }
+
     bool drew = false;
     orbit::editor_ui::UpsertPanelExtension({
         .id = "test.inspector.extension",
@@ -64,6 +76,13 @@ int main()
             }
     });
 
+    // ImGui hides a window's contents on the frame it is created (its size is not
+    // known yet), so the first frame only brings the target panel into existence.
+    BeginTestFrame();
+    DrawTargetPanel();
+    ImGui::EndFrame();
+
+    drew = false;
     BeginTestFrame();
     DrawTargetPanel();
     ImGui::EndFrame();

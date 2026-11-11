@@ -197,6 +197,10 @@ void AddDirectionalLobe(
             ambientEnergy.y * 0.5F,
             ambientEnergy.z * 0.5F
         };
+        estimate.sky.referenceLuminance =
+            0.2126F * std::max(settings.skyIrradianceLinear.x, 0.0F) +
+            0.7152F * std::max(settings.skyIrradianceLinear.y, 0.0F) +
+            0.0722F * std::max(settings.skyIrradianceLinear.z, 0.0F);
         estimate.sky.gradient =
             !open
                 ? math::Float3{}

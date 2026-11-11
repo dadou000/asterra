@@ -152,16 +152,6 @@ public:
     void RemoveMissing(
         const scene::ObjectStore& objects);
 
-#ifdef ORBIT_VOLUME_SOLVER_BASE_IMPLEMENTATION
-    void AddPassesBase(
-        render_graph::RenderGraph& graph,
-        std::string_view prefix,
-        const scene::ObjectStore& objects,
-        const world_model::ResolvedVolumeDomain& domain,
-        volume_fields::VolumeFieldStorage& storage,
-        const volume_fields::ImportedVolumeFields& fields,
-        u32 frameSlot = 0U);
-#else
     void AddPasses(
         render_graph::RenderGraph& graph,
         std::string_view prefix,
@@ -179,7 +169,6 @@ public:
         volume_fields::VolumeFieldStorage& storage,
         const volume_fields::ImportedVolumeFields& fields,
         u32 frameSlot = 0U);
-#endif
 
 private:
     class Impl;

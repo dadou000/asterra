@@ -60,25 +60,6 @@ namespace
         (2.0 * std::numbers::pi_v<f64>);
 }
 
-[[nodiscard]] f64 CollisionScale(
-    const terrain::GlobalTerrainFieldSample& tectonic,
-    const MacroGeologyDesc& desc) noexcept
-{
-    if (tectonic.nearestPlateContinental &&
-        tectonic.secondPlateContinental)
-    {
-        return desc.continentalCollisionScale;
-    }
-
-    if (tectonic.nearestPlateContinental ||
-        tectonic.secondPlateContinental)
-    {
-        return desc.mixedCollisionScale;
-    }
-
-    return desc.oceanicCollisionScale;
-}
-
 [[nodiscard]] bool FiniteNonNegative(
     const f64 value) noexcept
 {
@@ -103,6 +84,10 @@ bool MacroGeologyDesc::IsValid() const noexcept
         std::isfinite(distortionAmplitude) &&
         distortionAmplitude >= 0.0 &&
         distortionAmplitude <= 1.0 &&
+        std::isfinite(ageUpliftDecay) &&
+        ageUpliftDecay >= 0.0 && ageUpliftDecay <= 1.0 &&
+        std::isfinite(tectonicDrainageGuidance) &&
+        tectonicDrainageGuidance >= 0.0 && tectonicDrainageGuidance <= 1.0 &&
         FinitePositive(distortionWavelengthMeters) &&
         distortionOctaves >= 1U &&
         distortionOctaves <= 8U;
@@ -237,13 +222,23 @@ MacroGeologySample MacroGeologyField::Sample(
     const terrain::GlobalTerrainFieldSample global =
         globalFields_->Sample(query);
 
-    const f64 collisionScale =
-        CollisionScale(global, desc_);
+    // Weight by collision type with the continuous per-class masks. The
+    // oceanic class keeps the tectonic recipe's own oceanic scale on top of
+    // the macro one, as the combined mask used to.
+    const f64 collisionStrength = std::max(
+        {global.convergenceContinental * desc_.continentalCollisionScale,
+         global.convergenceMixed * desc_.mixedCollisionScale,
+         global.convergenceOceanic *
+             globalFields_->Description().tectonic.oceanicConvergenceScale *
+             desc_.oceanicCollisionScale});
+
+    const terrain::TectonicStructureSample structure =
+        globalFields_->SampleTectonicStructure(canonical.unitDirection);
 
     const f64 tectonicUplift =
-        std::max(global.convergenceMask, 0.0) *
+        collisionStrength *
         desc_.convergenceUpliftMeters *
-        collisionScale;
+        (1.0 - desc_.ageUpliftDecay * structure.geologicalAge);
 
     const f64 tectonicSubsidence =
         std::max(global.divergenceMask, 0.0) *
@@ -266,6 +261,14 @@ MacroGeologySample MacroGeologyField::Sample(
         (tectonicUplift - tectonicSubsidence) *
             distortionMultiplier +
         hotspotUplift;
+
+    // Positive attracts routing (basins, rifts, trenches), negative repels it
+    // (uplifting belts), normalised by the belt's nominal uplift.
+    const f64 steerReference =
+        std::max(desc_.convergenceUpliftMeters, 1.0);
+    const f64 tectonicSteer = std::clamp(
+        (tectonicSubsidence - tectonicUplift) / steerReference,
+        -1.0, 1.0);
 
     surface_authoring::TerrainConstraintSample authored{
         .heightMeters = 0.0,
@@ -298,10 +301,17 @@ MacroGeologySample MacroGeologyField::Sample(
         .tectonicSubsidenceMeters = tectonicSubsidence,
         .hotspotUpliftMeters = hotspotUplift,
         .distortionSignal = distortion,
+        .geologicalAge = structure.geologicalAge,
+        .crustAge = structure.crustAge,
+        .crustThicknessKm = structure.crustThicknessKm,
+        .tectonicDrainageSteer = tectonicSteer,
         .upliftMeters = authored.upliftMeters,
         .authoredHeightMeters = authored.heightMeters,
         .gradientGuidance = authored.gradient,
-        .drainageGuidance = authored.drainage,
+        .drainageGuidance = std::clamp(
+            authored.drainage +
+                desc_.tectonicDrainageGuidance * tectonicSteer,
+            -1.0, 1.0),
         .protection = authored.protection
     };
 }

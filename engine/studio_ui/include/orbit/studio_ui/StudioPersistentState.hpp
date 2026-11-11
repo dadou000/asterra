@@ -53,11 +53,13 @@ struct StudioPersistentState
 [[nodiscard]] inline std::optional<StudioWorkspaceMode>
 ParseWorkspaceMode(const std::string_view value) noexcept
 {
-    if (value == "Scene") return StudioWorkspaceMode::Scene;
+    if (value == "Build" || value == "Scene") return StudioWorkspaceMode::Scene;
     if (value == "Planet") return StudioWorkspaceMode::Planet;
-    if (value == "Celestial") return StudioWorkspaceMode::Celestial;
+    if (value == "Universe" || value == "Celestial") return StudioWorkspaceMode::Celestial;
     if (value == "Simulation") return StudioWorkspaceMode::Simulation;
     if (value == "Shading") return StudioWorkspaceMode::Shading;
+    if (value == "Planning") return StudioWorkspaceMode::Planning;
+    if (value == "Plugins") return StudioWorkspaceMode::Plugins;
     return std::nullopt;
 }
 
@@ -113,6 +115,7 @@ ParseViewportMode(const std::string_view value) noexcept
            << (state.viewport.gizmo.translationSnap ? "1" : "0") << '\n';
     output << "translation_snap_m="
            << state.viewport.gizmo.translationSnapMeters << '\n';
+    output << "translation_snap_unit=" << static_cast<u32>(state.viewport.gizmo.translationSnapUnit) << '\n';
     output << "rotation_snap="
            << (state.viewport.gizmo.rotationSnap ? "1" : "0") << '\n';
     output << "rotation_snap_deg="
@@ -231,6 +234,11 @@ ParseViewportMode(const std::string_view value) noexcept
         else if (key == "translation_snap_m")
         {
             if (const auto parsed = parseDouble(value)) state.viewport.gizmo.translationSnapMeters = *parsed;
+        }
+        else if (key == "translation_snap_unit")
+        {
+            if (const auto parsed = parseUnsigned(value); parsed && *parsed <= 5U)
+                state.viewport.gizmo.translationSnapUnit = static_cast<SnapLengthUnit>(*parsed);
         }
         else if (key == "rotation_snap") state.viewport.gizmo.rotationSnap = value == "1";
         else if (key == "rotation_snap_deg")

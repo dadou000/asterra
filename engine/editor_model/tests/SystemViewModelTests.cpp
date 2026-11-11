@@ -78,7 +78,7 @@ int main()
             1.0e8);
 
         orbit::world_model::UniverseComposition universe;
-        universe.Rebuild(objects);
+        static_cast<void>(universe.Rebuild(objects));
 
         orbit::editor_model::SystemViewModel model(
             objects,

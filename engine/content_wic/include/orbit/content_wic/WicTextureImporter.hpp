@@ -2,7 +2,9 @@
 
 #include <orbit/content/RuntimeTexture.hpp>
 
+#include <cstddef>
 #include <filesystem>
+#include <span>
 
 namespace orbit::content
 {
@@ -24,4 +26,10 @@ void RegisterTextureImporters(
 // path. Throws std::runtime_error on a missing or unreadable file.
 [[nodiscard]] content::RuntimeTexture DecodeTextureFile(
     const std::filesystem::path& path);
+
+// Decodes an encoded image held in memory (PNG, JPEG, BMP, ...) to RGBA8,
+// e.g. a texture embedded in a GLB. Throws std::runtime_error when the
+// buffer is empty or not a decodable image.
+[[nodiscard]] content::RuntimeTexture DecodeTextureMemory(
+    std::span<const std::byte> encoded);
 } // namespace orbit::content_wic

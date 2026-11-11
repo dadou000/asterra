@@ -6,6 +6,7 @@
 #include <orbit/terrain/TerrainSource.hpp>
 #include <orbit/time/SimulationTime.hpp>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -144,6 +145,42 @@ struct GpuCloudTexel
     f32 precipitation{0.0F};
     f32 cloudType{0.5F};
 };
+
+// Appended read-only per-layer GPU material descriptors. System A continues
+// indexing its existing 16-byte weather texels at exactly the same offsets.
+// System B reads this tail to integrate all authored layers in one medium.
+// ByteAddressBuffer layout: two float4 records, 32 bytes per layer.
+struct GpuCloudLayerDescriptor
+{
+    // x base altitude (m), y top altitude (m), z peak optical depth,
+    // w coverage bias; all in physical/body-fixed units.
+    std::array<f32, 4> shell{};
+    // x density exponent, y single-scattering albedo, z phase g,
+    // w whether this layer casts receiver shadows (0/1).
+    std::array<f32, 4> material{};
+};
+static_assert(sizeof(GpuCloudLayerDescriptor) == 32U);
+
+// Pure CPU/GPU ABI encoder. Kept in a common header so tests can verify the
+// renderer's packed layer metadata independently of a Vulkan device.
+[[nodiscard]] constexpr GpuCloudLayerDescriptor EncodeGpuCloudLayer(
+    const CloudLayerParameters& p) noexcept
+{
+    return {
+        .shell = {
+            static_cast<f32>(p.baseAltitudeMeters),
+            static_cast<f32>(p.topAltitudeMeters),
+            static_cast<f32>(p.peakOpticalDepth),
+            static_cast<f32>(p.coverageBias)
+        },
+        .material = {
+            static_cast<f32>(p.densityExponent),
+            static_cast<f32>(p.singleScatteringAlbedo),
+            static_cast<f32>(p.anisotropy),
+            p.shadowParticipation ? 1.0F : 0.0F
+        }
+    };
+}
 
 class GpuCloudFieldProduct
 {

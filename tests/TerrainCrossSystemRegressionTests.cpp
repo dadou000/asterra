@@ -1,0 +1,8203 @@
+#include <orbit/commands/CommandService.hpp>
+#include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/documents/WorldDatabase.hpp>
+#include <orbit/editor_model/SurfaceAuthoringModel.hpp>
+#include <orbit/scene/ObjectStore.hpp>
+#include <orbit/schema/SchemaRegistry.hpp>
+#include <orbit/selection/SelectionService.hpp>
+#include <orbit/surface_authoring/TerrainConstraints.hpp>
+#include <orbit/surface_model/SurfaceComposition.hpp>
+#include <orbit/surface_model/SurfaceMaterialResolver.hpp>
+#include <orbit/terrain/AnalyticTerrainSource.hpp>
+#include <orbit/terrain/GlobalTerrainFields.hpp>
+#include <orbit/terrain_cache/TerrainPageCache.hpp>
+#include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
+#include <orbit/terrain_debug/TerrainDebugPageData.hpp>
+#include <orbit/terrain_debug/TerrainDebugSeam.hpp>
+#include <orbit/terrain_biome/BiomeService.hpp>
+#include <orbit/terrain_geology/GeologicalMaterial.hpp>
+#include <orbit/terrain_geology/Stratigraphy.hpp>
+#include <orbit/terrain_hydrology/DrainagePage.hpp>
+#include <orbit/terrain_gpu/PersistentGpuTerrainCache.hpp>
+#include <orbit/terrain_erosion/AeolianErosion.hpp>
+#include <orbit/terrain_erosion/HydraulicErosion.hpp>
+#include <orbit/terrain_erosion/SedimentExchange.hpp>
+#include <orbit/terrain_erosion/ThermalErosion.hpp>
+#include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
+#include <orbit/terrain_material_column/MaterialColumnPage.hpp>
+#include <orbit/terrain_material_column/SurfaceResolver.hpp>
+#include <orbit/terrain_region/SurfaceBoundaryExchange.hpp>
+#include <orbit/terrain_scatter/DeterministicScatter.hpp>
+#include <orbit/terrain_scatter/PhysicalSurface.hpp>
+#include <orbit/terrain_stream/ToroidalResidency.hpp>
+#include <orbit/terrain_view/ClipmapTracker.hpp>
+#include <orbit/world_model/UniverseComposition.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
+
+#include <algorithm>
+#include <any>
+#include <atomic>
+#include <array>
+#include <cmath>
+#include <cstdlib>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <span>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#ifndef ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR
+#error ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR must be defined for M30 validation.
+#endif
+
+namespace
+{
+using namespace orbit;
+
+[[noreturn]] void Fail(const std::string& message)
+{
+    std::cerr << "V0.0.4 M30 validation failure: "
+              << message << '\n';
+    std::exit(EXIT_FAILURE);
+}
+
+void Require(
+    const bool condition,
+    const std::string& message)
+{
+    if (!condition)
+    {
+        Fail(message);
+    }
+}
+
+bool NearlyEqual(
+    const f64 a,
+    const f64 b,
+    const f64 epsilon = 1.0e-5)
+{
+    return std::abs(a - b) <= epsilon;
+}
+
+struct StratigraphyFixture
+{
+    terrain_geology::GeologicalMaterialLibrary materials;
+    terrain_geology::CompiledStratigraphyProfile stratigraphy;
+    world::PlanetDefinition planet;
+    terrain::PlanetSurfacePosition anchor;
+    f64 topMeters{0.0};
+
+    StratigraphyFixture()
+        : materials(
+              terrain_geology::LoadGeologicalMaterialDirectory(
+                  std::filesystem::path{
+                      ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR})),
+          stratigraphy(
+              terrain_geology::LoadStratigraphyProfileFile(
+                  std::filesystem::path{
+                      ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR} /
+                  "continental_shelf.orbitstratigraphy"),
+              materials),
+          planet{
+              .radiusMeters = 6'000'000.0,
+              .id = {
+                  .high = 0x4D333056414C3031ULL,
+                  .low = 0x5354524154410001ULL
+              },
+              .generationSeed = 0x303001ULL},
+          anchor{
+              .planet = planet.id,
+              .unitDirection =
+                  math::Normalize(
+                      stratigraphy.Profile().
+                          transform.anchorUnitDirection),
+              .radialOffsetMeters = 0.0}
+    {
+        topMeters =
+            stratigraphy.DeformedTopRadialOffsetMeters(
+                planet,
+                anchor);
+    }
+
+    [[nodiscard]] terrain_geology::StratigraphySample
+    SampleBedrock(
+        const terrain_material_column::MaterialColumnPage& page) const
+    {
+        auto position = anchor;
+        position.radialOffsetMeters =
+            static_cast<f64>(
+                page.At(0U, 0U).
+                    bedrockHeightMeters);
+
+        return stratigraphy.SampleExposedLayer(
+            planet,
+            position);
+    }
+
+    [[nodiscard]] terrain_material_column::MaterialColumnPage
+    MakePage() const
+    {
+        terrain_material_column::MaterialColumnPage page(
+            1U,
+            2.0);
+
+        auto position = anchor;
+        position.radialOffsetMeters =
+            topMeters - 0.5;
+
+        const auto sample =
+            stratigraphy.SampleExposedLayer(
+                planet,
+                position);
+
+        page.SetCell(
+            0U,
+            0U,
+            {
+                .bedrockHeightMeters =
+                    static_cast<f32>(
+                        position.radialOffsetMeters),
+                .referenceBedrockHeightMeters =
+                    static_cast<f32>(
+                        position.radialOffsetMeters),
+                .bedrockMaterial =
+                    sample.primaryMaterial,
+                .regolithMeters = 0.0F,
+                .soilMeters = 0.0F,
+                .sandMeters = 0.0F,
+                .debrisMeters = 0.0F,
+                .moisture = 0.0F
+            });
+
+        return page;
+    }
+};
+
+void Test01StratigraphyExposure()
+{
+    using namespace terrain_geology;
+
+    StratigraphyFixture fixture;
+
+    auto first =
+        fixture.MakePage();
+    auto replay =
+        fixture.MakePage();
+
+    const auto initial =
+        fixture.SampleBedrock(first);
+
+    Require(
+        initial.primaryMaterial ==
+            reference_rock::VolcanicAsh &&
+        initial.layerIndex == 0U &&
+        !initial.basement,
+        "M30-01 setup must begin inside the weak volcanic-ash layer.");
+
+    const auto firstRemoval =
+        first.Erode(
+            0U,
+            0U,
+            2.0,
+            fixture.materials);
+
+    const auto replayRemoval =
+        replay.Erode(
+            0U,
+            0U,
+            2.0,
+            fixture.materials);
+
+    const auto middle =
+        fixture.SampleBedrock(first);
+    const auto middleReplay =
+        fixture.SampleBedrock(replay);
+
+    Require(
+        NearlyEqual(
+            firstRemoval.bedrockMeters,
+            2.0) &&
+        middle.primaryMaterial ==
+            reference_rock::Sandstone &&
+        middle.layerIndex == 1U &&
+        !middle.basement,
+        "M30-01 lowering the physical M08 bedrock surface through the first virtual boundary must expose sandstone.");
+
+    Require(
+        first.At(0U, 0U).
+                bedrockHeightMeters ==
+            replay.At(0U, 0U).
+                bedrockHeightMeters &&
+        firstRemoval.removedMassKg ==
+            replayRemoval.removedMassKg &&
+        middle.primaryMaterial ==
+            middleReplay.primaryMaterial &&
+        middle.layerIndex ==
+            middleReplay.layerIndex,
+        "M30-01 stratigraphy exposure must be deterministic for identical physical erosion.");
+
+    const auto deepRemoval =
+        first.Erode(
+            0U,
+            0U,
+            6.0,
+            fixture.materials);
+
+    const auto deep =
+        fixture.SampleBedrock(first);
+
+    Require(
+        NearlyEqual(
+            deepRemoval.bedrockMeters,
+            6.0) &&
+        deep.primaryMaterial ==
+            reference_rock::Limestone &&
+        deep.layerIndex == 2U &&
+        !deep.basement,
+        "M30-01 continued physical incision must advance into the limestone layer rather than remaining phase-locked to the original stratum.");
+
+    Require(
+        NearlyEqual(
+            deep.depthBelowTopMeters,
+            8.5,
+            1.0e-4),
+        "M30-01 virtual stratigraphic depth must track the eroded physical bedrock height.");
+}
+
+void Test02BedrockStripping()
+{
+    using namespace terrain_material_column;
+
+    StratigraphyFixture fixture;
+    auto page =
+        fixture.MakePage();
+
+    auto& cell =
+        page.At(0U, 0U);
+
+    // Binary-exact layer depths keep the exact-cover threshold deterministic:
+    // debris -> sand -> soil -> regolith -> bedrock.
+    cell.regolithMeters = 0.5F;
+    cell.soilMeters = 0.25F;
+    cell.sandMeters = 0.125F;
+    cell.debrisMeters = 0.125F;
+
+    const f64 bedrockBefore =
+        cell.bedrockHeightMeters;
+    const f64 referenceBefore =
+        cell.referenceBedrockHeightMeters;
+
+    const auto& densities =
+        page.Densities();
+    const f64 area =
+        page.CellAreaSquareMeters();
+
+    const f64 expectedLooseMass =
+        area *
+        (0.5 * densities.regolithKgPerCubicMeter +
+         0.25 * densities.soilKgPerCubicMeter +
+         0.125 * densities.sandKgPerCubicMeter +
+         0.125 * densities.debrisKgPerCubicMeter);
+
+    Require(
+        cell.ExposedSurface() ==
+            ExposedSurfaceKind::Debris,
+        "M30-02 setup must begin with the complete loose-material stack covering bedrock.");
+
+    const auto partial =
+        page.Erode(
+            0U,
+            0U,
+            0.75,
+            fixture.materials);
+
+    Require(
+        NearlyEqual(partial.debrisMeters, 0.125) &&
+        NearlyEqual(partial.sandMeters, 0.125) &&
+        NearlyEqual(partial.soilMeters, 0.25) &&
+        NearlyEqual(partial.regolithMeters, 0.25) &&
+        NearlyEqual(partial.bedrockMeters, 0.0),
+        "M30-02 stripping must consume debris, sand and soil before regolith, without touching bedrock while loose cover remains.");
+
+    Require(
+        page.At(0U, 0U).ExposedSurface() ==
+            ExposedSurfaceKind::Regolith &&
+        NearlyEqual(
+            page.At(0U, 0U).LooseDepthMeters(),
+            0.25) &&
+        NearlyEqual(
+            page.At(0U, 0U).bedrockHeightMeters,
+            bedrockBefore),
+        "M30-02 partial stripping must leave the surviving regolith exposed and preserve the physical bedrock surface.");
+
+    const auto finish =
+        page.Erode(
+            0U,
+            0U,
+            0.25,
+            fixture.materials);
+
+    Require(
+        NearlyEqual(finish.regolithMeters, 0.25) &&
+        NearlyEqual(finish.bedrockMeters, 0.0) &&
+        page.At(0U, 0U).ExposedSurface() ==
+            ExposedSurfaceKind::Bedrock,
+        "M30-02 exact removal of the final loose cover must expose bedrock without consuming bedrock.");
+
+    Require(
+        NearlyEqual(
+            page.At(0U, 0U).bedrockHeightMeters,
+            bedrockBefore) &&
+        NearlyEqual(
+            page.At(0U, 0U).referenceBedrockHeightMeters,
+            referenceBefore),
+        "M30-02 stripping loose cover must not move either the current or reference bedrock surface.");
+
+    const auto strippedMass =
+        page.QueryMass(
+            fixture.materials);
+
+    Require(
+        NearlyEqual(
+            partial.removedMassKg +
+                finish.removedMassKg,
+            expectedLooseMass) &&
+        NearlyEqual(
+            strippedMass.LooseMassKg(),
+            0.0) &&
+        NearlyEqual(
+            strippedMass.excavatedBedrockKg,
+            0.0),
+        "M30-02 loose-cover stripping must conserve the removed loose mass without reporting false bedrock excavation.");
+
+    const auto* rock =
+        fixture.materials.Find(
+            page.At(0U, 0U).bedrockMaterial);
+
+    Require(
+        rock != nullptr,
+        "M30-02 exposed bedrock must retain a valid M02 geological material identity.");
+
+    const auto bedrockCut =
+        page.Erode(
+            0U,
+            0U,
+            0.5,
+            fixture.materials);
+
+    const auto afterCutMass =
+        page.QueryMass(
+            fixture.materials);
+
+    Require(
+        NearlyEqual(
+            bedrockCut.bedrockMeters,
+            0.5) &&
+        NearlyEqual(
+            page.At(0U, 0U).bedrockHeightMeters,
+            bedrockBefore - 0.5) &&
+        page.At(0U, 0U).ExposedSurface() ==
+            ExposedSurfaceKind::Bedrock,
+        "M30-02 only erosion demand after complete stripping may lower the physical bedrock surface.");
+
+    Require(
+        NearlyEqual(
+            afterCutMass.excavatedBedrockKg,
+            0.5 * area * rock->density,
+            1.0e-3),
+        "M30-02 post-exposure bedrock excavation must enter M08 mass accounting using the exposed M02 rock density.");
+}
+
+
+void Test03SedimentDepositionBurial()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_material_column;
+
+    StratigraphyFixture fixture;
+    auto page =
+        fixture.MakePage();
+
+    const auto initialStratum =
+        fixture.SampleBedrock(page);
+
+    const auto& initialCell =
+        page.At(0U, 0U);
+
+    Require(
+        initialCell.ExposedSurface() ==
+            ExposedSurfaceKind::Bedrock &&
+        NearlyEqual(
+            initialCell.LooseDepthMeters(),
+            0.0),
+        "M30-03 setup must begin with genuinely exposed bedrock.");
+
+    const f64 bedrockBefore =
+        initialCell.bedrockHeightMeters;
+    const f64 referenceBefore =
+        initialCell.referenceBedrockHeightMeters;
+    const auto materialBefore =
+        initialCell.bedrockMaterial;
+    const f64 surfaceBefore =
+        initialCell.SurfaceHeightMeters();
+
+    SedimentExchangePage sediment(
+        page.Resolution(),
+        page.SpacingMeters());
+
+    const f64 area =
+        page.CellAreaSquareMeters();
+    const auto& densities =
+        page.Densities();
+
+    // Choose binary-exact physical depths so the M14 -> M08 conversion can be
+    // checked without a tolerance-sensitive boundary:
+    // 0.125 m debris + 0.250 m sand + 0.500 m fines/soil.
+    const SedimentMass load{
+        .sandKg =
+            0.25 *
+            area *
+            densities.sandKgPerCubicMeter,
+        .finesKg =
+            0.5 *
+            area *
+            densities.soilKgPerCubicMeter,
+        .coarseDebrisKg =
+            0.125 *
+            area *
+            densities.debrisKgPerCubicMeter
+    };
+
+    sediment.Add(
+        0U,
+        0U,
+        SedimentTransportMedium::Waterborne,
+        load);
+
+    Require(
+        NearlyEqual(
+            sediment.TotalMobileMass().TotalKg(),
+            load.TotalKg()),
+        "M30-03 typed sediment must exist in M14 mobile state before physical deposition.");
+
+    const auto burial =
+        sediment.DepositToColumn(
+            page,
+            0U,
+            0U,
+            SedimentTransportMedium::Waterborne);
+
+    const auto& buried =
+        page.At(0U, 0U);
+
+    Require(
+        NearlyEqual(
+            burial.requested.sandKg,
+            load.sandKg) &&
+        NearlyEqual(
+            burial.requested.finesKg,
+            load.finesKg) &&
+        NearlyEqual(
+            burial.requested.coarseDebrisKg,
+            load.coarseDebrisKg) &&
+        NearlyEqual(
+            burial.deposited.TotalKg(),
+            load.TotalKg()) &&
+        burial.remaining.Empty(1.0e-9) &&
+        sediment.TotalMobileMass().Empty(1.0e-9),
+        "M30-03 complete burial must transfer the full typed M14 load back into M08 without duplicated mobile mass.");
+
+    Require(
+        NearlyEqual(
+            buried.debrisMeters,
+            0.125) &&
+        NearlyEqual(
+            buried.sandMeters,
+            0.25) &&
+        NearlyEqual(
+            buried.soilMeters,
+            0.5) &&
+        NearlyEqual(
+            buried.regolithMeters,
+            0.0) &&
+        NearlyEqual(
+            buried.LooseDepthMeters(),
+            0.875),
+        "M30-03 M14 sediment classes must resolve into the canonical M08 debris/sand/soil physical layers.");
+
+    Require(
+        buried.ExposedSurface() ==
+            ExposedSurfaceKind::Debris &&
+        NearlyEqual(
+            buried.SurfaceHeightMeters(),
+            surfaceBefore + 0.875),
+        "M30-03 deposited sediment must physically bury bedrock and raise the M08 surface by the deposited loose depth.");
+
+    Require(
+        NearlyEqual(
+            buried.bedrockHeightMeters,
+            bedrockBefore) &&
+        NearlyEqual(
+            buried.referenceBedrockHeightMeters,
+            referenceBefore) &&
+        buried.bedrockMaterial ==
+            materialBefore,
+        "M30-03 burial must cover geological substrate without rewriting bedrock height, excavation reference or M02 rock identity.");
+
+    const auto buriedStratum =
+        fixture.SampleBedrock(page);
+
+    Require(
+        buriedStratum.primaryMaterial ==
+            initialStratum.primaryMaterial &&
+        buriedStratum.layerIndex ==
+            initialStratum.layerIndex &&
+        buriedStratum.basement ==
+            initialStratum.basement,
+        "M30-03 loose sediment burial must not rewrite the underlying M03 stratigraphic identity.");
+
+    const auto accounting =
+        sediment.Accounting();
+
+    Require(
+        accounting.physicalToMobile.Empty(1.0e-9) &&
+        NearlyEqual(
+            accounting.mobileToPhysical.sandKg,
+            load.sandKg) &&
+        NearlyEqual(
+            accounting.mobileToPhysical.finesKg,
+            load.finesKg) &&
+        NearlyEqual(
+            accounting.mobileToPhysical.coarseDebrisKg,
+            load.coarseDebrisKg),
+        "M30-03 M14 accounting must report the burial exactly once as mobile-to-physical transfer.");
+
+    const auto physicalMass =
+        page.QueryMass(
+            fixture.materials);
+
+    Require(
+        NearlyEqual(
+            physicalMass.LooseMassKg(),
+            load.TotalKg(),
+            1.0e-3) &&
+        NearlyEqual(
+            physicalMass.excavatedBedrockKg,
+            0.0),
+        "M30-03 buried sediment mass must reside in M08 while bedrock excavation remains zero.");
+
+    const auto reExposure =
+        page.Erode(
+            0U,
+            0U,
+            0.875,
+            fixture.materials);
+
+    const auto& exposedAgain =
+        page.At(0U, 0U);
+
+    Require(
+        NearlyEqual(
+            reExposure.removedMassKg,
+            load.TotalKg(),
+            1.0e-3) &&
+        NearlyEqual(
+            reExposure.bedrockMeters,
+            0.0) &&
+        exposedAgain.ExposedSurface() ==
+            ExposedSurfaceKind::Bedrock &&
+        NearlyEqual(
+            exposedAgain.bedrockHeightMeters,
+            bedrockBefore) &&
+        exposedAgain.bedrockMaterial ==
+            materialBefore,
+        "M30-03 stripping only the deposited sediment must re-expose the same bedrock without geological incision.");
+
+    const auto finalStratum =
+        fixture.SampleBedrock(page);
+
+    Require(
+        finalStratum.primaryMaterial ==
+            initialStratum.primaryMaterial &&
+        finalStratum.layerIndex ==
+            initialStratum.layerIndex,
+        "M30-03 burial and re-exposure must leave the virtual stratigraphic substrate unchanged.");
+}
+
+
+void Test04HydraulicMassConservation()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_material_column;
+
+    constexpr u32 resolution = 7U;
+    constexpr f64 spacingMeters = 10.0;
+
+    StratigraphyFixture fixture;
+
+    MaterialColumnPage page(
+        resolution,
+        spacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            page.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters =
+                        30.0F -
+                        static_cast<f32>(x) *
+                            0.8F,
+                    .referenceBedrockHeightMeters =
+                        0.0F,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                VolcanicAsh,
+                    .regolithMeters = 0.20F,
+                    .soilMeters = 0.20F,
+                    .sandMeters = 0.0F,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    const auto initialMass =
+        page.QueryMass(
+            fixture.materials);
+
+    std::vector<f32> rainfallSources(
+        static_cast<std::size_t>(
+            resolution) *
+            resolution,
+        0.0F);
+
+    for (u32 y = 1U;
+         y + 1U < resolution;
+         ++y)
+    {
+        rainfallSources[
+            static_cast<std::size_t>(y) *
+                resolution] =
+            0.006F;
+    }
+
+    HydraulicErosionConfig config{};
+    config.iterations = 80U;
+    config.timeStepSeconds = 0.15;
+    config.rainfallMetersPerSecond = 0.0025;
+    config.gravityMetersPerSecondSquared = 9.81;
+    config.pipeCrossSectionSquareMeters = 0.20;
+    config.sedimentCapacityCoefficient = 1'200.0;
+    config.maximumSedimentConcentrationKgPerCubicMeter =
+        1'500.0;
+    config.erosionRatePerSecond = 1.0;
+    config.depositionRatePerSecond = 1.4;
+    config.maximumErosionDepthPerStepMeters = 0.04;
+    config.maximumDepositionDepthPerStepMeters = 0.04;
+    config.infiltrationMetersPerSecond = 0.00008;
+    config.moistureCapacityDepthMeters = 0.12;
+    config.evaporationRatePerSecond = 0.08;
+
+    const auto result =
+        SimulateHydraulicErosion(
+            std::move(page),
+            fixture.materials,
+            rainfallSources,
+            config);
+
+    Require(
+        result.sedimentExchange.has_value(),
+        "M30-04 hydraulic erosion must publish its mobile sediment through the canonical M14 exchange page.");
+
+    const auto& balance =
+        result.massBalance;
+    const auto& sediment =
+        *result.sedimentExchange;
+
+    Require(
+        balance.totalErodedKg > 1.0 &&
+        balance.totalDepositedKg > 0.0 &&
+        balance.finalSuspendedKg > 0.0,
+        "M30-04 scenario must exercise erosion, redeposition and remaining suspended load in one closed hydraulic solve.");
+
+    Require(
+        NearlyEqual(
+            balance.sedimentBoundaryLossKg,
+            0.0) &&
+        sediment.Accounting().
+            imported.Empty(1.0e-9) &&
+        sediment.Accounting().
+            exported.Empty(1.0e-9),
+        "M30-04 closed physical page must not hide hydraulic sediment mass in boundary import/export accounting.");
+
+    const f64 processTolerance =
+        std::max(
+            balance.totalErodedKg *
+                1.0e-9,
+            1.0e-6);
+
+    Require(
+        NearlyEqual(
+            balance.totalErodedKg,
+            balance.totalDepositedKg +
+                balance.finalSuspendedKg,
+            processTolerance) &&
+        std::abs(
+            balance.materialBalanceErrorKg) <=
+            processTolerance &&
+        balance.materialBalanceRelativeError <
+            1.0e-9,
+        "M30-04 hydraulic process ledger must close as eroded = deposited + final mobile sediment.");
+
+    const auto& accounting =
+        sediment.Accounting();
+
+    Require(
+        NearlyEqual(
+            accounting.physicalToMobile.TotalKg(),
+            balance.totalErodedKg,
+            processTolerance) &&
+        NearlyEqual(
+            accounting.mobileToPhysical.TotalKg(),
+            balance.totalDepositedKg,
+            processTolerance) &&
+        NearlyEqual(
+            sediment.TotalMobileMass().TotalKg(),
+            balance.finalSuspendedKg,
+            processTolerance),
+        "M30-04 M14 physical/mobile accounting must match the M11 hydraulic process ledger exactly.");
+
+    f64 typedSuspendedKg = 0.0;
+    f64 scalarSuspendedKg = 0.0;
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& hydraulic =
+                result.At(x, y);
+            const auto& shared =
+                sediment.At(x, y).
+                    waterborne;
+
+            typedSuspendedKg +=
+                shared.TotalKg();
+            scalarSuspendedKg +=
+                hydraulic.
+                    suspendedSedimentKg;
+
+            Require(
+                NearlyEqual(
+                    hydraulic.
+                        suspendedSediment.
+                        TotalKg(),
+                    shared.TotalKg(),
+                    1.0e-7) &&
+                NearlyEqual(
+                    hydraulic.
+                        suspendedSedimentKg,
+                    shared.TotalKg(),
+                    1.0e-7),
+                "M30-04 M11 typed/scalar diagnostics must remain synchronized to M14 waterborne authority per cell.");
+        }
+    }
+
+    Require(
+        NearlyEqual(
+            typedSuspendedKg,
+            balance.finalSuspendedKg,
+            processTolerance) &&
+        NearlyEqual(
+            scalarSuspendedKg,
+            balance.finalSuspendedKg,
+            processTolerance),
+        "M30-04 final suspended mass must have one value across the M11 ledger, M14 typed authority and scalar compatibility channel.");
+
+    const auto finalMass =
+        result.material.QueryMass(
+            fixture.materials);
+
+    const f64 physicalError =
+        initialMass.LooseMassKg() +
+        finalMass.excavatedBedrockKg -
+        finalMass.LooseMassKg() -
+        balance.finalSuspendedKg;
+
+    const f64 physicalReference =
+        std::max(
+            initialMass.LooseMassKg() +
+                finalMass.excavatedBedrockKg,
+            1.0);
+
+    Require(
+        NearlyEqual(
+            physicalError,
+            balance.physicalColumnBalanceErrorKg,
+            std::max(
+                physicalReference *
+                    1.0e-9,
+                1.0e-4)) &&
+        balance.physicalColumnBalanceRelativeError <
+            2.0e-5,
+        "M30-04 independent M08 physical-column accounting must close against final M14 suspended mass within the documented f32 layer tolerance.");
+}
+
+
+void Test05AeolianMassConservation()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_material_column;
+
+    constexpr u32 resolution = 9U;
+    constexpr f64 spacingMeters = 5.0;
+    constexpr f32 initialSandMeters = 0.25F;
+
+    StratigraphyFixture fixture;
+
+    MaterialColumnPage page(
+        resolution,
+        spacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const f32 obstacleHeight =
+                x == 4U &&
+                y >= 2U &&
+                y <= 6U
+                    ? 2.5F
+                    : 0.0F;
+
+            page.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters =
+                        obstacleHeight,
+                    .referenceBedrockHeightMeters =
+                        0.0F,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                Basalt,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters =
+                        initialSandMeters,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    const auto initialPhysical =
+        page.QueryMass(
+            fixture.materials);
+
+    std::vector<AeolianCellForcing> wind(
+        static_cast<std::size_t>(
+            resolution) *
+            resolution,
+        AeolianCellForcing{
+            .windEastMetersPerSecond = 14.0F,
+            .windNorthMetersPerSecond = 0.0F,
+            .surfaceResistance = 0.0F
+        });
+
+    AeolianErosionConfig config{};
+    config.iterations = 120U;
+    config.timeStepSeconds = 0.20;
+    config.capacityCoefficient = 0.045;
+    config.windSpeedExponent = 2.0;
+    config.shadowRayCells = 4U;
+    config.shadowStrength = 12.0;
+    config.windwardExposureGain = 0.75;
+    config.minimumExposure = 0.02;
+    config.maximumExposure = 2.0;
+    config.pickupRatePerSecond = 2.0;
+    config.depositionRatePerSecond = 2.5;
+    config.reptationFraction = 0.25;
+    config.saltationRatePerSecond = 3.0;
+    config.referenceSaltationWindMetersPerSecond = 12.0;
+    config.maximumSandPickupDepthPerStepMeters = 0.03;
+    config.maximumSoilPickupDepthPerStepMeters = 0.015;
+    config.maximumDepositionDepthPerStepMeters = 0.05;
+    config.moistureSuppressionExponent = 2.5;
+    config.bedrockAbrasionMetersPerSecondAtReferenceWind =
+        1.0e-6;
+    config.maximumBedrockAbrasionDepthPerStepMeters =
+        5.0e-5;
+
+    const auto result =
+        SimulateAeolianErosion(
+            std::move(page),
+            fixture.materials,
+            wind,
+            config);
+
+    Require(
+        result.sedimentExchange.has_value(),
+        "M30-05 aeolian erosion must publish all mobile sediment through the canonical M14 exchange page.");
+
+    const auto& sediment =
+        *result.sedimentExchange;
+    const auto& accounting =
+        sediment.Accounting();
+    const auto& balance =
+        result.massBalance;
+
+    f64 pickedSandKg = 0.0;
+    f64 depositedKg = 0.0;
+    f64 diagnosticAirborneKg = 0.0;
+    f64 eastwardTransportKg = 0.0;
+    f64 surfaceTransportKg = 0.0;
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& state =
+                result.At(x, y);
+            const auto& mobile =
+                sediment.At(x, y);
+
+            pickedSandKg +=
+                state.cumulativeSandPickedKg;
+            depositedKg +=
+                state.cumulativeDepositedKg;
+            diagnosticAirborneKg +=
+                state.airborneSandKg +
+                state.airborneFinesKg;
+
+            const auto& transport =
+                sediment.TransportAt(x, y);
+
+            eastwardTransportKg +=
+                std::max(
+                    transport.airborne.eastKg,
+                    0.0);
+            surfaceTransportKg +=
+                std::hypot(
+                    transport.surfaceMobile.eastKg,
+                    transport.surfaceMobile.northKg);
+
+            Require(
+                mobile.waterborne.Empty(1.0e-9),
+                "M30-05 aeolian-only solve must not create waterborne M14 sediment.");
+        }
+    }
+
+    Require(
+        pickedSandKg > 0.0 &&
+        depositedKg > 0.0 &&
+        eastwardTransportKg > 0.0 &&
+        accounting.exported.TotalKg() > 0.0,
+        "M30-05 scenario must exercise sand pickup, physical deposition, directional wind transport and explicit page-boundary export.");
+
+    Require(
+        surfaceTransportKg > 0.0,
+        "M30-05 reptation must pass through the M14 surface-mobile transport lane rather than an aeolian-private store.");
+
+    const f64 referenceMass =
+        std::max(
+            balance.initialLooseMassKg +
+                balance.abradedBedrockMassKg,
+            1.0);
+
+    const f64 physicalTolerance =
+        std::max(
+            referenceMass *
+                3.0e-5,
+            1.0e-4);
+
+    const f64 recomputedPhysicalError =
+        initialPhysical.LooseMassKg() +
+        balance.abradedBedrockMassKg -
+        balance.finalLooseMassKg -
+        balance.finalAirborneMassKg -
+        balance.boundaryLossKg;
+
+    Require(
+        NearlyEqual(
+            balance.initialLooseMassKg,
+            initialPhysical.LooseMassKg(),
+            1.0e-6) &&
+        NearlyEqual(
+            recomputedPhysicalError,
+            balance.materialBalanceErrorKg,
+            physicalTolerance) &&
+        balance.materialBalanceRelativeError <
+            3.0e-5,
+        "M30-05 M13 physical mass ledger must close as initial loose + abraded bedrock = final loose + mobile + exported mass.");
+
+    const f64 mobileKg =
+        sediment.TotalMobileMass().
+            TotalKg();
+
+    Require(
+        NearlyEqual(
+            mobileKg,
+            balance.finalAirborneMassKg,
+            physicalTolerance) &&
+        NearlyEqual(
+            accounting.exported.TotalKg(),
+            balance.boundaryLossKg,
+            physicalTolerance),
+        "M30-05 M13 mass-balance outputs must be derived from the same M14 mobile inventory and boundary export ledger.");
+
+    const f64 exchangeReference =
+        std::max(
+            accounting.physicalToMobile.
+                TotalKg(),
+            1.0);
+
+    const f64 exchangeTolerance =
+        std::max(
+            exchangeReference *
+                1.0e-9,
+            1.0e-6);
+
+    Require(
+        accounting.imported.Empty(1.0e-9) &&
+        NearlyEqual(
+            accounting.physicalToMobile.
+                TotalKg(),
+            accounting.mobileToPhysical.
+                    TotalKg() +
+                accounting.exported.
+                    TotalKg() +
+                mobileKg,
+            exchangeTolerance),
+        "M30-05 M14 aeolian exchange must conserve physical pickup as redeposition + boundary export + remaining mobile sediment.");
+
+    Require(
+        NearlyEqual(
+            diagnosticAirborneKg,
+            mobileKg,
+            physicalTolerance),
+        "M30-05 M13 airborne diagnostic cells must mirror the final M14 mobile inventory instead of owning independent mass.");
+
+    const auto finalPhysical =
+        result.material.QueryMass(
+            fixture.materials);
+
+    Require(
+        NearlyEqual(
+            finalPhysical.LooseMassKg(),
+            balance.finalLooseMassKg,
+            physicalTolerance) &&
+        NearlyEqual(
+            std::max(
+                finalPhysical.excavatedBedrockKg -
+                    initialPhysical.excavatedBedrockKg,
+                0.0),
+            balance.abradedBedrockMassKg,
+            physicalTolerance),
+        "M30-05 independent M08 mass accounting must agree with M13 loose-material and bedrock-abrasion totals.");
+
+    const auto& leeState =
+        result.At(
+            5U,
+            resolution / 2U);
+    const auto& windwardState =
+        result.At(
+            3U,
+            resolution / 2U);
+
+    Require(
+        leeState.exposure <
+            windwardState.exposure * 0.5F &&
+        result.material.At(
+            5U,
+            resolution / 2U).
+            sandMeters >
+            initialSandMeters + 0.01F,
+        "M30-05 conservation fixture must retain its intended lee-side deposition so mass closure is tested across real pickup/transport/deposition behavior.");
+}
+
+
+void Test06ThermalReposeConvergence()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_material_column;
+
+    constexpr u32 resolution = 5U;
+    constexpr f64 spacingMeters = 1.0;
+    constexpr f32 initialSandMeters = 2.0F;
+
+    StratigraphyFixture fixture;
+
+    MaterialColumnPage page(
+        resolution,
+        spacingMeters);
+
+    std::vector<f32> originalBedrock;
+    originalBedrock.reserve(
+        static_cast<std::size_t>(
+            resolution) *
+        resolution);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const f32 bedrockHeight =
+                x == resolution / 2U &&
+                y == resolution / 2U
+                    ? 3.0F
+                    : 0.0F;
+
+            page.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters =
+                        bedrockHeight,
+                    .referenceBedrockHeightMeters =
+                        bedrockHeight,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                Basalt,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters =
+                        initialSandMeters,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+
+            originalBedrock.push_back(
+                bedrockHeight);
+        }
+    }
+
+    const auto initialMass =
+        page.QueryMass(
+            fixture.materials);
+
+    const auto maximumSandSlopeDegrees =
+        [](const MaterialColumnPage& material)
+        {
+            constexpr f64 radiansToDegrees =
+                57.2957795130823208768;
+
+            f64 maximum = 0.0;
+
+            for (u32 y = 0U;
+                 y < material.Resolution();
+                 ++y)
+            {
+                for (u32 x = 0U;
+                     x < material.Resolution();
+                     ++x)
+                {
+                    const auto& source =
+                        material.At(x, y);
+
+                    if (source.ExposedSurface() !=
+                        ExposedSurfaceKind::Sand)
+                    {
+                        continue;
+                    }
+
+                    for (i32 dy = -1;
+                         dy <= 1;
+                         ++dy)
+                    {
+                        for (i32 dx = -1;
+                             dx <= 1;
+                             ++dx)
+                        {
+                            if (dx == 0 &&
+                                dy == 0)
+                            {
+                                continue;
+                            }
+
+                            const i32 nx =
+                                static_cast<i32>(x) +
+                                dx;
+                            const i32 ny =
+                                static_cast<i32>(y) +
+                                dy;
+
+                            if (nx < 0 ||
+                                ny < 0 ||
+                                nx >=
+                                    static_cast<i32>(
+                                        material.Resolution()) ||
+                                ny >=
+                                    static_cast<i32>(
+                                        material.Resolution()))
+                            {
+                                continue;
+                            }
+
+                            const f64 drop =
+                                static_cast<f64>(
+                                    source.
+                                        SurfaceHeightMeters()) -
+                                static_cast<f64>(
+                                    material.At(
+                                        static_cast<u32>(nx),
+                                        static_cast<u32>(ny)).
+                                        SurfaceHeightMeters());
+
+                            if (drop <= 0.0)
+                            {
+                                continue;
+                            }
+
+                            const bool diagonal =
+                                dx != 0 &&
+                                dy != 0;
+
+                            const f64 distance =
+                                material.SpacingMeters() *
+                                (diagonal
+                                     ? 1.4142135623730951
+                                     : 1.0);
+
+                            maximum =
+                                std::max(
+                                    maximum,
+                                    std::atan2(
+                                        drop,
+                                        distance) *
+                                        radiansToDegrees);
+                        }
+                    }
+                }
+            }
+
+            return maximum;
+        };
+
+    const f64 initialMaximumSlope =
+        maximumSandSlopeDegrees(page);
+
+    ThermalErosionConfig config{};
+    config.maximumIterations = 128U;
+    config.sandReposeDegrees = 33.0;
+    config.bedrockFractureRate = 0.0;
+    config.maximumTransferDepthPerIterationMeters =
+        0.20;
+    config.convergenceDepthMeters =
+        2.0e-5;
+
+    const auto first =
+        SimulateThermalErosion(
+            page,
+            fixture.materials,
+            {},
+            config);
+
+    Require(
+        initialMaximumSlope >
+            config.sandReposeDegrees +
+                20.0,
+        "M30-06 fixture must begin substantially above the sand angle of repose.");
+
+    Require(
+        first.converged &&
+        first.iterationsExecuted > 1U &&
+        first.iterationsExecuted <=
+            config.maximumIterations,
+        "M30-06 M12 must converge a genuinely unstable slope within its bounded local iteration budget.");
+
+    f64 movedOutKg = 0.0;
+    f64 receivedKg = 0.0;
+
+    for (const auto& state :
+         first.cells)
+    {
+        movedOutKg +=
+            state.movedOutKg;
+        receivedKg +=
+            state.receivedKg;
+    }
+
+    Require(
+        movedOutKg > 0.0 &&
+        NearlyEqual(
+            movedOutKg,
+            receivedKg,
+            std::max(
+                movedOutKg * 1.0e-12,
+                1.0e-6)),
+        "M30-06 thermal relaxation must perform real internal mass transfer with equal moved/received ledgers.");
+
+    const f64 finalMaximumSlope =
+        maximumSandSlopeDegrees(
+            first.material);
+
+    Require(
+        finalMaximumSlope <=
+            config.sandReposeDegrees +
+                0.02,
+        "M30-06 converged exposed sand must remain at or below the configured repose angle within the convergence-depth tolerance.");
+
+    const auto finalMass =
+        first.material.QueryMass(
+            fixture.materials);
+
+    const f64 massReference =
+        std::max(
+            initialMass.LooseMassKg(),
+            1.0);
+
+    Require(
+        NearlyEqual(
+            first.massBalance.initialLooseMassKg,
+            initialMass.LooseMassKg(),
+            1.0e-6) &&
+        NearlyEqual(
+            first.massBalance.finalLooseMassKg,
+            finalMass.LooseMassKg(),
+            1.0e-6) &&
+        NearlyEqual(
+            first.massBalance.fracturedBedrockMassKg,
+            0.0,
+            1.0e-9) &&
+        first.massBalance.materialBalanceRelativeError <
+            2.0e-6 &&
+        std::abs(
+            first.massBalance.materialBalanceErrorKg) <=
+            massReference *
+                2.0e-6,
+        "M30-06 loose thermal redistribution must conserve M08 mass without inventing fractured bedrock when fracture is disabled.");
+
+    std::size_t bedrockIndex = 0U;
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& cell =
+                first.material.At(x, y);
+
+            Require(
+                cell.bedrockHeightMeters ==
+                    originalBedrock[bedrockIndex] &&
+                cell.referenceBedrockHeightMeters ==
+                    originalBedrock[bedrockIndex] &&
+                cell.bedrockMaterial ==
+                    terrain_geology::
+                        reference_rock::
+                            Basalt,
+                "M30-06 loose-material convergence must not smooth, excavate or re-identify the underlying M08/M02 bedrock.");
+
+            ++bedrockIndex;
+        }
+    }
+
+    const auto replay =
+        SimulateThermalErosion(
+            first.material,
+            fixture.materials,
+            {},
+            config);
+
+    Require(
+        replay.converged &&
+        replay.iterationsExecuted == 1U,
+        "M30-06 a converged thermal surface must be recognized as converged immediately on the next identical solve.");
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& before =
+                first.material.At(x, y);
+            const auto& after =
+                replay.material.At(x, y);
+
+            Require(
+                before.bedrockHeightMeters ==
+                        after.bedrockHeightMeters &&
+                    before.referenceBedrockHeightMeters ==
+                        after.referenceBedrockHeightMeters &&
+                    before.regolithMeters ==
+                        after.regolithMeters &&
+                    before.soilMeters ==
+                        after.soilMeters &&
+                    before.sandMeters ==
+                        after.sandMeters &&
+                    before.debrisMeters ==
+                        after.debrisMeters,
+                "M30-06 converged thermal state must be an exact physical no-op on immediate replay.");
+        }
+    }
+}
+
+
+void Test07CrossPageWaterFlux()
+{
+    using namespace terrain_region;
+
+    constexpr u32 resolution = 4U;
+    constexpr u64 revision = 0x4D33305741544552ULL;
+
+    const world::PlanetId planet{
+        .high = 0x4F524249544D3330ULL,
+        .low = 0x0000000000007000ULL
+    };
+
+    const terrain::PhysicalTerrainPageAddress sourceAddress{
+        .planet = planet,
+        .tile = {
+            .face = world::CubeFace::PositiveX,
+            .level = 2U,
+            .x = 3U,
+            .y = 1U
+        }
+    };
+
+    const auto eastMapping =
+        world::NeighborAcrossTileEdge(
+            sourceAddress.tile,
+            world::TileEdge::East);
+
+    Require(
+        eastMapping.tile.face !=
+            sourceAddress.tile.face,
+        "M30-07 fixture must cross a cube-face boundary rather than only a same-face page edge.");
+
+    auto sourceFlux =
+        MakeSurfaceBoundaryFlux(
+            resolution,
+            revision);
+
+    f64 expectedEdgeVolume = 0.0;
+
+    for (u32 sourceIndex = 0U;
+         sourceIndex < resolution;
+         ++sourceIndex)
+    {
+        const f64 volume =
+            static_cast<f64>(
+                sourceIndex + 1U);
+
+        // Positive x is outward through the source east edge. The unique
+        // tangent component makes sample reversal/vector remapping observable.
+        sourceFlux.east[sourceIndex] = {
+            .volumeCubicMeters = volume,
+            .velocityMoment = {
+                volume * 2.0,
+                static_cast<f64>(
+                    sourceIndex) +
+                    0.25
+            }
+        };
+
+        expectedEdgeVolume +=
+            volume;
+    }
+
+    constexpr f64 cornerVolume = 5.5;
+
+    sourceFlux.corners[
+        static_cast<std::size_t>(
+            SurfaceBoundaryCorner::
+                NorthEast)] = {
+        .volumeCubicMeters =
+            cornerVolume,
+        .velocityMoment = {
+            4.0,
+            -3.0
+        }
+    };
+
+    const PhysicalPageBoundaryFlux source{
+        .address = sourceAddress,
+        .outgoing = sourceFlux
+    };
+
+    const terrain::PhysicalTerrainPageAddress quietAddress{
+        .planet = planet,
+        .tile = {
+            .face = world::CubeFace::PositiveX,
+            .level = 2U,
+            .x = 1U,
+            .y = 2U
+        }
+    };
+
+    const PhysicalPageBoundaryFlux quiet{
+        .address = quietAddress,
+        .outgoing =
+            MakeSurfaceBoundaryFlux(
+                resolution,
+                revision + 1U)
+    };
+
+    const std::array<PhysicalPageBoundaryFlux, 2> forward{
+        source,
+        quiet
+    };
+
+    const std::array<PhysicalPageBoundaryFlux, 2> reverse{
+        quiet,
+        source
+    };
+
+    const auto forwardBatch =
+        BuildDeterministicBoundaryTransfers(
+            forward);
+
+    const auto reverseBatch =
+        BuildDeterministicBoundaryTransfers(
+            reverse);
+
+    const f64 expectedTotalVolume =
+        expectedEdgeVolume +
+        cornerVolume;
+
+    Require(
+        NearlyEqual(
+            forwardBatch.
+                TotalWaterVolumeCubicMeters(),
+            expectedTotalVolume,
+            1.0e-12) &&
+        NearlyEqual(
+            reverseBatch.
+                TotalWaterVolumeCubicMeters(),
+            expectedTotalVolume,
+            1.0e-12),
+        "M30-07 M25 boundary construction must conserve every exported water volume independent of input page ordering.");
+
+    Require(
+        forwardBatch.edges.size() ==
+            reverseBatch.edges.size() &&
+        forwardBatch.corners.size() ==
+            reverseBatch.corners.size(),
+        "M30-07 deterministic water transfer batches must have order-independent edge/corner cardinality.");
+
+    for (std::size_t index = 0U;
+         index < forwardBatch.edges.size();
+         ++index)
+    {
+        const auto& a =
+            forwardBatch.edges[index];
+        const auto& b =
+            reverseBatch.edges[index];
+
+        Require(
+            a.source == b.source &&
+            a.target == b.target &&
+            a.sourceEdge == b.sourceEdge &&
+            a.targetEdge == b.targetEdge &&
+            a.reversed == b.reversed &&
+            a.revision == b.revision &&
+            a.water.size() == b.water.size(),
+            "M30-07 deterministic edge routing changed when physical page input order was reversed.");
+
+        for (std::size_t sample = 0U;
+             sample < a.water.size();
+             ++sample)
+        {
+            Require(
+                NearlyEqual(
+                    a.water[sample].
+                        volumeCubicMeters,
+                    b.water[sample].
+                        volumeCubicMeters,
+                    0.0) &&
+                NearlyEqual(
+                    a.water[sample].
+                        velocityMoment.x,
+                    b.water[sample].
+                        velocityMoment.x,
+                    0.0) &&
+                NearlyEqual(
+                    a.water[sample].
+                        velocityMoment.y,
+                    b.water[sample].
+                        velocityMoment.y,
+                    0.0),
+                "M30-07 deterministic edge water packets changed with scheduler input order.");
+        }
+    }
+
+    for (std::size_t index = 0U;
+         index < forwardBatch.corners.size();
+         ++index)
+    {
+        const auto& a =
+            forwardBatch.corners[index];
+        const auto& b =
+            reverseBatch.corners[index];
+
+        Require(
+            a.source == b.source &&
+            a.target == b.target &&
+            a.sourceCorner == b.sourceCorner &&
+            a.targetCorner == b.targetCorner &&
+            a.revision == b.revision &&
+            NearlyEqual(
+                a.water.volumeCubicMeters,
+                b.water.volumeCubicMeters,
+                0.0) &&
+            NearlyEqual(
+                a.water.velocityMoment.x,
+                b.water.velocityMoment.x,
+                0.0) &&
+            NearlyEqual(
+                a.water.velocityMoment.y,
+                b.water.velocityMoment.y,
+                0.0),
+            "M30-07 deterministic corner water routing changed with scheduler input order.");
+    }
+
+    const auto edgeTransfer =
+        std::find_if(
+            forwardBatch.edges.begin(),
+            forwardBatch.edges.end(),
+            [&](const SurfaceBoundaryEdgeTransfer& transfer)
+            {
+                return
+                    transfer.source ==
+                        sourceAddress &&
+                    transfer.sourceEdge ==
+                        world::TileEdge::East;
+            });
+
+    Require(
+        edgeTransfer !=
+            forwardBatch.edges.end(),
+        "M30-07 cross-face east water transfer is missing.");
+
+    Require(
+        edgeTransfer->target.tile ==
+                eastMapping.tile &&
+        edgeTransfer->targetEdge ==
+                eastMapping.edge &&
+        edgeTransfer->reversed ==
+                eastMapping.reverseSamples,
+        "M30-07 water transfer must use the canonical M01 cube-face neighbor mapping.");
+
+    for (u32 sourceIndex = 0U;
+         sourceIndex < resolution;
+         ++sourceIndex)
+    {
+        const u32 targetIndex =
+            world::RemapTileEdgeSampleIndex(
+                eastMapping,
+                sourceIndex,
+                resolution);
+
+        const auto& packet =
+            edgeTransfer->
+                water[targetIndex];
+
+        const f64 volume =
+            static_cast<f64>(
+                sourceIndex + 1U);
+
+        const math::Double2 originalMoment{
+            volume * 2.0,
+            static_cast<f64>(
+                sourceIndex) +
+                0.25
+        };
+
+        const auto expectedMoment =
+            TransformBoundaryVectorAcrossEdge(
+                world::TileEdge::East,
+                eastMapping,
+                originalMoment);
+
+        Require(
+            NearlyEqual(
+                packet.volumeCubicMeters,
+                volume,
+                0.0) &&
+            NearlyEqual(
+                packet.velocityMoment.x,
+                expectedMoment.x,
+                1.0e-12) &&
+            NearlyEqual(
+                packet.velocityMoment.y,
+                expectedMoment.y,
+                1.0e-12),
+            "M30-07 cube-face water sample remap must preserve volume and rotate the conservative velocity moment into receiver-local orientation.");
+    }
+
+    const terrain::PhysicalTerrainPageAddress edgeReceiver{
+        .planet = planet,
+        .tile = eastMapping.tile
+    };
+
+    const auto incomingEdge =
+        IncomingWaterBoundaryFlux(
+            edgeReceiver,
+            forwardBatch);
+
+    Require(
+        NearlyEqual(
+            incomingEdge.volumeCubicMeters,
+            expectedEdgeVolume,
+            1.0e-12),
+        "M30-07 neighboring physical page must receive exactly the water volume exported through the source edge.");
+
+    const math::Double2 outward =
+        TransformBoundaryVectorAcrossEdge(
+            world::TileEdge::East,
+            eastMapping,
+            {1.0, 0.0});
+
+    math::Double2 expectedInward{};
+
+    switch (eastMapping.edge)
+    {
+    case world::TileEdge::North:
+        expectedInward = {0.0, 1.0};
+        break;
+    case world::TileEdge::East:
+        expectedInward = {-1.0, 0.0};
+        break;
+    case world::TileEdge::South:
+        expectedInward = {0.0, -1.0};
+        break;
+    case world::TileEdge::West:
+        expectedInward = {1.0, 0.0};
+        break;
+    }
+
+    Require(
+        NearlyEqual(
+            outward.x,
+            expectedInward.x,
+            1.0e-12) &&
+        NearlyEqual(
+            outward.y,
+            expectedInward.y,
+            1.0e-12),
+        "M30-07 outward source water momentum must become inward receiver-local momentum across a physical page boundary.");
+
+    const world::PlanetTileId cornerTile =
+        world::OffsetTile(
+            sourceAddress.tile,
+            1,
+            -1);
+
+    const terrain::PhysicalTerrainPageAddress cornerReceiver{
+        .planet = planet,
+        .tile = cornerTile
+    };
+
+    const auto incomingCorner =
+        IncomingWaterBoundaryFlux(
+            cornerReceiver,
+            forwardBatch);
+
+    Require(
+        NearlyEqual(
+            incomingCorner.volumeCubicMeters,
+            cornerVolume,
+            1.0e-12),
+        "M30-07 diagonal physical neighbor must receive exactly the exported corner water packet without edge duplication or loss.");
+
+    const auto cornerTransfer =
+        std::find_if(
+            forwardBatch.corners.begin(),
+            forwardBatch.corners.end(),
+            [&](const SurfaceBoundaryCornerTransfer& transfer)
+            {
+                return
+                    transfer.source ==
+                        sourceAddress &&
+                    transfer.sourceCorner ==
+                        SurfaceBoundaryCorner::
+                            NorthEast;
+            });
+
+    Require(
+        cornerTransfer !=
+            forwardBatch.corners.end() &&
+        cornerTransfer->target ==
+            cornerReceiver &&
+        NearlyEqual(
+            cornerTransfer->
+                water.volumeCubicMeters,
+            cornerVolume,
+            0.0) &&
+        std::isfinite(
+            cornerTransfer->
+                water.velocityMoment.x) &&
+        std::isfinite(
+            cornerTransfer->
+                water.velocityMoment.y),
+        "M30-07 corner water flux must route through the canonical physical diagonal neighbor with finite transformed momentum.");
+}
+
+
+void Test08CrossPageSedimentFlux()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_region;
+
+    constexpr u32 resolution = 4U;
+    constexpr f64 spacingMeters = 5.0;
+    constexpr u64 revision = 0x4D3330534544494DULL;
+
+    const world::PlanetId planet{
+        .high = 0x4F524249544D3330ULL,
+        .low = 0x0000000000008000ULL
+    };
+
+    const terrain::PhysicalTerrainPageAddress sourceAddress{
+        .planet = planet,
+        .tile = {
+            .face = world::CubeFace::PositiveX,
+            .level = 2U,
+            .x = 3U,
+            .y = 1U
+        }
+    };
+
+    const auto mapping =
+        world::NeighborAcrossTileEdge(
+            sourceAddress.tile,
+            world::TileEdge::East);
+
+    Require(
+        mapping.tile.face !=
+            sourceAddress.tile.face,
+        "M30-08 fixture must exercise sediment transfer across a cube-face boundary.");
+
+    SedimentExchangePage sourceSediment(
+        resolution,
+        spacingMeters);
+
+    const std::array<SedimentMass, 3> payloads{{
+        {
+            .sandKg = 1.0,
+            .finesKg = 2.0,
+            .coarseDebrisKg = 3.0
+        },
+        {
+            .sandKg = 4.0,
+            .finesKg = 5.0,
+            .coarseDebrisKg = 6.0
+        },
+        {
+            .sandKg = 7.0,
+            .finesKg = 8.0,
+            .coarseDebrisKg = 9.0
+        }
+    }};
+
+    const std::array<SedimentTransportMedium, 3> media{{
+        SedimentTransportMedium::Waterborne,
+        SedimentTransportMedium::Airborne,
+        SedimentTransportMedium::SurfaceMobile
+    }};
+
+    SedimentMass totalPayload{};
+
+    for (std::size_t lane = 0U;
+         lane < media.size();
+         ++lane)
+    {
+        const u32 sourceY =
+            static_cast<u32>(lane);
+
+        sourceSediment.Add(
+            resolution - 1U,
+            sourceY,
+            media[lane],
+            payloads[lane]);
+
+        const auto exported =
+            sourceSediment.ExportAcrossBoundary(
+                resolution - 1U,
+                sourceY,
+                static_cast<i32>(
+                    resolution),
+                static_cast<i32>(
+                    sourceY),
+                media[lane],
+                payloads[lane]);
+
+        Require(
+            NearlyEqual(
+                exported.sandKg,
+                payloads[lane].sandKg,
+                0.0) &&
+            NearlyEqual(
+                exported.finesKg,
+                payloads[lane].finesKg,
+                0.0) &&
+            NearlyEqual(
+                exported.coarseDebrisKg,
+                payloads[lane].
+                    coarseDebrisKg,
+                0.0),
+            "M30-08 source M14 page must export the exact requested typed sediment payload.");
+
+        totalPayload +=
+            payloads[lane];
+    }
+
+    Require(
+        sourceSediment.
+            TotalMobileMass().
+            Empty(1.0e-12) &&
+        NearlyEqual(
+            sourceSediment.
+                Accounting().
+                exported.TotalKg(),
+            totalPayload.TotalKg(),
+            1.0e-12),
+        "M30-08 full boundary export must remove the payload from source mobile state and record it exactly once as exported mass.");
+
+    auto outgoing =
+        sourceSediment.
+            TakeOutgoingBoundaryFlux(
+                revision);
+
+    Require(
+        NearlyEqual(
+            outgoing.Total().sandKg,
+            totalPayload.sandKg,
+            1.0e-12) &&
+        NearlyEqual(
+            outgoing.Total().finesKg,
+            totalPayload.finesKg,
+            1.0e-12) &&
+        NearlyEqual(
+            outgoing.Total().
+                coarseDebrisKg,
+            totalPayload.
+                coarseDebrisKg,
+            1.0e-12),
+        "M30-08 outgoing M14 boundary flux must preserve sediment classes before M25 remapping.");
+
+    auto surface =
+        MakeSurfaceBoundaryFlux(
+            resolution,
+            revision,
+            std::move(outgoing));
+
+    const PhysicalPageBoundaryFlux source{
+        .address = sourceAddress,
+        .outgoing = std::move(surface)
+    };
+
+    const auto batch =
+        BuildDeterministicBoundaryTransfers(
+            std::span<const PhysicalPageBoundaryFlux>(
+                &source,
+                1U));
+
+    Require(
+        NearlyEqual(
+            batch.TotalSediment().sandKg,
+            totalPayload.sandKg,
+            1.0e-12) &&
+        NearlyEqual(
+            batch.TotalSediment().finesKg,
+            totalPayload.finesKg,
+            1.0e-12) &&
+        NearlyEqual(
+            batch.TotalSediment().
+                coarseDebrisKg,
+            totalPayload.
+                coarseDebrisKg,
+            1.0e-12),
+        "M30-08 M25 remapping must conserve every typed sediment class.");
+
+    const auto transfer =
+        std::find_if(
+            batch.edges.begin(),
+            batch.edges.end(),
+            [&](const SurfaceBoundaryEdgeTransfer& edge)
+            {
+                return
+                    edge.source ==
+                        sourceAddress &&
+                    edge.sourceEdge ==
+                        world::TileEdge::East;
+            });
+
+    Require(
+        transfer !=
+            batch.edges.end() &&
+        transfer->target.tile ==
+            mapping.tile &&
+        transfer->targetEdge ==
+            mapping.edge &&
+        transfer->reversed ==
+            mapping.reverseSamples,
+        "M30-08 sediment edge transfer must use the canonical M01 cube-face mapping.");
+
+    const auto receiverCoordinate =
+        [](const world::TileEdge edge,
+           const u32 sample)
+        {
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                return std::pair<u32, u32>{
+                    sample,
+                    0U};
+            case world::TileEdge::East:
+                return std::pair<u32, u32>{
+                    resolution - 1U,
+                    sample};
+            case world::TileEdge::South:
+                return std::pair<u32, u32>{
+                    sample,
+                    resolution - 1U};
+            case world::TileEdge::West:
+                return std::pair<u32, u32>{
+                    0U,
+                    sample};
+            }
+
+            return std::pair<u32, u32>{
+                0U,
+                0U};
+        };
+
+    for (std::size_t lane = 0U;
+         lane < media.size();
+         ++lane)
+    {
+        const u32 sourceY =
+            static_cast<u32>(lane);
+
+        const u32 targetIndex =
+            world::RemapTileEdgeSampleIndex(
+                mapping,
+                sourceY,
+                resolution);
+
+        const auto& packet =
+            transfer->
+                sediment[targetIndex];
+
+        const auto& mappedMass =
+            packet.Medium(
+                media[lane]);
+
+        Require(
+            NearlyEqual(
+                mappedMass.sandKg,
+                payloads[lane].sandKg,
+                0.0) &&
+            NearlyEqual(
+                mappedMass.finesKg,
+                payloads[lane].finesKg,
+                0.0) &&
+            NearlyEqual(
+                mappedMass.coarseDebrisKg,
+                payloads[lane].
+                    coarseDebrisKg,
+                0.0),
+            "M30-08 sample remapping must preserve typed mass in its original M14 transport medium.");
+
+        for (const auto other :
+             media)
+        {
+            if (other ==
+                media[lane])
+            {
+                continue;
+            }
+
+            Require(
+                packet.Medium(other).
+                    Empty(1.0e-12),
+                "M30-08 cross-page remapping must not leak sediment into another transport medium.");
+        }
+
+        const f64 kilograms =
+            payloads[lane].
+                TotalKg();
+
+        const auto transformed =
+            TransformBoundaryVectorAcrossEdge(
+                world::TileEdge::East,
+                mapping,
+                {
+                    kilograms,
+                    0.0
+                });
+
+        const auto& transport =
+            packet.Transport(
+                media[lane]);
+
+        Require(
+            NearlyEqual(
+                transport.eastKg,
+                transformed.x,
+                1.0e-12) &&
+            NearlyEqual(
+                transport.northKg,
+                -transformed.y,
+                1.0e-12),
+            "M30-08 M14 transport diagnostics must rotate from source-local east/north into receiver-local orientation with the packet.");
+    }
+
+    const terrain::PhysicalTerrainPageAddress receiverAddress{
+        .planet = planet,
+        .tile = mapping.tile
+    };
+
+    SedimentExchangePage receiverSediment(
+        resolution,
+        spacingMeters);
+
+    ApplySedimentBoundaryTransfers(
+        receiverAddress,
+        batch,
+        receiverSediment);
+
+    const auto imported =
+        receiverSediment.
+            Accounting().
+            imported;
+
+    Require(
+        NearlyEqual(
+            imported.sandKg,
+            totalPayload.sandKg,
+            1.0e-12) &&
+        NearlyEqual(
+            imported.finesKg,
+            totalPayload.finesKg,
+            1.0e-12) &&
+        NearlyEqual(
+            imported.coarseDebrisKg,
+            totalPayload.
+                coarseDebrisKg,
+            1.0e-12) &&
+        NearlyEqual(
+            receiverSediment.
+                TotalMobileMass().
+                TotalKg(),
+            totalPayload.TotalKg(),
+            1.0e-12),
+        "M30-08 receiver M14 import accounting and mobile inventory must equal the source export exactly.");
+
+    for (std::size_t lane = 0U;
+         lane < media.size();
+         ++lane)
+    {
+        const u32 targetIndex =
+            world::RemapTileEdgeSampleIndex(
+                mapping,
+                static_cast<u32>(lane),
+                resolution);
+
+        const auto [x, y] =
+            receiverCoordinate(
+                mapping.edge,
+                targetIndex);
+
+        const auto& receiverCell =
+            receiverSediment.At(
+                x,
+                y);
+
+        const auto& received =
+            receiverCell.Medium(
+                media[lane]);
+
+        Require(
+            NearlyEqual(
+                received.sandKg,
+                payloads[lane].sandKg,
+                0.0) &&
+            NearlyEqual(
+                received.finesKg,
+                payloads[lane].finesKg,
+                0.0) &&
+            NearlyEqual(
+                received.coarseDebrisKg,
+                payloads[lane].
+                    coarseDebrisKg,
+                0.0),
+            "M30-08 imported typed sediment must land on the receiver boundary cell selected by the canonical sample remap.");
+
+        const f64 kilograms =
+            payloads[lane].
+                TotalKg();
+
+        const auto transformed =
+            TransformBoundaryVectorAcrossEdge(
+                world::TileEdge::East,
+                mapping,
+                {
+                    kilograms,
+                    0.0
+                });
+
+        const auto& diagnostic =
+            receiverSediment.
+                TransportAt(
+                    x,
+                    y).
+                Medium(
+                    media[lane]);
+
+        Require(
+            NearlyEqual(
+                diagnostic.eastKg,
+                transformed.x,
+                1.0e-12) &&
+            NearlyEqual(
+                diagnostic.northKg,
+                -transformed.y,
+                1.0e-12),
+            "M30-08 receiver transport diagnostics must preserve the receiver-local direction produced by M25 remapping.");
+    }
+
+    Require(
+        NearlyEqual(
+            sourceSediment.
+                Accounting().
+                exported.TotalKg(),
+            receiverSediment.
+                Accounting().
+                imported.TotalKg(),
+            1.0e-12) &&
+        NearlyEqual(
+            sourceSediment.
+                    TotalMobileMass().
+                    TotalKg() +
+                receiverSediment.
+                    TotalMobileMass().
+                    TotalKg(),
+            totalPayload.TotalKg(),
+            1.0e-12),
+        "M30-08 two-page M14 mass must be conserved exactly across export, M25 remap and receiver import.");
+}
+
+
+void Test09CrossPageDuneMigration()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_material_column;
+    using namespace terrain_region;
+
+    constexpr u32 resolution = 7U;
+    constexpr f64 spacingMeters = 5.0;
+    constexpr f32 sourceSandMeters = 0.25F;
+    constexpr u64 revision = 0x4D333044554E4539ULL;
+
+    StratigraphyFixture fixture;
+
+    const world::PlanetId planet{
+        .high = 0x4F524249544D3330ULL,
+        .low = 0x0000000000009000ULL
+    };
+
+    const terrain::PhysicalTerrainPageAddress sourceAddress{
+        .planet = planet,
+        .tile = {
+            .face = world::CubeFace::PositiveX,
+            .level = 3U,
+            .x = 3U,
+            .y = 3U
+        }
+    };
+
+    const auto eastMapping =
+        world::NeighborAcrossTileEdge(
+            sourceAddress.tile,
+            world::TileEdge::East);
+
+    Require(
+        eastMapping.tile.face ==
+            sourceAddress.tile.face,
+        "M30-09 fixture intentionally uses a same-face neighbor so the test isolates process-driven dune migration from cube-face orientation already covered by M30-08.");
+
+    MaterialColumnPage sourcePage(
+        resolution,
+        spacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            sourcePage.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters = 0.0F,
+                    .referenceBedrockHeightMeters = 0.0F,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                Basalt,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters =
+                        x >= resolution - 2U
+                            ? sourceSandMeters
+                            : 0.0F,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    const auto sourceInitialMass =
+        sourcePage.QueryMass(
+            fixture.materials);
+
+    std::vector<AeolianCellForcing> sourceWind(
+        static_cast<std::size_t>(
+            resolution) *
+            resolution,
+        AeolianCellForcing{
+            .windEastMetersPerSecond = 14.0F,
+            .windNorthMetersPerSecond = 0.0F,
+            .surfaceResistance = 0.0F
+        });
+
+    AeolianErosionConfig sourceConfig{};
+    sourceConfig.iterations = 40U;
+    sourceConfig.timeStepSeconds = 0.20;
+    sourceConfig.capacityCoefficient = 0.045;
+    sourceConfig.windSpeedExponent = 2.0;
+    sourceConfig.shadowRayCells = 4U;
+    sourceConfig.shadowStrength = 8.0;
+    sourceConfig.windwardExposureGain = 0.50;
+    sourceConfig.minimumExposure = 0.05;
+    sourceConfig.maximumExposure = 1.75;
+    sourceConfig.pickupRatePerSecond = 2.0;
+    sourceConfig.depositionRatePerSecond = 2.0;
+    sourceConfig.reptationFraction = 0.25;
+    sourceConfig.saltationRatePerSecond = 3.0;
+    sourceConfig.referenceSaltationWindMetersPerSecond = 12.0;
+    sourceConfig.maximumSandPickupDepthPerStepMeters = 0.03;
+    sourceConfig.maximumSoilPickupDepthPerStepMeters = 0.0;
+    sourceConfig.maximumDepositionDepthPerStepMeters = 0.05;
+    sourceConfig.maximumAvalancheDepthPerStepMeters = 0.05;
+    sourceConfig.bedrockAbrasionMetersPerSecondAtReferenceWind = 0.0;
+    sourceConfig.maximumBedrockAbrasionDepthPerStepMeters = 0.0;
+
+    auto sourceResult =
+        SimulateAeolianErosion(
+            std::move(sourcePage),
+            fixture.materials,
+            sourceWind,
+            sourceConfig);
+
+    Require(
+        sourceResult.sedimentExchange.has_value(),
+        "M30-09 source M13 solve must expose canonical M14 mobile state.");
+
+    const f64 exportedKg =
+        sourceResult.sedimentExchange->
+            Accounting().
+            exported.
+            TotalKg();
+
+    Require(
+        exportedKg > 1.0 &&
+        sourceResult.massBalance.
+            boundaryLossKg > 1.0 &&
+        NearlyEqual(
+            exportedKg,
+            sourceResult.massBalance.
+                boundaryLossKg,
+            1.0e-6),
+        "M30-09 source dune must produce measurable M13-driven M14 boundary export.");
+
+    const auto sourceExported =
+        sourceResult.sedimentExchange->
+            Accounting().
+            exported;
+
+    Require(
+        sourceExported.finesKg <=
+                1.0e-9 &&
+        sourceExported.coarseDebrisKg <=
+                1.0e-9 &&
+        sourceExported.sandKg >
+                1.0,
+        "M30-09 source migration fixture must export sand only, so the downwind physical buildup is unambiguously dune material.");
+
+    auto outgoing =
+        sourceResult.sedimentExchange->
+            TakeOutgoingBoundaryFlux(
+                revision);
+
+    Require(
+        NearlyEqual(
+            outgoing.Total().TotalKg(),
+            exportedKg,
+            1.0e-6),
+        "M30-09 M13-produced boundary packets must carry the full exported dune mass into M25.");
+
+    auto surface =
+        MakeSurfaceBoundaryFlux(
+            resolution,
+            revision,
+            std::move(outgoing));
+
+    const PhysicalPageBoundaryFlux sourceBoundary{
+        .address = sourceAddress,
+        .outgoing = std::move(surface)
+    };
+
+    const auto transfers =
+        BuildDeterministicBoundaryTransfers(
+            std::span<const PhysicalPageBoundaryFlux>(
+                &sourceBoundary,
+                1U));
+
+    const terrain::PhysicalTerrainPageAddress receiverAddress{
+        .planet = planet,
+        .tile = eastMapping.tile
+    };
+
+    SedimentExchangePage receiverSediment(
+        resolution,
+        spacingMeters);
+
+    ApplySedimentBoundaryTransfers(
+        receiverAddress,
+        transfers,
+        receiverSediment);
+
+    Require(
+        NearlyEqual(
+            receiverSediment.
+                Accounting().
+                imported.TotalKg(),
+            exportedKg,
+            1.0e-6) &&
+        NearlyEqual(
+            receiverSediment.
+                TotalMobileMass().
+                TotalKg(),
+            exportedKg,
+            1.0e-6),
+        "M30-09 M25 must deliver the complete process-generated dune load into the neighboring M14 page before the receiver aeolian solve.");
+
+    MaterialColumnPage receiverPage(
+        resolution,
+        spacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            receiverPage.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters = 0.0F,
+                    .referenceBedrockHeightMeters = 0.0F,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                Basalt,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters = 0.0F,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    const auto receiverInitialMass =
+        receiverPage.QueryMass(
+            fixture.materials);
+
+    std::vector<AeolianCellForcing> calmReceiver(
+        static_cast<std::size_t>(
+            resolution) *
+            resolution,
+        AeolianCellForcing{
+            .windEastMetersPerSecond = 0.0F,
+            .windNorthMetersPerSecond = 0.0F,
+            .surfaceResistance = 0.0F
+        });
+
+    AeolianErosionConfig receiverConfig{};
+    receiverConfig.iterations = 4U;
+    receiverConfig.timeStepSeconds = 0.20;
+    receiverConfig.capacityCoefficient = 0.045;
+    receiverConfig.pickupRatePerSecond = 0.0;
+    receiverConfig.depositionRatePerSecond = 5.0;
+    receiverConfig.reptationFraction = 0.0;
+    receiverConfig.saltationRatePerSecond = 0.0;
+    receiverConfig.maximumSandPickupDepthPerStepMeters = 0.0;
+    receiverConfig.maximumSoilPickupDepthPerStepMeters = 0.0;
+    receiverConfig.maximumDepositionDepthPerStepMeters = 2.0;
+    receiverConfig.maximumAvalancheDepthPerStepMeters = 0.05;
+    receiverConfig.bedrockAbrasionMetersPerSecondAtReferenceWind = 0.0;
+    receiverConfig.maximumBedrockAbrasionDepthPerStepMeters = 0.0;
+
+    const auto receiverResult =
+        SimulateAeolianErosion(
+            std::move(receiverPage),
+            fixture.materials,
+            calmReceiver,
+            receiverConfig,
+            std::move(receiverSediment));
+
+    Require(
+        receiverResult.sedimentExchange.has_value() &&
+        NearlyEqual(
+            receiverResult.massBalance.
+                initialMobileMassKg,
+            exportedKg,
+            1.0e-6),
+        "M30-09 receiver M13 solve must continue from imported M14 mobile state instead of replacing it with a fresh page.");
+
+    Require(
+        NearlyEqual(
+            receiverResult.sedimentExchange->
+                Accounting().
+                imported.TotalKg(),
+            exportedKg,
+            1.0e-6),
+        "M30-09 receiver M13 continuation must preserve the M14 import ledger supplied by M25.");
+
+    const auto receiverFinalMass =
+        receiverResult.material.QueryMass(
+            fixture.materials);
+
+    Require(
+        receiverFinalMass.LooseMassKg() >
+            receiverInitialMass.LooseMassKg() +
+                1.0 &&
+        receiverResult.sedimentExchange->
+            TotalMobileMass().
+            Empty(1.0e-6) &&
+        receiverResult.massBalance.
+            boundaryLossKg <=
+                1.0e-9,
+        "M30-09 imported dune sediment must become physical M08 loose sand on the downwind page rather than disappearing or immediately leaving the receiver.");
+
+    f64 receiverSandMassKg = 0.0;
+    f64 receiverSandDepthMeters = 0.0;
+
+    const f64 receiverArea =
+        receiverResult.material.
+            CellAreaSquareMeters();
+
+    for (const auto& cell :
+         receiverResult.material.Cells())
+    {
+        receiverSandDepthMeters +=
+            cell.sandMeters;
+
+        receiverSandMassKg +=
+            static_cast<f64>(
+                cell.sandMeters) *
+            receiverArea *
+            receiverResult.material.
+                Densities().
+                sandKgPerCubicMeter;
+    }
+
+    Require(
+        receiverSandDepthMeters > 0.0 &&
+        NearlyEqual(
+            receiverSandMassKg,
+            exportedKg,
+            std::max(
+                exportedKg * 3.0e-5,
+                1.0e-3)),
+        "M30-09 process-generated exported sand must reappear as the same physical dune mass on the receiver page.");
+
+    Require(
+        receiverResult.massBalance.
+            materialBalanceRelativeError <
+            3.0e-5,
+        "M30-09 receiver aeolian continuation must conserve imported mobile mass while depositing the dune.");
+
+    const f64 combinedFinalMass =
+        sourceResult.massBalance.
+            finalLooseMassKg +
+        sourceResult.sedimentExchange->
+            TotalMobileMass().
+            TotalKg() +
+        receiverResult.massBalance.
+            finalLooseMassKg +
+        receiverResult.sedimentExchange->
+            TotalMobileMass().
+            TotalKg();
+
+    const f64 combinedInitialMass =
+        sourceInitialMass.LooseMassKg() +
+        receiverInitialMass.LooseMassKg();
+
+    Require(
+        NearlyEqual(
+            combinedFinalMass,
+            combinedInitialMass,
+            std::max(
+                combinedInitialMass *
+                    4.0e-5,
+                1.0e-3)),
+        "M30-09 two-page dune migration must conserve the original physical sand across M13 pickup, M14 export, M25 transfer, M14 import and receiver M13 deposition.");
+}
+
+
+void Test10FastFlowDrainageReference()
+{
+    using namespace terrain_hydrology;
+    using namespace terrain_material_column;
+
+    constexpr u32 resolution = 7U;
+    constexpr f64 spacingMeters = 10.0;
+    constexpr u32 pitX = 2U;
+    constexpr u32 pitY = 3U;
+
+    MaterialColumnPage material(
+        resolution,
+        spacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const f32 crossSlope =
+                static_cast<f32>(
+                    std::abs(
+                        static_cast<i32>(y) -
+                        static_cast<i32>(
+                            resolution / 2U))) *
+                0.75F;
+
+            f32 height =
+                100.0F -
+                static_cast<f32>(x) *
+                    3.0F +
+                crossSlope;
+
+            if (x == pitX &&
+                y == pitY)
+            {
+                height = 60.0F;
+            }
+
+            material.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters =
+                        height,
+                    .referenceBedrockHeightMeters =
+                        height,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                Basalt,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters = 0.0F,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    std::vector<DrainageCellInput> inputs(
+        static_cast<std::size_t>(
+            resolution) *
+            resolution);
+
+    f64 expectedTotalDischarge = 0.0;
+
+    const f64 cellArea =
+        material.CellAreaSquareMeters();
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const std::size_t index =
+                static_cast<std::size_t>(y) *
+                    resolution +
+                x;
+
+            const f32 runoff =
+                static_cast<f32>(
+                    0.0001 *
+                    static_cast<f64>(
+                        1U +
+                        ((x + 2U * y) %
+                         5U)));
+
+            inputs[index] = {
+                .runoffMetersPerSecond =
+                    runoff,
+                .authoredDrainage = 0.0F,
+                .outlet = false
+            };
+
+            expectedTotalDischarge +=
+                static_cast<f64>(
+                    runoff) *
+                cellArea;
+        }
+    }
+
+    const auto makeBoundary =
+        [](const f32 height)
+        {
+            return DrainageBoundaryCell{
+                .surfaceHeightMeters =
+                    height,
+                .conditionedHeightMeters =
+                    height,
+                .authoredDrainage = 0.0F,
+                .drainageAreaSquareMeters =
+                    0.0,
+                .dischargeCubicMetersPerSecond =
+                    0.0,
+                .flowDx = 0,
+                .flowDy = 0
+            };
+        };
+
+    DrainagePageHalo halo{};
+    halo.revision =
+        0x4D33304641535446ULL;
+
+    halo.north.assign(
+        resolution,
+        makeBoundary(200.0F));
+    halo.south.assign(
+        resolution,
+        makeBoundary(200.0F));
+    halo.west.assign(
+        resolution,
+        makeBoundary(200.0F));
+    halo.east.assign(
+        resolution,
+        makeBoundary(60.0F));
+
+    halo.corners = {
+        makeBoundary(200.0F),
+        makeBoundary(200.0F),
+        makeBoundary(200.0F),
+        makeBoundary(200.0F)
+    };
+
+    terrain::PhysicalTerrainPageKey key{};
+    key.resolution = resolution;
+    key.revisions.geology = 10U;
+    key.revisions.processes = 20U;
+    key.revisions.climate = 30U;
+    key.revisions.authoring = 40U;
+
+    DrainageRoutingConfig config{};
+    config.depressionPolicy =
+        DepressionRoutingPolicy::
+            FillToBoundary;
+    config.minimumDrainageDropMeters =
+        0.10F;
+    config.authoredGuidanceWeight =
+        0.0F;
+
+    const DrainagePage drainage =
+        BuildDrainagePage(
+            material,
+            key,
+            inputs,
+            halo,
+            config);
+
+    const auto& pit =
+        drainage.At(
+            pitX,
+            pitY);
+
+    Require(
+        NearlyEqual(
+            pit.surfaceHeightMeters,
+            60.0,
+            1.0e-6) &&
+        pit.depressionFillMeters >
+            20.0F &&
+        pit.drainageElevationMeters >
+            pit.surfaceHeightMeters,
+        "M30-10 FastFlow reference fixture must exercise priority-flood conditioning while preserving the original M08 surface.");
+
+    const std::size_t cellCount =
+        static_cast<std::size_t>(
+            resolution) *
+        resolution;
+
+    std::vector<i32> downstream(
+        cellCount,
+        -1);
+
+    std::vector<u32> remainingDonors(
+        cellCount,
+        0U);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const u32 index =
+                y * resolution +
+                x;
+
+            const auto& cell =
+                drainage.At(x, y);
+
+            Require(
+                cell.flow.HasDownstream(),
+                "M30-10 conditioned catchment must give every physical cell a downstream route.");
+
+            if (cell.flow.exitsPage)
+            {
+                continue;
+            }
+
+            const i32 tx =
+                static_cast<i32>(x) +
+                cell.flow.dx;
+            const i32 ty =
+                static_cast<i32>(y) +
+                cell.flow.dy;
+
+            Require(
+                tx >= 0 &&
+                ty >= 0 &&
+                tx <
+                    static_cast<i32>(
+                        resolution) &&
+                ty <
+                    static_cast<i32>(
+                        resolution),
+                "M30-10 internal M09 route points outside the physical page without an exit flag.");
+
+            const u32 target =
+                static_cast<u32>(ty) *
+                    resolution +
+                static_cast<u32>(tx);
+
+            downstream[index] =
+                static_cast<i32>(
+                    target);
+
+            ++remainingDonors[target];
+
+            Require(
+                drainage.At(
+                    static_cast<u32>(tx),
+                    static_cast<u32>(ty)).
+                    drainageElevationMeters <
+                cell.drainageElevationMeters,
+                "M30-10 M09 graph must be strictly downhill on the conditioned drainage surface.");
+        }
+    }
+
+    std::vector<f64> referenceArea(
+        cellCount,
+        cellArea);
+
+    std::vector<f64> referenceDischarge(
+        cellCount,
+        0.0);
+
+    for (std::size_t index = 0U;
+         index < cellCount;
+         ++index)
+    {
+        referenceDischarge[index] =
+            static_cast<f64>(
+                inputs[index].
+                    runoffMetersPerSecond) *
+            cellArea;
+    }
+
+    std::deque<u32> leaves;
+
+    for (u32 index = 0U;
+         index <
+             static_cast<u32>(
+                 cellCount);
+         ++index)
+    {
+        if (remainingDonors[index] ==
+            0U)
+        {
+            leaves.push_back(index);
+        }
+    }
+
+    u32 processed = 0U;
+
+    while (!leaves.empty())
+    {
+        const u32 index =
+            leaves.front();
+
+        leaves.pop_front();
+        ++processed;
+
+        if (downstream[index] <
+            0)
+        {
+            continue;
+        }
+
+        const u32 target =
+            static_cast<u32>(
+                downstream[index]);
+
+        referenceArea[target] +=
+            referenceArea[index];
+
+        referenceDischarge[target] +=
+            referenceDischarge[index];
+
+        Require(
+            remainingDonors[target] >
+                0U,
+            "M30-10 independent donor graph encountered an invalid dependency count.");
+
+        --remainingDonors[target];
+
+        if (remainingDonors[target] ==
+            0U)
+        {
+            leaves.push_back(
+                target);
+        }
+    }
+
+    Require(
+        processed ==
+            static_cast<u32>(
+                cellCount),
+        "M30-10 independent donor-graph reference detected a cycle in the supposedly downhill M09 graph.");
+
+    f64 exitArea = 0.0;
+    f64 exitDischarge = 0.0;
+    f64 maximumAccumulatedArea =
+        0.0;
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const u32 index =
+                y * resolution +
+                x;
+
+            const auto& cell =
+                drainage.At(x, y);
+
+            maximumAccumulatedArea =
+                std::max(
+                    maximumAccumulatedArea,
+                    cell.
+                        drainageAreaSquareMeters);
+
+            Require(
+                NearlyEqual(
+                    cell.
+                        drainageAreaSquareMeters,
+                    referenceArea[index],
+                    1.0e-9) &&
+                NearlyEqual(
+                    cell.
+                        dischargeCubicMetersPerSecond,
+                    referenceDischarge[index],
+                    1.0e-12),
+                "M30-10 production M09 accumulation must match the independent donor-graph FastFlow reference for every cell.");
+
+            if (cell.flow.exitsPage)
+            {
+                exitArea +=
+                    cell.
+                        drainageAreaSquareMeters;
+
+                exitDischarge +=
+                    cell.
+                        dischargeCubicMetersPerSecond;
+            }
+        }
+    }
+
+    const f64 expectedTotalArea =
+        cellArea *
+        static_cast<f64>(
+            cellCount);
+
+    Require(
+        maximumAccumulatedArea >=
+            cellArea * 10.0,
+        "M30-10 fixture must contain meaningful multi-donor accumulation rather than only isolated single-cell exits.");
+
+    Require(
+        NearlyEqual(
+            exitArea,
+            expectedTotalArea,
+            1.0e-9) &&
+        NearlyEqual(
+            exitDischarge,
+            expectedTotalDischarge,
+            1.0e-12),
+        "M30-10 sum of all page-exit drainage area/discharge must equal the complete conditioned catchment input exactly.");
+
+    const DrainagePage replay =
+        BuildDrainagePage(
+            material,
+            key,
+            inputs,
+            halo,
+            config);
+
+    Require(
+        drainage.Revision() ==
+            replay.Revision(),
+        "M30-10 identical physical drainage inputs must retain deterministic M09 revision identity.");
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& a =
+                drainage.At(x, y);
+            const auto& b =
+                replay.At(x, y);
+
+            Require(
+                a.drainageElevationMeters ==
+                        b.drainageElevationMeters &&
+                    a.depressionFillMeters ==
+                        b.depressionFillMeters &&
+                    a.flow.dx ==
+                        b.flow.dx &&
+                    a.flow.dy ==
+                        b.flow.dy &&
+                    a.flow.exitsPage ==
+                        b.flow.exitsPage &&
+                    a.drainageAreaSquareMeters ==
+                        b.drainageAreaSquareMeters &&
+                    a.dischargeCubicMetersPerSecond ==
+                        b.dischargeCubicMetersPerSecond,
+                "M30-10 FastFlow drainage reference must be bit-deterministic for fixed physical inputs.");
+        }
+    }
+}
+
+
+void Test11AuthoredCanyonPersistence()
+{
+    using namespace surface_authoring;
+    using namespace terrain_erosion;
+    using namespace terrain_hydrology;
+    using namespace terrain_macro_geology;
+    using namespace terrain_material_column;
+
+    constexpr u32 resolution = 7U;
+    constexpr u32 centerY = resolution / 2U;
+
+    StratigraphyFixture fixture;
+
+    const world::PlanetDefinition planet{
+        .radiusMeters = 6'000'000.0,
+        .id = {
+            .high = 0x4D333043414E594FULL,
+            .low = 0x4E0000000000000BULL
+        },
+        .generationSeed =
+            0x4D3330313143414EULL
+    };
+
+    terrain::PhysicalTerrainPageKey key{};
+    key.address.planet =
+        planet.id;
+    key.address.tile = {
+        .face = world::CubeFace::PositiveX,
+        .level = 10U,
+        .x = 511U,
+        .y = 511U
+    };
+    key.resolution =
+        resolution;
+    key.revisions.geology = 11U;
+    key.revisions.authoring = 17U;
+    key.revisions.processes = 10U;
+    key.revisions.climate = 3U;
+
+    const world::CubeBounds bounds =
+        world::TileBounds(
+            key.address.tile);
+
+    const auto pagePosition =
+        [&](const u32 x,
+            const u32 y)
+        {
+            const f64 tx =
+                static_cast<f64>(x) /
+                static_cast<f64>(
+                    resolution - 1U);
+
+            const f64 ty =
+                static_cast<f64>(y) /
+                static_cast<f64>(
+                    resolution - 1U);
+
+            const f64 u =
+                bounds.minimumUv.x +
+                (bounds.maximumUv.x -
+                 bounds.minimumUv.x) *
+                    tx;
+
+            const f64 v =
+                bounds.minimumUv.y +
+                (bounds.maximumUv.y -
+                 bounds.minimumUv.y) *
+                    ty;
+
+            return
+                terrain::CanonicalizeSurfacePosition({
+                    .planet = planet.id,
+                    .unitDirection =
+                        world::CubeToUnitDirection({
+                            .face =
+                                bounds.face,
+                            .uv = {u, v}
+                        }),
+                    .radialOffsetMeters =
+                        0.0
+                });
+        };
+
+    const auto centerStart =
+        pagePosition(
+            0U,
+            centerY);
+
+    const auto centerNext =
+        pagePosition(
+            1U,
+            centerY);
+
+    const f64 cellSpacingMeters =
+        std::acos(
+            std::clamp(
+                math::Dot(
+                    centerStart.unitDirection,
+                    centerNext.unitDirection),
+                -1.0,
+                1.0)) *
+        planet.radiusMeters;
+
+    Require(
+        std::isfinite(
+            cellSpacingMeters) &&
+        cellSpacingMeters >
+            100.0,
+        "M30-11 physical page must resolve a meaningful authored canyon width.");
+
+    MaterialColumnPage upstream(
+        resolution,
+        cellSpacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const f32 awayFromCenter =
+                static_cast<f32>(
+                    std::abs(
+                        static_cast<i32>(y) -
+                        static_cast<i32>(
+                            centerY)));
+
+            const f32 height =
+                220.0F -
+                static_cast<f32>(x) *
+                    1.5F -
+                awayFromCenter *
+                    1.0F;
+
+            upstream.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters =
+                        height,
+                    .referenceBedrockHeightMeters =
+                        height,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                VolcanicAsh,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters = 0.0F,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    const SplineConstraintPrimitive canyon{
+        .controlUnitDirections = {
+            pagePosition(
+                0U,
+                centerY).
+                unitDirection,
+            pagePosition(
+                resolution / 2U,
+                centerY).
+                unitDirection,
+            pagePosition(
+                resolution - 1U,
+                centerY).
+                unitDirection
+        },
+        .halfWidthMeters =
+            cellSpacingMeters *
+            0.30,
+        .falloffMeters =
+            cellSpacingMeters *
+            0.35
+    };
+
+    TerrainConstraintSet authored{
+        .id = {
+            .high = 0x4D333043414E594FULL,
+            .low = 0x4E00000000000100ULL
+        },
+        .planet = planet.id,
+        .name =
+            "M30 authored canyon"
+    };
+
+    authored.height.constraints.push_back({
+        .id = {
+            .high = 0x4D333043414E594FULL,
+            .low = 0x4E00000000000101ULL
+        },
+        .mode =
+            ConstraintCompositionMode::Add,
+        .primitive = canyon,
+        .value = -24.0,
+        .opacity = 1.0,
+        .enabled = true
+    });
+
+    authored.protection.constraints.push_back({
+        .id = {
+            .high = 0x4D333043414E594FULL,
+            .low = 0x4E00000000000102ULL
+        },
+        .mode =
+            ConstraintCompositionMode::Replace,
+        .primitive = canyon,
+        .value = 0.60,
+        .opacity = 1.0,
+        .enabled = true
+    });
+
+    authored.drainage.constraints.push_back({
+        .id = {
+            .high = 0x4D333043414E594FULL,
+            .low = 0x4E00000000000103ULL
+        },
+        .mode =
+            ConstraintCompositionMode::Replace,
+        .primitive = canyon,
+        .value = 1.0,
+        .opacity = 1.0,
+        .enabled = true
+    });
+
+    Require(
+        authored.IsValid(),
+        "M30-11 authored spline canyon must be valid M04 project authority.");
+
+    terrain::GlobalTerrainFieldDesc globalDesc{};
+    globalDesc.seed =
+        0x4D33303131474C42ULL;
+
+    terrain::GlobalTerrainFields globals(
+        planet,
+        globalDesc);
+
+    MacroGeologyDesc macroDesc{};
+    macroDesc.seed =
+        0x4D333031314D4143ULL;
+    macroDesc.convergenceUpliftMeters =
+        0.0;
+    macroDesc.divergenceSubsidenceMeters =
+        0.0;
+    macroDesc.distortionAmplitude =
+        0.0;
+    macroDesc.distortionOctaves =
+        1U;
+
+    MacroGeologyField authoredMacro(
+        planet,
+        globals,
+        &authored,
+        macroDesc);
+
+    MacroGeologyField controlMacro(
+        planet,
+        globals,
+        nullptr,
+        macroDesc);
+
+    const auto authoredForcing =
+        BuildStreamPowerForcing(
+            upstream,
+            key,
+            planet,
+            authoredMacro);
+
+    const auto controlForcing =
+        BuildStreamPowerForcing(
+            upstream,
+            key,
+            planet,
+            controlMacro);
+
+    std::vector<DrainageCellInput>
+        authoredDrainage(
+            static_cast<std::size_t>(
+                resolution) *
+            resolution);
+
+    std::vector<DrainageCellInput>
+        controlDrainage(
+            static_cast<std::size_t>(
+                resolution) *
+            resolution);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const std::size_t index =
+                static_cast<std::size_t>(y) *
+                    resolution +
+                x;
+
+            const auto authoredSample =
+                authoredMacro.Sample(
+                    pagePosition(
+                        x,
+                        y));
+
+            const auto controlSample =
+                controlMacro.Sample(
+                    pagePosition(
+                        x,
+                        y));
+
+            authoredDrainage[index] = {
+                .runoffMetersPerSecond =
+                    0.001F,
+                .authoredDrainage =
+                    static_cast<f32>(
+                        authoredSample.
+                            drainageGuidance),
+                .outlet = false
+            };
+
+            controlDrainage[index] = {
+                .runoffMetersPerSecond =
+                    0.001F,
+                .authoredDrainage =
+                    static_cast<f32>(
+                        controlSample.
+                            drainageGuidance),
+                .outlet = false
+            };
+        }
+    }
+
+    const std::size_t centerIndex =
+        static_cast<std::size_t>(
+            centerY) *
+            resolution +
+        resolution / 2U;
+
+    const std::size_t shoulderIndex =
+        static_cast<std::size_t>(
+            centerY - 2U) *
+            resolution +
+        resolution / 2U;
+
+    Require(
+        authoredForcing[
+            centerIndex].
+            authoredElevationOffsetMeters <
+                -23.0 &&
+        authoredForcing[
+            centerIndex].
+            protection >
+                0.59 &&
+        authoredDrainage[
+            centerIndex].
+            authoredDrainage >
+                0.99F &&
+        std::abs(
+            authoredForcing[
+                shoulderIndex].
+                authoredElevationOffsetMeters) <
+                1.0e-3 &&
+        authoredDrainage[
+            shoulderIndex].
+            authoredDrainage <
+                1.0e-3F,
+        "M30-11 M04 canyon height/protection/drainage fields must remain spatially coherent after M05 sampling.");
+
+    Require(
+        std::abs(
+            controlForcing[
+                centerIndex].
+                authoredElevationOffsetMeters) <
+                1.0e-9 &&
+        controlForcing[
+            centerIndex].
+            protection <
+                1.0e-9 &&
+        controlDrainage[
+            centerIndex].
+            authoredDrainage <
+                1.0e-9F,
+        "M30-11 un-authored control must not contain hidden canyon state.");
+
+    const auto boundary =
+        [](const f32 height)
+        {
+            return DrainageBoundaryCell{
+                .surfaceHeightMeters =
+                    height,
+                .conditionedHeightMeters =
+                    height,
+                .authoredDrainage = 0.0F,
+                .drainageAreaSquareMeters =
+                    0.0,
+                .dischargeCubicMetersPerSecond =
+                    0.0,
+                .flowDx = 0,
+                .flowDy = 0
+            };
+        };
+
+    DrainagePageHalo halo{};
+    halo.revision =
+        0x4D333043414E4841ULL;
+    halo.north.assign(
+        resolution,
+        boundary(400.0F));
+    halo.south.assign(
+        resolution,
+        boundary(400.0F));
+    halo.west.assign(
+        resolution,
+        boundary(400.0F));
+    halo.east.assign(
+        resolution,
+        boundary(100.0F));
+    halo.corners = {
+        boundary(400.0F),
+        boundary(400.0F),
+        boundary(400.0F),
+        boundary(400.0F)
+    };
+
+    StreamPowerErosionConfig config{};
+    config.iterations = 8U;
+    config.upliftCouplingPerIteration =
+        0.0;
+    config.authoredHeightRelaxation =
+        0.50;
+    config.incisionCoefficientMetersPerIteration =
+        2.0;
+    config.drainageExponent =
+        0.5;
+    config.slopeExponent =
+        1.0;
+    config.referenceDrainageAreaSquareMeters =
+        upstream.CellAreaSquareMeters();
+    config.referenceDischargeCubicMetersPerSecond =
+        1.0;
+    config.looseMaterialErodibility =
+        1.0;
+    config.minimumBedSlope =
+        1.0e-6;
+    config.maximumIncisionMetersPerIteration =
+        2.0;
+    config.drainage.depressionPolicy =
+        DepressionRoutingPolicy::
+            FillToBoundary;
+    config.drainage.minimumDrainageDropMeters =
+        0.01F;
+    config.drainage.authoredGuidanceWeight =
+        0.75F;
+
+    const auto authoredResult =
+        SolveStreamPowerErosion(
+            upstream,
+            key,
+            fixture.materials,
+            authoredDrainage,
+            halo,
+            authoredForcing,
+            config);
+
+    terrain::PhysicalTerrainPageKey controlKey =
+        key;
+
+    controlKey.revisions.authoring =
+        0U;
+
+    const auto controlResult =
+        SolveStreamPowerErosion(
+            upstream,
+            controlKey,
+            fixture.materials,
+            controlDrainage,
+            halo,
+            controlForcing,
+            config);
+
+    const auto& authoredCenter =
+        authoredResult.At(
+            resolution / 2U,
+            centerY);
+
+    const auto& controlCenter =
+        controlResult.At(
+            resolution / 2U,
+            centerY);
+
+    const auto& authoredDownstream =
+        authoredResult.At(
+            resolution - 2U,
+            centerY);
+
+    const auto& controlDownstream =
+        controlResult.At(
+            resolution - 2U,
+            centerY);
+
+    Require(
+        authoredCenter.
+            finalSurfaceHeightMeters <
+            controlCenter.
+                finalSurfaceHeightMeters -
+                10.0F,
+        "M30-11 M04 canyon must remain a large-scale depression after iterative M09/M10 regeneration.");
+
+    Require(
+        authoredDownstream.
+            finalDrainageAreaSquareMeters >
+            controlDownstream.
+                finalDrainageAreaSquareMeters +
+                upstream.
+                    CellAreaSquareMeters(),
+        "M30-11 authored canyon must attract additional contributing area instead of remaining a cosmetic height edit.");
+
+    Require(
+        authoredCenter.
+            cumulativeIncisionMeters >
+                0.0F &&
+        authoredCenter.
+            cumulativeIncisionMeters <
+            16.0F,
+        "M30-11 canyon must participate in real M10 erosion while M04 protection keeps the authored feature from becoming an immutable stamp or unrestricted carve.");
+
+    MaterialColumnPage baked =
+        upstream;
+
+    const auto bake =
+        ApplyStreamPowerErosionResult(
+            baked,
+            fixture.materials,
+            authoredResult);
+
+    Require(
+        bake.totalIncisionMeters >
+            0.0 &&
+        baked.At(
+            resolution / 2U,
+            centerY).
+            SurfaceHeightMeters() <
+            upstream.At(
+                resolution / 2U,
+                centerY).
+                SurfaceHeightMeters() -
+                10.0F,
+        "M30-11 authored canyon must bake through the normal M10→M08 physical path.");
+
+    MacroGeologyField regeneratedMacro(
+        planet,
+        globals,
+        &authored,
+        macroDesc);
+
+    const auto regeneratedForcing =
+        BuildStreamPowerForcing(
+            upstream,
+            key,
+            planet,
+            regeneratedMacro);
+
+    std::vector<DrainageCellInput>
+        regeneratedDrainage(
+            authoredDrainage.size());
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const std::size_t index =
+                static_cast<std::size_t>(y) *
+                    resolution +
+                x;
+
+            regeneratedDrainage[index] = {
+                .runoffMetersPerSecond =
+                    0.001F,
+                .authoredDrainage =
+                    static_cast<f32>(
+                        regeneratedMacro.
+                            Sample(
+                                pagePosition(
+                                    x,
+                                    y)).
+                            drainageGuidance),
+                .outlet = false
+            };
+        }
+    }
+
+    const auto regeneratedResult =
+        SolveStreamPowerErosion(
+            upstream,
+            key,
+            fixture.materials,
+            regeneratedDrainage,
+            halo,
+            regeneratedForcing,
+            config);
+
+    Require(
+        regeneratedResult.revision ==
+            authoredResult.revision,
+        "M30-11 regenerating derived terrain from unchanged authored authority must reproduce the same M10 revision identity.");
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& a =
+                authoredResult.At(
+                    x,
+                    y);
+
+            const auto& b =
+                regeneratedResult.At(
+                    x,
+                    y);
+
+            Require(
+                a.finalSurfaceHeightMeters ==
+                        b.finalSurfaceHeightMeters &&
+                    a.cumulativeIncisionMeters ==
+                        b.cumulativeIncisionMeters &&
+                    a.finalDrainageAreaSquareMeters ==
+                        b.finalDrainageAreaSquareMeters &&
+                    a.finalDischargeCubicMetersPerSecond ==
+                        b.finalDischargeCubicMetersPerSecond &&
+                    a.finalFlowDx ==
+                        b.finalFlowDx &&
+                    a.finalFlowDy ==
+                        b.finalFlowDy &&
+                    a.finalFlowExitsPage ==
+                        b.finalFlowExitsPage,
+                "M30-11 authored canyon must survive complete derived-field regeneration bit-deterministically.");
+        }
+    }
+}
+
+
+void Test12BiomeFallback()
+{
+    using namespace terrain_biome;
+
+    const universe::BodyId body{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000000012ULL
+    };
+
+    BiomeService service(
+        body);
+
+    const BiomeId automaticId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000001201ULL
+    };
+
+    const BiomeId authoredId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000001202ULL
+    };
+
+    BiomeDefinition automatic{
+        .id = automaticId,
+        .name = "M30 hot biome",
+        .placement = {
+            .minimumResolvedWeight = 0.05F,
+            .enabled = true,
+            .mode =
+                BiomePlacementMode::
+                    Automatic,
+            .selectors = {
+                BiomeAutomaticSelector{
+                    .field =
+                        BiomeSelectorField::
+                            Temperature,
+                    .minimum = 35.0,
+                    .maximum = 45.0,
+                    .lowerFalloff = 0.0,
+                    .upperFalloff = 0.0,
+                    .invert = false,
+                    .enabled = true
+                }
+            }
+        }
+    };
+
+    BiomeDefinition authored{
+        .id = authoredId,
+        .name = "M30 authored biome",
+        .placement = {
+            .minimumResolvedWeight = 0.05F,
+            .enabled = true,
+            .mode =
+                BiomePlacementMode::
+                    Authored,
+            .authoredMasks = {
+                BiomeAuthoredMask{
+                    .id = {
+                        .high =
+                            0x4D333042494F4D45ULL,
+                        .low =
+                            0x00000000000012A1ULL
+                    },
+                    .operation =
+                        BiomeAuthoredWeightOperation::
+                            Replace,
+                    .centerUnitDirection =
+                        {0.0, -1.0, 0.0},
+                    .innerRadiusMeters =
+                        1'000.0,
+                    .outerRadiusMeters =
+                        2'000.0,
+                    .global = false,
+                    .value = 1.0,
+                    .opacity = 1.0,
+                    .enabled = true
+                }
+            }
+        }
+    };
+
+    service.UpsertBiome(
+        automatic);
+
+    service.UpsertBiome(
+        authored);
+
+    Require(
+        service.Definitions().size() ==
+            3U,
+        "M30-12 fixture must contain exactly one BaseBiome and two optional biome definitions.");
+
+    const auto baseId =
+        service.BaseBiome().id;
+
+    Require(
+        baseId ==
+            BiomeService::
+                BaseBiomeId(body),
+        "M30-12 BaseBiome identity must be the stable body-derived M19 fallback ID.");
+
+    BiomePlacementContext basaltContext{};
+    basaltContext.unitDirection =
+        {0.0, 1.0, 0.0};
+    basaltContext.planetRadiusMeters =
+        6'000'000.0;
+    basaltContext.temperatureC =
+        15.0;
+    basaltContext.moisture =
+        0.5;
+    basaltContext.rainfall =
+        0.5;
+    basaltContext.elevationMeters =
+        250.0;
+    basaltContext.slopeDegrees =
+        5.0;
+    basaltContext.aspectRadians =
+        0.0;
+    basaltContext.latitudeRadians =
+        0.0;
+    basaltContext.continentality =
+        0.5;
+    basaltContext.distanceToCoastWaterMeters =
+        50'000.0;
+    basaltContext.drainage =
+        0.25;
+    basaltContext.soilDepthMeters =
+        0.5;
+    basaltContext.sandDepthMeters =
+        0.0;
+    basaltContext.substrateRock =
+        terrain_geology::
+            reference_rock::
+                Basalt;
+    basaltContext.solarExposure =
+        0.5;
+    basaltContext.windExposure =
+        0.5;
+    basaltContext.snowPersistence =
+        0.0;
+
+    Require(
+        basaltContext.IsValid(),
+        "M30-12 fallback placement context must be valid.");
+
+    const auto automaticEvaluation =
+        service.EvaluatePlacement(
+            automatic,
+            basaltContext);
+
+    const auto authoredEvaluation =
+        service.EvaluatePlacement(
+            authored,
+            basaltContext);
+
+    Require(
+        NearlyEqual(
+            automaticEvaluation.
+                finalWeight,
+            0.0,
+            0.0) &&
+        NearlyEqual(
+            authoredEvaluation.
+                finalWeight,
+            0.0,
+            0.0),
+        "M30-12 optional automatic/authored selectors must contribute no coverage in the fallback fixture.");
+
+    const auto basaltResolved =
+        service.ResolvePlacement(
+            basaltContext);
+
+    Require(
+        basaltResolved.size() ==
+                1U &&
+        basaltResolved.front().id ==
+                baseId &&
+        basaltResolved.front().base &&
+        NearlyEqual(
+            basaltResolved.front().
+                weight,
+            1.0,
+            0.0),
+        "M30-12 zero optional coverage must resolve to exactly one full-weight BaseBiome.");
+
+    BiomePlacementContext graniteContext =
+        basaltContext;
+
+    graniteContext.substrateRock =
+        terrain_geology::
+            reference_rock::
+                Granite;
+
+    const auto graniteResolved =
+        service.ResolvePlacement(
+            graniteContext);
+
+    Require(
+        graniteResolved.size() ==
+                1U &&
+        graniteResolved.front().id ==
+                baseId &&
+        graniteResolved.front().base &&
+        graniteResolved.front().weight ==
+                basaltResolved.front().
+                    weight,
+        "M30-12 BaseBiome fallback must be independent of M02 substrate-rock identity when placement selectors contribute nothing.");
+
+    const auto replay =
+        service.ResolvePlacement(
+            basaltContext);
+
+    Require(
+        replay.size() ==
+                basaltResolved.size() &&
+        replay.front().id ==
+                basaltResolved.front().id &&
+        replay.front().weight ==
+                basaltResolved.front().weight &&
+        replay.front().base ==
+                basaltResolved.front().base,
+        "M30-12 biome fallback must be bit-deterministic for fixed physical placement context.");
+
+    const u64 revisionBeforeRemoval =
+        service.Revision();
+
+    Require(
+        !service.RemoveBiome(
+            baseId) &&
+        service.Revision() ==
+            revisionBeforeRemoval &&
+        service.Find(baseId) !=
+            nullptr,
+        "M30-12 BaseBiome must be non-removable and a failed removal attempt must not mutate biome authority revision.");
+
+    const BiomeId staleId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x00000000DEADBEEFULL
+    };
+
+    const std::array<
+        BiomeWeightContribution,
+        3>
+        staleAndWeak{{
+            {
+                .id = staleId,
+                .weight = 1.0F
+            },
+            {
+                .id = automaticId,
+                .weight = 0.01F
+            },
+            {
+                .id = baseId,
+                .weight = 1.0F
+            }
+        }};
+
+    const auto staleResolved =
+        service.Resolve(
+            staleAndWeak);
+
+    Require(
+        staleResolved.size() ==
+                1U &&
+        staleResolved.front().id ==
+                baseId &&
+        staleResolved.front().base &&
+        NearlyEqual(
+            staleResolved.front().
+                weight,
+            1.0,
+            0.0),
+        "M30-12 stale IDs, below-threshold optional coverage and explicit BaseBiome contributions must all collapse safely to full fallback coverage.");
+}
+
+
+void Test13AutomaticAuthoredBiomeBlend()
+{
+    using namespace terrain_biome;
+
+    const universe::BodyId body{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000000013ULL
+    };
+
+    const BiomeId forestId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000001301ULL
+    };
+
+    const BiomeId duneId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000001302ULL
+    };
+
+    const BiomeId weakId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000001303ULL
+    };
+
+    const auto globalMask =
+        [](const u64 low,
+           const BiomeAuthoredWeightOperation operation,
+           const f64 value)
+        {
+            return BiomeAuthoredMask{
+                .id = {
+                    .high =
+                        0x4D3330424D41534BULL,
+                    .low = low
+                },
+                .operation = operation,
+                .centerUnitDirection =
+                    {0.0, 1.0, 0.0},
+                .innerRadiusMeters = 0.0,
+                .outerRadiusMeters = 0.0,
+                .global = true,
+                .value = value,
+                .opacity = 1.0,
+                .enabled = true
+            };
+        };
+
+    BiomeDefinition forest{
+        .id = forestId,
+        .name = "M30 blended forest",
+        .placement = {
+            .minimumResolvedWeight = 0.05F,
+            .enabled = true,
+            .mode =
+                BiomePlacementMode::
+                    AutomaticAndAuthored,
+            .selectors = {
+                BiomeAutomaticSelector{
+                    .field =
+                        BiomeSelectorField::
+                            Temperature,
+                    .minimum = 10.0,
+                    .maximum = 20.0,
+                    .lowerFalloff = 10.0,
+                    .upperFalloff = 0.0,
+                    .invert = false,
+                    .enabled = true
+                }
+            },
+            .authoredMasks = {
+                globalMask(
+                    0x1301ULL,
+                    BiomeAuthoredWeightOperation::
+                        Add,
+                    0.125)
+            }
+        }
+    };
+
+    BiomeDefinition dunes{
+        .id = duneId,
+        .name = "M30 blended dunes",
+        .placement = {
+            .minimumResolvedWeight = 0.05F,
+            .enabled = true,
+            .mode =
+                BiomePlacementMode::
+                    AutomaticAndAuthored,
+            .selectors = {
+                BiomeAutomaticSelector{
+                    .field =
+                        BiomeSelectorField::
+                            Moisture,
+                    .minimum = 0.4,
+                    .maximum = 0.8,
+                    .lowerFalloff = 0.4,
+                    .upperFalloff = 0.0,
+                    .invert = false,
+                    .enabled = true
+                }
+            },
+            .authoredMasks = {
+                globalMask(
+                    0x1302ULL,
+                    BiomeAuthoredWeightOperation::
+                        Multiply,
+                    0.5)
+            }
+        }
+    };
+
+    BiomeDefinition weak{
+        .id = weakId,
+        .name = "M30 thresholded biome",
+        .placement = {
+            .minimumResolvedWeight = 0.05F,
+            .enabled = true,
+            .mode =
+                BiomePlacementMode::
+                    AutomaticAndAuthored,
+            .selectors = {
+                BiomeAutomaticSelector{
+                    .field =
+                        BiomeSelectorField::
+                            Temperature,
+                    .minimum = 10.0,
+                    .maximum = 20.0,
+                    .lowerFalloff = 10.0,
+                    .upperFalloff = 0.0,
+                    .invert = false,
+                    .enabled = true
+                }
+            },
+            .authoredMasks = {
+                globalMask(
+                    0x1303ULL,
+                    BiomeAuthoredWeightOperation::
+                        Multiply,
+                    0.05)
+            }
+        }
+    };
+
+    BiomeService service(
+        body);
+
+    // Insert in deliberately non-ID order. ResolvePlacement/Resolve must emit
+    // optional biome entries in stable ID order rather than hash-map order.
+    service.UpsertBiome(
+        weak);
+    service.UpsertBiome(
+        dunes);
+    service.UpsertBiome(
+        forest);
+
+    BiomePlacementContext context{};
+    context.unitDirection =
+        {0.0, 1.0, 0.0};
+    context.planetRadiusMeters =
+        6'000'000.0;
+    context.temperatureC =
+        5.0;
+    context.moisture =
+        0.2;
+    context.rainfall =
+        0.5;
+    context.elevationMeters =
+        200.0;
+    context.slopeDegrees =
+        8.0;
+    context.aspectRadians =
+        0.0;
+    context.latitudeRadians =
+        0.0;
+    context.continentality =
+        0.5;
+    context.distanceToCoastWaterMeters =
+        10'000.0;
+    context.drainage =
+        0.2;
+    context.soilDepthMeters =
+        0.5;
+    context.sandDepthMeters =
+        0.1;
+    context.substrateRock =
+        terrain_geology::
+            reference_rock::
+                Basalt;
+    context.solarExposure =
+        0.5;
+    context.windExposure =
+        0.5;
+    context.snowPersistence =
+        0.0;
+
+    Require(
+        context.IsValid(),
+        "M30-13 biome blend context must be valid.");
+
+    const auto forestEval =
+        service.EvaluatePlacement(
+            *service.Find(forestId),
+            context);
+
+    const auto duneEval =
+        service.EvaluatePlacement(
+            *service.Find(duneId),
+            context);
+
+    const auto weakEval =
+        service.EvaluatePlacement(
+            *service.Find(weakId),
+            context);
+
+    Require(
+        NearlyEqual(
+            forestEval.automaticWeight,
+            0.5,
+            1.0e-12) &&
+        NearlyEqual(
+            forestEval.authoredWeight,
+            0.125,
+            1.0e-12) &&
+        NearlyEqual(
+            forestEval.finalWeight,
+            0.625,
+            1.0e-12),
+        "M30-13 automatic+authored Add composition must apply the authored mask after smooth automatic placement.");
+
+    Require(
+        NearlyEqual(
+            duneEval.automaticWeight,
+            0.5,
+            1.0e-12) &&
+        NearlyEqual(
+            duneEval.finalWeight,
+            0.25,
+            1.0e-12),
+        "M30-13 automatic+authored Multiply composition must scale the automatic biome weight.");
+
+    Require(
+        NearlyEqual(
+            weakEval.automaticWeight,
+            0.5,
+            1.0e-12) &&
+        NearlyEqual(
+            weakEval.finalWeight,
+            0.025,
+            1.0e-12),
+        "M30-13 threshold fixture must produce a nonzero final optional biome weight below its resolution threshold.");
+
+    const auto resolved =
+        service.ResolvePlacement(
+            context);
+
+    Require(
+        resolved.size() ==
+            3U,
+        "M30-13 resolved blend must contain BaseBiome plus the two eligible optional biomes only.");
+
+    Require(
+        resolved[0].id ==
+                service.BaseBiome().id &&
+        resolved[0].base &&
+        resolved[1].id ==
+                forestId &&
+        !resolved[1].base &&
+        resolved[2].id ==
+                duneId &&
+        !resolved[2].base,
+        "M30-13 biome blend must keep BaseBiome first and optional biomes in stable ID order independent of insertion/hash order.");
+
+    Require(
+        NearlyEqual(
+            resolved[0].weight,
+            0.125,
+            1.0e-6) &&
+        NearlyEqual(
+            resolved[1].weight,
+            0.625,
+            1.0e-6) &&
+        NearlyEqual(
+            resolved[2].weight,
+            0.25,
+            1.0e-6),
+        "M30-13 resolved biome weights must preserve eligible automatic/authored weights and assign the exact residual to BaseBiome.");
+
+    f64 totalWeight = 0.0;
+
+    for (const auto& weight :
+         resolved)
+    {
+        totalWeight +=
+            weight.weight;
+    }
+
+    Require(
+        NearlyEqual(
+            totalWeight,
+            1.0,
+            1.0e-6),
+        "M30-13 resolved automatic/authored biome blend must close to unit coverage.");
+
+    const auto replay =
+        service.ResolvePlacement(
+            context);
+
+    Require(
+        replay.size() ==
+            resolved.size(),
+        "M30-13 deterministic replay changed biome blend cardinality.");
+
+    for (std::size_t index = 0U;
+         index < resolved.size();
+         ++index)
+    {
+        Require(
+            replay[index].id ==
+                    resolved[index].id &&
+            replay[index].weight ==
+                    resolved[index].weight &&
+            replay[index].base ==
+                    resolved[index].base,
+            "M30-13 automatic/authored biome blend must replay bit-identically for fixed placement authority.");
+    }
+
+    // Force an oversubscribed case through the same production Resolve path.
+    // Base remains present at zero and optionals normalize proportionally.
+    const std::array<
+        BiomeWeightContribution,
+        2>
+        oversubscribed{{
+            {
+                .id = forestId,
+                .weight = 0.75F
+            },
+            {
+                .id = duneId,
+                .weight = 0.75F
+            }
+        }};
+
+    const auto normalized =
+        service.Resolve(
+            oversubscribed);
+
+    Require(
+        normalized.size() ==
+                3U &&
+        normalized[0].base &&
+        NearlyEqual(
+            normalized[0].weight,
+            0.0,
+            1.0e-6) &&
+        NearlyEqual(
+            normalized[1].weight,
+            0.5,
+            1.0e-6) &&
+        NearlyEqual(
+            normalized[2].weight,
+            0.5,
+            1.0e-6),
+        "M30-13 oversubscribed optional coverage must normalize proportionally while retaining exactly one zero-weight BaseBiome entry.");
+}
+
+
+void Test14ExposedRockMaterialResolution()
+{
+    using namespace surface_model;
+    using namespace terrain_biome;
+    using namespace terrain_material_column;
+
+    StratigraphyFixture fixture;
+
+    constexpr f32 regolithMeters = 0.50F;
+    constexpr f32 soilMeters = 0.25F;
+    constexpr f32 sandMeters = 0.125F;
+    constexpr f32 debrisMeters = 0.125F;
+    constexpr f64 totalCoverMeters = 1.0;
+
+    MaterialColumnPage page(
+        1U,
+        2.0);
+
+    page.SetCell(
+        0U,
+        0U,
+        {
+            .bedrockHeightMeters = 100.0F,
+            .referenceBedrockHeightMeters = 100.0F,
+            .bedrockMaterial =
+                terrain_geology::
+                    reference_rock::
+                        Basalt,
+            .regolithMeters =
+                regolithMeters,
+            .soilMeters =
+                soilMeters,
+            .sandMeters =
+                sandMeters,
+            .debrisMeters =
+                debrisMeters,
+            .moisture = 0.80F,
+            .temporaryScalar = 0.0F
+        });
+
+    const universe::BodyId body{
+        .high = 0x4D33305355524641ULL,
+        .low = 0x4345000000000014ULL
+    };
+
+    const BiomeId biomeId{
+        .high = 0x4D33305355524641ULL,
+        .low = 0x4345000000001401ULL
+    };
+
+    BiomeDefinition biome{
+        .id = biomeId,
+        .name = "M30 exposed-rock dressing",
+        .placement = {
+            .minimumResolvedWeight = 0.0F,
+            .enabled = true
+        },
+        .surface = {
+            .materialInfluence = 1.0F,
+            .layers = {
+                BiomeSurfaceLayerRule{
+                    .kind =
+                        BiomeSurfaceLayerKind::
+                            Moss,
+                    .strength = 0.40F,
+                    .compatibleExposed =
+                        BiomeExposedMaterialMask::
+                            Bedrock,
+                    .minimumSlopeDegrees =
+                        0.0F,
+                    .maximumSlopeDegrees =
+                        90.0F,
+                    .slopeFalloffDegrees =
+                        0.0F,
+                    .minimumCurvature =
+                        -1.0F,
+                    .maximumCurvature =
+                        1.0F,
+                    .curvatureFalloff =
+                        0.0F,
+                    .minimumMoisture =
+                        0.0F,
+                    .maximumMoisture =
+                        1.0F,
+                    .moistureFalloff =
+                        0.0F,
+                    .enabled = true
+                }
+            }
+        }
+    };
+
+    BiomeService biomes(
+        body);
+
+    biomes.UpsertBiome(
+        biome);
+
+    const std::array<
+        BiomeWeightContribution,
+        1>
+        contribution{{
+            {
+                .id = biomeId,
+                .weight = 1.0F
+            }
+        }};
+
+    const auto biomeWeights =
+        biomes.Resolve(
+            contribution);
+
+    const SurfaceMaterialFeatureMasks features{
+        .slopeDegrees = 12.0F,
+        .curvature = 0.0F,
+        .snowCoverage = 0.0F,
+        .mossPotential = 1.0F,
+        .litterAvailability = 0.0F,
+        .dustAvailability = 0.0F
+    };
+
+    const auto resolve =
+        [&]()
+        {
+            const auto geology =
+                SampleColumnGeology(
+                    page.At(
+                        0U,
+                        0U),
+                    fixture.materials);
+
+            const auto physical =
+                ResolveSurface(
+                    page.At(
+                        0U,
+                        0U),
+                    geology);
+
+            const auto blend =
+                ResolveSurfaceMaterialBlend(
+                    physical,
+                    biomes,
+                    biomeWeights,
+                    features);
+
+            return
+                std::tuple{
+                    physical,
+                    blend
+                };
+        };
+
+    const auto [
+        coveredPhysical,
+        coveredBlend] =
+        resolve();
+
+    Require(
+        coveredPhysical.material ==
+                ExposedSurfaceKind::
+                    Debris &&
+        coveredPhysical.substrateRock ==
+                terrain_geology::
+                    reference_rock::
+                        Basalt &&
+        !coveredPhysical.
+            exposedRock.IsValid() &&
+        NearlyEqual(
+            coveredPhysical.
+                exposedLayerDepthMeters,
+            debrisMeters,
+            0.0),
+        "M30-14 initial M18 state must report the real topmost M08 debris while retaining buried basalt only as substrate identity.");
+
+    Require(
+        NearlyEqual(
+            coveredBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Debris),
+            1.0,
+            1.0e-6) &&
+        NearlyEqual(
+            coveredBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Moss),
+            0.0,
+            0.0),
+        "M30-14 M21 must not expose or dress buried basalt through incompatible loose cover.");
+
+    const auto removed =
+        page.Erode(
+            0U,
+            0U,
+            totalCoverMeters,
+            fixture.materials);
+
+    Require(
+        NearlyEqual(
+            removed.debrisMeters,
+            debrisMeters,
+            0.0) &&
+        NearlyEqual(
+            removed.sandMeters,
+            sandMeters,
+            0.0) &&
+        NearlyEqual(
+            removed.soilMeters,
+            soilMeters,
+            0.0) &&
+        NearlyEqual(
+            removed.regolithMeters,
+            regolithMeters,
+            0.0) &&
+        NearlyEqual(
+            removed.bedrockMeters,
+            0.0,
+            0.0),
+        "M30-14 cover stripping must reveal bedrock without shaving or replacing the authoritative M08 substrate.");
+
+    const auto [
+        exposedPhysical,
+        exposedBlend] =
+        resolve();
+
+    Require(
+        exposedPhysical.
+            BedrockExposed() &&
+        exposedPhysical.material ==
+                ExposedSurfaceKind::
+                    Bedrock &&
+        exposedPhysical.substrateRock ==
+                terrain_geology::
+                    reference_rock::
+                        Basalt &&
+        exposedPhysical.exposedRock ==
+                terrain_geology::
+                    reference_rock::
+                        Basalt &&
+        exposedPhysical.geology.
+            bedrockMaterial ==
+                terrain_geology::
+                    reference_rock::
+                        Basalt,
+        "M30-14 stripping the last loose layer must expose the exact M02 basalt identity already owned by M08.");
+
+    const auto* basalt =
+        fixture.materials.Find(
+            terrain_geology::
+                reference_rock::
+                    Basalt);
+
+    Require(
+        basalt != nullptr &&
+        exposedPhysical.geology.
+                hardness ==
+            basalt->hardness &&
+        exposedPhysical.geology.
+                cohesion ==
+            basalt->cohesion &&
+        exposedPhysical.geology.
+                densityKgPerCubicMeter ==
+            basalt->density,
+        "M30-14 M18 exposed-rock geology must come from the matching M02 material record rather than renderer/biome constants.");
+
+    Require(
+        NearlyEqual(
+            exposedBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Bedrock),
+            0.60,
+            1.0e-6) &&
+        NearlyEqual(
+            exposedBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Moss),
+            0.40,
+            1.0e-6),
+        "M30-14 M21 may add a compatible moss overlay over exposed basalt in the deterministic normalized blend.");
+
+    const auto substrateBeforeBurial =
+        page.At(
+            0U,
+            0U).
+            bedrockMaterial;
+
+    const f64 depositedMass =
+        page.Deposit(
+            0U,
+            0U,
+            LooseMaterialKind::Sand,
+            0.75);
+
+    Require(
+        depositedMass > 0.0 &&
+        NearlyEqual(
+            page.At(
+                0U,
+                0U).
+                sandMeters,
+            0.75,
+            1.0e-6) &&
+        page.At(
+            0U,
+            0U).
+            bedrockMaterial ==
+                substrateBeforeBurial,
+        "M30-14 sand deposition must cover the exposed rock without redefining geological substrate identity.");
+
+    const auto [
+        buriedPhysical,
+        buriedBlend] =
+        resolve();
+
+    Require(
+        buriedPhysical.material ==
+                ExposedSurfaceKind::
+                    Sand &&
+        buriedPhysical.substrateRock ==
+                terrain_geology::
+                    reference_rock::
+                        Basalt &&
+        !buriedPhysical.
+            exposedRock.IsValid() &&
+        NearlyEqual(
+            buriedPhysical.
+                exposedLayerDepthMeters,
+            0.75,
+            1.0e-6),
+        "M30-14 new M08 deposition must immediately replace bedrock as the canonical exposed surface while preserving buried basalt substrate.");
+
+    Require(
+        NearlyEqual(
+            buriedBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Sand),
+            1.0,
+            1.0e-6) &&
+        NearlyEqual(
+            buriedBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Bedrock),
+            0.0,
+            0.0) &&
+        NearlyEqual(
+            buriedBlend.Weight(
+                RenderedSurfaceMaterialKind::
+                    Moss),
+            0.0,
+            0.0),
+        "M30-14 M21 must follow the newly exposed physical sand instead of caching the previously visible basalt/moss material.");
+}
+
+
+void Test15DeterministicScatter()
+{
+    using namespace terrain_biome;
+    using namespace terrain_material_column;
+    using namespace terrain_scatter;
+
+    StratigraphyFixture fixture;
+
+    constexpr u32 resolution = 16U;
+    constexpr f32 spacingMeters = 4.0F;
+
+    const BiomeScatterLayerRule treeRule{
+        .id = {
+            .high = 0x4D33305343415454ULL,
+            .low = 0x4552000000001501ULL
+        },
+        .kind =
+            BiomeScatterKind::Tree,
+        .densityPerSquareMeter =
+            1.0F,
+        .minimumSpacingMeters =
+            spacingMeters,
+        .seedSalt = 0x1501U,
+        .compatibleExposed =
+            BiomeExposedMaterialMask::Soil,
+        .requiresSoil = true,
+        .minimumSoilDepthMeters =
+            0.20F,
+        .minimumSlopeDegrees =
+            0.0F,
+        .maximumSlopeDegrees =
+            35.0F,
+        .slopeFalloffDegrees =
+            10.0F,
+        .minimumMoisture =
+            0.20F,
+        .maximumMoisture =
+            0.90F,
+        .moistureFalloff =
+            0.10F,
+        .minimumScale =
+            0.80F,
+        .maximumScale =
+            1.20F,
+        .enabled = true
+    };
+
+    ScatterPageRequest request{
+        .identity = {
+            .planet = {
+                .high =
+                    0x4D33305343415454ULL,
+                .low =
+                    0x4552504C414E1501ULL
+            },
+            .tile = {
+                .face =
+                    world::CubeFace::
+                        PositiveX,
+                .level = 12U,
+                .x = 812U,
+                .y = 437U
+            },
+            .sourceRevision = 41U,
+            .scatterRevision = 9U,
+            .generationSeed =
+                0xA57E22A60022ULL
+        },
+        .gridResolution =
+            resolution,
+        .cellSizeMeters =
+            spacingMeters,
+        .rule =
+            treeRule,
+        .biomeDensityMultiplier =
+            1.0F
+    };
+
+    Require(
+        request.IsValid(),
+        "M30-15 scatter request must be a valid production M22 page identity/rule.");
+
+    std::vector<ScatterCellInput> cells;
+    cells.reserve(
+        static_cast<std::size_t>(
+            resolution) *
+        resolution);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const bool soilSide =
+                x <
+                resolution / 2U;
+
+            MaterialColumnCell column{
+                .bedrockHeightMeters =
+                    100.0F,
+                .referenceBedrockHeightMeters =
+                    100.0F,
+                .bedrockMaterial =
+                    terrain_geology::
+                        reference_rock::
+                            Basalt,
+                .regolithMeters =
+                    0.0F,
+                .soilMeters =
+                    soilSide
+                        ? 0.80F
+                        : 0.0F,
+                .sandMeters =
+                    0.0F,
+                .debrisMeters =
+                    0.0F,
+                .moisture =
+                    0.60F,
+                .temporaryScalar =
+                    0.0F
+            };
+
+            const auto physical =
+                ResolveSurface(
+                    column,
+                    SampleColumnGeology(
+                        column,
+                        fixture.materials));
+
+            const auto scatterPhysical =
+                MakePhysicalSurfaceScatterInput(
+                    physical);
+
+            Require(
+                scatterPhysical.material ==
+                    (soilSide
+                         ? ExposedSurfaceKind::
+                               Soil
+                         : ExposedSurfaceKind::
+                               Bedrock),
+                "M30-15 M18→M22 fixture did not preserve actual physical exposure class.");
+
+            cells.push_back({
+                .biomeWeight = 1.0F,
+                .exposedMaterial =
+                    scatterPhysical.material,
+                .slopeDegrees =
+                    10.0F,
+                .soilDepthMeters =
+                    column.soilMeters,
+                .moisture =
+                    scatterPhysical.moisture,
+                .exclusionMask =
+                    0.0F,
+                .authoredDensity =
+                    1.0F
+            });
+        }
+    }
+
+    const auto first =
+        GenerateDeterministicScatter(
+            request,
+            cells);
+
+    Require(
+        !first.empty(),
+        "M30-15 deterministic soil fixture must generate a non-empty tree population.");
+
+    for (const auto& instance :
+         first)
+    {
+        Require(
+            instance.IsValid() &&
+            instance.kind ==
+                BiomeScatterKind::Tree &&
+            instance.cellX <
+                resolution / 2U,
+            "M30-15 soil-dependent tree scatter must never cross onto the physically exposed bare-rock half of the page.");
+    }
+
+    const f64 minimumSpacingSquared =
+        static_cast<f64>(
+            treeRule.
+                minimumSpacingMeters) *
+        treeRule.
+            minimumSpacingMeters;
+
+    for (std::size_t a = 0U;
+         a < first.size();
+         ++a)
+    {
+        for (std::size_t b = a + 1U;
+             b < first.size();
+             ++b)
+        {
+            const f64 dx =
+                first[a].
+                    localOffsetMeters.x -
+                first[b].
+                    localOffsetMeters.x;
+
+            const f64 dy =
+                first[a].
+                    localOffsetMeters.y -
+                first[b].
+                    localOffsetMeters.y;
+
+            const f64 distanceSquared =
+                dx * dx +
+                dy * dy;
+
+            Require(
+                distanceSquared >=
+                    minimumSpacingSquared -
+                        1.0e-8,
+                "M30-15 production M22 scatter violated the rule's deterministic minimum spacing.");
+        }
+    }
+
+    const auto firstPageHash =
+        ScatterPageHash(
+            request.identity);
+
+    const auto firstRuleHash =
+        ScatterRuleHash(
+            request.rule);
+
+    // Simulate stream-out by discarding all derived instances. Streaming back
+    // in reconstructs the page only from authoritative identity/rules/fields.
+    std::vector<DerivedScatterInstance>
+        streamedOut = first;
+
+    streamedOut.clear();
+
+    Require(
+        streamedOut.empty(),
+        "M30-15 stream-out fixture failed to discard derived scatter state.");
+
+    const auto streamedIn =
+        GenerateDeterministicScatter(
+            request,
+            cells);
+
+    Require(
+        streamedIn.size() ==
+            first.size(),
+        "M30-15 stream-in regeneration changed deterministic scatter population size.");
+
+    for (std::size_t index = 0U;
+         index < first.size();
+         ++index)
+    {
+        const auto& a =
+            first[index];
+
+        const auto& b =
+            streamedIn[index];
+
+        Require(
+            a.id == b.id &&
+            a.kind == b.kind &&
+            a.localOffsetMeters.x ==
+                b.localOffsetMeters.x &&
+            a.localOffsetMeters.y ==
+                b.localOffsetMeters.y &&
+            a.yawRadians ==
+                b.yawRadians &&
+            a.uniformScale ==
+                b.uniformScale &&
+            a.cellX ==
+                b.cellX &&
+            a.cellY ==
+                b.cellY,
+            "M30-15 identical seed/page/revisions/physical fields must reproduce every scatter instance bit-for-bit after stream-out/stream-in.");
+    }
+
+    Require(
+        ScatterPageHash(
+            request.identity) ==
+                firstPageHash &&
+        ScatterRuleHash(
+            request.rule) ==
+                firstRuleHash,
+        "M30-15 fixed scatter authority must retain stable page/rule hashes across regeneration.");
+
+    auto revisedRequest =
+        request;
+
+    ++revisedRequest.
+        identity.
+        scatterRevision;
+
+    const auto revised =
+        GenerateDeterministicScatter(
+            revisedRequest,
+            cells);
+
+    bool revisionChangedPopulation =
+        revised.size() !=
+        first.size();
+
+    if (!revisionChangedPopulation)
+    {
+        for (std::size_t index = 0U;
+             index < first.size();
+             ++index)
+        {
+            if (revised[index].id !=
+                    first[index].id ||
+                revised[index].
+                        localOffsetMeters.x !=
+                    first[index].
+                        localOffsetMeters.x ||
+                revised[index].
+                        localOffsetMeters.y !=
+                    first[index].
+                        localOffsetMeters.y)
+            {
+                revisionChangedPopulation =
+                    true;
+                break;
+            }
+        }
+    }
+
+    Require(
+        revisionChangedPopulation &&
+        ScatterPageHash(
+            revisedRequest.identity) !=
+            firstPageHash,
+        "M30-15 changing scatter revision must intentionally produce a new derived page identity/population.");
+
+    std::vector<ScatterCellInput>
+        staleRockCells = cells;
+
+    for (auto& cell :
+         staleRockCells)
+    {
+        cell.exposedMaterial =
+            ExposedSurfaceKind::
+                Bedrock;
+
+        // Deliberately stale depth data. M22 must trust physical exposure.
+        cell.soilDepthMeters =
+            2.0F;
+    }
+
+    const auto staleRock =
+        GenerateDeterministicScatter(
+            request,
+            staleRockCells);
+
+    Require(
+        staleRock.empty(),
+        "M30-15 bare rock must reject soil-dependent vegetation even when a stale soil-depth channel is nonzero.");
+}
+
+
+void Test16CacheHitStability()
+{
+    using namespace terrain_cache;
+
+    class CountingTerrainSource final :
+        public terrain::TerrainSource
+    {
+    public:
+        [[nodiscard]] terrain::TerrainSample Sample(
+            const terrain::TerrainQuery& query) const noexcept override
+        {
+            sampleCount.fetch_add(
+                1U,
+                std::memory_order_relaxed);
+
+            const f64 elevation =
+                1'000.0 +
+                query.unitDirection.x *
+                    120.0 +
+                query.unitDirection.y *
+                    45.0 +
+                query.unitDirection.z *
+                    15.0;
+
+            return {
+                .elevationMeters =
+                    elevation,
+                .coarseElevationMeters =
+                    elevation - 2.0,
+                .climate = {
+                    .temperatureC = 18.0F,
+                    .humidity = 0.55F,
+                    .precipitation = 0.40F,
+                    .continentality = 0.65F
+                },
+                .biomes = {
+                    .ocean = 0.0F,
+                    .desert = 0.0F,
+                    .grassland = 1.0F,
+                    .temperateForest = 0.0F,
+                    .borealForest = 0.0F,
+                    .tundra = 0.0F,
+                    .alpine = 0.0F,
+                    .wetland = 0.0F
+                },
+                .standingWaterDepthMeters =
+                    0.0
+            };
+        }
+
+        [[nodiscard]] u64 Revision() const noexcept override
+        {
+            return 1601U;
+        }
+
+        [[nodiscard]] terrain::TerrainGenerationRevisions
+        GenerationRevisions() const noexcept override
+        {
+            return {
+                .geology = 11U,
+                .climate = 12U,
+                .authoring = 13U,
+                .biome = 14U,
+                .water = 15U,
+                .processes = 16U
+            };
+        }
+
+        mutable std::atomic<u64>
+            sampleCount{0U};
+    };
+
+    const world::PlanetDefinition planet{
+        .radiusMeters = 6'000'000.0,
+        .id = {
+            .high =
+                0x4D33304341434845ULL,
+            .low =
+                0x0000000000000016ULL
+        },
+        .generationSeed =
+            0x4D33303136434143ULL
+    };
+
+    auto source =
+        std::make_shared<
+            CountingTerrainSource>();
+
+    jobs::JobSystem jobs(
+        1U);
+
+    TerrainPageCache cache(
+        planet,
+        source,
+        jobs,
+        {
+            .budgetBytes =
+                8ULL *
+                1024ULL *
+                1024ULL,
+            .softEntryLimit = 8U
+        });
+
+    constexpr u32 resolution = 9U;
+    constexpr u64 samplesPerPage =
+        static_cast<u64>(
+            resolution) *
+        resolution;
+
+    const auto revisions =
+        source->
+            GenerationRevisions();
+
+    const TerrainPageDesc pageA{
+        .planet = planet.id,
+        .tile = {
+            .face =
+                world::CubeFace::
+                    PositiveX,
+            .level = 8U,
+            .x = 120U,
+            .y = 120U
+        },
+        .resolution =
+            resolution,
+        .revisions =
+            revisions
+    };
+
+    const TerrainPageDesc pageB{
+        .planet = planet.id,
+        .tile = {
+            .face =
+                world::CubeFace::
+                    PositiveX,
+            .level = 8U,
+            .x = 121U,
+            .y = 120U
+        },
+        .resolution =
+            resolution,
+        .revisions =
+            revisions
+    };
+
+    Require(
+        !cache.TryGet(pageA),
+        "M30-16 cold cache lookup must miss before a page is generated.");
+
+    const auto coldStats =
+        cache.Stats();
+
+    Require(
+        coldStats.misses == 1U &&
+        coldStats.readyHits == 0U &&
+        coldStats.acceptedRequests == 0U &&
+        source->sampleCount.load(
+            std::memory_order_relaxed) ==
+            0U,
+        "M30-16 cold lookup must record a miss without generating terrain implicitly.");
+
+    Require(
+        cache.Request(pageA),
+        "M30-16 first request for page A must be accepted as a cache miss/generation.");
+
+    cache.WaitAll();
+
+    Require(
+        source->sampleCount.load(
+            std::memory_order_relaxed) ==
+            samplesPerPage,
+        "M30-16 first unique 9x9 physical page must sample the terrain source exactly 81 times.");
+
+    const auto firstA =
+        cache.TryGet(pageA);
+
+    Require(
+        firstA != nullptr &&
+        firstA->desc ==
+            pageA &&
+        firstA->samples.size() ==
+            samplesPerPage,
+        "M30-16 generated page A must become resident under the exact requested physical page key.");
+
+    const auto firstCenter =
+        firstA->SampleAt(
+            resolution / 2U,
+            resolution / 2U);
+
+    const u64 samplesAfterA =
+        source->sampleCount.load(
+            std::memory_order_relaxed);
+
+    for (u32 repeat = 0U;
+         repeat < 8U;
+         ++repeat)
+    {
+        Require(
+            !cache.Request(pageA),
+            "M30-16 repeated stationary request for resident page A must be suppressed as a duplicate.");
+
+        const auto hit =
+            cache.TryGet(pageA);
+
+        Require(
+            hit != nullptr &&
+            hit.get() ==
+                firstA.get() &&
+            hit->SampleAt(
+                resolution / 2U,
+                resolution / 2U).
+                    elevationMeters ==
+                firstCenter.
+                    elevationMeters,
+            "M30-16 stationary cache hits must reuse the same resident page payload and sample values.");
+    }
+
+    cache.WaitAll();
+
+    Require(
+        source->sampleCount.load(
+            std::memory_order_relaxed) ==
+            samplesAfterA,
+        "M30-16 stationary cache hits/duplicate requests must cause zero physical page regeneration.");
+
+    const auto stationaryStats =
+        cache.Stats();
+
+    Require(
+        stationaryStats.acceptedRequests ==
+                1U &&
+        stationaryStats.duplicateRequests ==
+                8U &&
+        stationaryStats.readyHits ==
+                9U &&
+        stationaryStats.misses ==
+                1U &&
+        stationaryStats.entries ==
+                1U &&
+        stationaryStats.evictions ==
+                0U &&
+        stationaryStats.capacityRejects ==
+                0U &&
+        stationaryStats.residentBytes >
+                0U &&
+        stationaryStats.peakResidentBytes >=
+                stationaryStats.residentBytes,
+        "M30-16 cache statistics must distinguish one generation from repeated stable resident hits.");
+
+    Require(
+        cache.Request(pageB),
+        "M30-16 first request for adjacent page B must generate exactly one additional physical page.");
+
+    cache.WaitAll();
+
+    Require(
+        source->sampleCount.load(
+            std::memory_order_relaxed) ==
+            samplesPerPage *
+                2U,
+        "M30-16 two unique resident 9x9 pages must account for exactly two page generations.");
+
+    const auto firstB =
+        cache.TryGet(pageB);
+
+    Require(
+        firstB != nullptr &&
+        firstB->desc ==
+            pageB,
+        "M30-16 generated page B must become resident under its own physical key.");
+
+    const u64 samplesAfterB =
+        source->sampleCount.load(
+            std::memory_order_relaxed);
+
+    // Simulate moving away from A and then returning while A remains resident.
+    const auto returnedA =
+        cache.TryGet(pageA);
+
+    Require(
+        returnedA != nullptr &&
+        returnedA.get() ==
+            firstA.get() &&
+        returnedA->SampleAt(
+            resolution / 2U,
+            resolution / 2U).
+                elevationMeters ==
+            firstCenter.
+                elevationMeters,
+        "M30-16 returning to resident page A must reuse its existing payload instead of rebuilding it.");
+
+    cache.WaitAll();
+
+    Require(
+        source->sampleCount.load(
+            std::memory_order_relaxed) ==
+            samplesAfterB,
+        "M30-16 returning to resident terrain must cause zero regeneration.");
+
+    const auto finalStats =
+        cache.Stats();
+
+    Require(
+        finalStats.acceptedRequests ==
+                2U &&
+        finalStats.entries ==
+                2U &&
+        finalStats.readyHits ==
+                11U &&
+        finalStats.duplicateRequests ==
+                8U &&
+        finalStats.misses ==
+                1U &&
+        finalStats.evictions ==
+                0U &&
+        finalStats.capacityRejects ==
+                0U &&
+        finalStats.residentBytes <=
+                finalStats.budgetBytes,
+        "M30-16 final cache accounting must show exactly two generated resident pages and hit-only reuse thereafter.");
+}
+
+
+void Test17RevisionInvalidation()
+{
+    using namespace terrain_dependency;
+
+    const world::PlanetId planet{
+        .high = 0x4D3330494E56414CULL,
+        .low = 0x4944000000000017ULL
+    };
+
+    const terrain::PhysicalTerrainPageAddress center{
+        .planet = planet,
+        .tile = {
+            .face =
+                world::CubeFace::
+                    PositiveX,
+            .level = 7U,
+            .x = 64U,
+            .y = 64U
+        }
+    };
+
+    const terrain::PhysicalTerrainPageAddress far{
+        .planet = planet,
+        .tile =
+            world::OffsetTile(
+                center.tile,
+                4,
+                0)
+    };
+
+    const terrain::TerrainGenerationRevisions initial{
+        .geology = 10U,
+        .climate = 20U,
+        .authoring = 30U,
+        .biome = 40U,
+        .water = 50U,
+        .processes = 60U
+    };
+
+    jobs::JobSystem jobs(
+        2U);
+
+    procedural_graph::ProceduralGraph graph(
+        jobs);
+
+    std::array<
+        std::atomic<u64>,
+        kTerrainDependencyProductCount>
+        centerCounts{};
+
+    std::array<
+        std::atomic<u64>,
+        kTerrainDependencyProductCount>
+        farCounts{};
+
+    const auto productIndex =
+        [](const TerrainDependencyProduct product)
+        {
+            return static_cast<std::size_t>(
+                product);
+        };
+
+    TerrainDependencyGraph dependencies(
+        graph,
+        [&](const terrain::PhysicalTerrainPageAddress& address,
+            const TerrainDependencyProduct product,
+            const procedural_graph::BuildContext&)
+            -> std::any
+        {
+            if (address == center)
+            {
+                ++centerCounts[
+                    productIndex(product)];
+            }
+            else if (address == far)
+            {
+                ++farCounts[
+                    productIndex(product)];
+            }
+            else
+            {
+                Fail(
+                    "M30-17 dependency graph attempted to build an unregistered fixture address.");
+            }
+
+            return std::any(
+                static_cast<u32>(
+                    product));
+        });
+
+    dependencies.RegisterPage(
+        center,
+        initial);
+
+    dependencies.RegisterPage(
+        far,
+        initial);
+
+    Require(
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                SurfaceMaterial) &&
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                Scatter) &&
+        dependencies.BuildBlocking(
+            far,
+            TerrainDependencyProduct::
+                SurfaceMaterial) &&
+        dependencies.BuildBlocking(
+            far,
+            TerrainDependencyProduct::
+                Scatter),
+        "M30-17 initial dependency products must build successfully.");
+
+    const auto count =
+        [&](const bool centerPage,
+            const TerrainDependencyProduct product)
+        {
+            return (
+                centerPage
+                    ? centerCounts[
+                          productIndex(
+                              product)]
+                    : farCounts[
+                          productIndex(
+                              product)])
+                .load(
+                    std::memory_order_relaxed);
+        };
+
+    const auto centerInitialRevisions =
+        dependencies.Revisions(
+            center);
+
+    const auto farInitialRevisions =
+        dependencies.Revisions(
+            far);
+
+    Require(
+        centerInitialRevisions.has_value() &&
+        farInitialRevisions.has_value() &&
+        *centerInitialRevisions ==
+            initial &&
+        *farInitialRevisions ==
+            initial,
+        "M30-17 registered pages must begin with the supplied physical revision domains.");
+
+    const terrain::PhysicalTerrainPageKey
+        centerInitialKey{
+            .address = center,
+            .resolution = 65U,
+            .revisions =
+                *centerInitialRevisions
+        };
+
+    const terrain::PhysicalTerrainPageKey
+        farInitialKey{
+            .address = far,
+            .resolution = 65U,
+            .revisions =
+                *farInitialRevisions
+        };
+
+    const auto farScatterBefore =
+        dependencies.Status(
+            far,
+            TerrainDependencyProduct::
+                Scatter);
+
+    Require(
+        farScatterBefore.has_value() &&
+        farScatterBefore->state ==
+            procedural_graph::
+                NodeState::Clean,
+        "M30-17 distant control page must be clean before bounded invalidation.");
+
+    const u64 centerProcessBeforeScatter =
+        count(
+            true,
+            TerrainDependencyProduct::
+                TerrainProcesses);
+
+    const u64 centerSurfaceBeforeScatter =
+        count(
+            true,
+            TerrainDependencyProduct::
+                SurfaceMaterial);
+
+    const u64 centerScatterBefore =
+        count(
+            true,
+            TerrainDependencyProduct::
+                Scatter);
+
+    const u64 farScatterBuildsBefore =
+        count(
+            false,
+            TerrainDependencyProduct::
+                Scatter);
+
+    const auto scatterEdit =
+        dependencies.ApplyChange({
+            .kind =
+                TerrainChangeKind::
+                    BiomeScatter,
+            .scope = {
+                .planet = planet,
+                .global = false,
+                .center = center.tile,
+                .radiusTiles = 0U,
+                .downstreamRadiusTiles = 0U
+            }
+        });
+
+    Require(
+        scatterEdit.affectedPages ==
+                1U &&
+        scatterEdit.dirtyProducts ==
+            ProductBit(
+                TerrainDependencyProduct::
+                    Scatter),
+        "M30-17 biome scatter edit must invalidate only scatter on the bounded target page.");
+
+    const auto centerAfterScatterRevision =
+        dependencies.Revisions(
+            center);
+
+    const auto farAfterScatterRevision =
+        dependencies.Revisions(
+            far);
+
+    Require(
+        centerAfterScatterRevision.
+                has_value() &&
+        centerAfterScatterRevision->
+                biome ==
+            initial.biome + 1U &&
+        centerAfterScatterRevision->
+                geology ==
+            initial.geology &&
+        centerAfterScatterRevision->
+                processes ==
+            initial.processes &&
+        farAfterScatterRevision.
+                has_value() &&
+        *farAfterScatterRevision ==
+            initial,
+        "M30-17 scatter-only edit must advance only center biome revision and leave distant page revisions unchanged.");
+
+    const terrain::PhysicalTerrainPageKey
+        centerScatterKey{
+            .address = center,
+            .resolution = 65U,
+            .revisions =
+                *centerAfterScatterRevision
+        };
+
+    Require(
+        terrain::PhysicalPageFingerprint(
+            centerScatterKey) !=
+                terrain::PhysicalPageFingerprint(
+                    centerInitialKey) &&
+        terrain::PhysicalPageFingerprint({
+            .address = far,
+            .resolution = 65U,
+            .revisions =
+                *farAfterScatterRevision
+        }) ==
+            terrain::PhysicalPageFingerprint(
+                farInitialKey),
+        "M30-17 affected page revision must produce a new physical cache fingerprint while the out-of-scope page identity remains stable.");
+
+    Require(
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                Scatter),
+        "M30-17 scatter-only rebuild must succeed.");
+
+    Require(
+        count(
+            true,
+            TerrainDependencyProduct::
+                TerrainProcesses) ==
+                centerProcessBeforeScatter &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                SurfaceMaterial) ==
+                centerSurfaceBeforeScatter &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                Scatter) ==
+                centerScatterBefore + 1U &&
+        count(
+            false,
+            TerrainDependencyProduct::
+                Scatter) ==
+                farScatterBuildsBefore,
+        "M30-17 biome scatter revision must rebuild scatter exactly once without rerunning erosion, surface material, or distant-page products.");
+
+    const u64 centerGeologyBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                Geology);
+
+    const u64 centerDrainageBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                Drainage);
+
+    const u64 centerProcessBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                TerrainProcesses);
+
+    const u64 centerExposedBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                ExposedSurface);
+
+    const u64 centerBiomeBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                BiomeWeights);
+
+    const u64 centerSurfaceBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                SurfaceMaterial);
+
+    const u64 centerScatterBeforeRock =
+        count(
+            true,
+            TerrainDependencyProduct::
+                Scatter);
+
+    const auto rockEdit =
+        dependencies.ApplyChange({
+            .kind =
+                TerrainChangeKind::
+                    RockPhysics,
+            .scope = {
+                .planet = planet,
+                .global = false,
+                .center = center.tile,
+                .radiusTiles = 0U,
+                .downstreamRadiusTiles = 0U
+            }
+        });
+
+    constexpr TerrainDependencyProductMask
+        allRockDescendants =
+            ProductBit(
+                TerrainDependencyProduct::
+                    Geology) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    Drainage) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    TerrainProcesses) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    ExposedSurface) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    BiomeWeights) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    SurfaceMaterial) |
+            ProductBit(
+                TerrainDependencyProduct::
+                    Scatter);
+
+    Require(
+        rockEdit.affectedPages ==
+                1U &&
+        rockEdit.dirtyProducts ==
+                allRockDescendants,
+        "M30-17 rock-physics revision must invalidate geology and every dependent physical/derived product on the target page.");
+
+    const auto centerAfterRockRevision =
+        dependencies.Revisions(
+            center);
+
+    Require(
+        centerAfterRockRevision.
+                has_value() &&
+        centerAfterRockRevision->
+                geology ==
+            initial.geology + 1U &&
+        centerAfterRockRevision->
+                biome ==
+            initial.biome + 1U &&
+        centerAfterRockRevision->
+                climate ==
+            initial.climate &&
+        centerAfterRockRevision->
+                authoring ==
+            initial.authoring &&
+        centerAfterRockRevision->
+                water ==
+            initial.water &&
+        centerAfterRockRevision->
+                processes ==
+            initial.processes,
+        "M30-17 rock edit must advance geology revision without spuriously changing unrelated revision domains.");
+
+    Require(
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                SurfaceMaterial) &&
+        dependencies.BuildBlocking(
+            center,
+            TerrainDependencyProduct::
+                Scatter),
+        "M30-17 rock-dependent descendant rebuild chain must succeed.");
+
+    Require(
+        count(
+            true,
+            TerrainDependencyProduct::
+                Geology) ==
+                centerGeologyBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                Drainage) ==
+                centerDrainageBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                TerrainProcesses) ==
+                centerProcessBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                ExposedSurface) ==
+                centerExposedBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                BiomeWeights) ==
+                centerBiomeBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                SurfaceMaterial) ==
+                centerSurfaceBeforeRock + 1U &&
+        count(
+            true,
+            TerrainDependencyProduct::
+                Scatter) ==
+                centerScatterBeforeRock + 1U,
+        "M30-17 geology revision must rebuild each downstream terrain product exactly once.");
+
+    const auto farScatterAfter =
+        dependencies.Status(
+            far,
+            TerrainDependencyProduct::
+                Scatter);
+
+    Require(
+        farScatterAfter.has_value() &&
+        farScatterAfter->state ==
+            procedural_graph::
+                NodeState::Clean &&
+        farScatterAfter->
+                committedRevision ==
+            farScatterBefore->
+                committedRevision &&
+        dependencies.Revisions(
+            far) ==
+            farAfterScatterRevision,
+        "M30-17 out-of-scope terrain must remain clean, keep its committed product revision, and retain identical generation revisions.");
+}
+
+
+void Test18ClipmapPhysicalPageIndependence()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_stream;
+    using namespace terrain_view;
+
+    const world::PlanetDefinition planet{
+        .radiusMeters = 6'000'000.0,
+        .id = {
+            .high =
+                0x4D3330434C49504DULL,
+            .low =
+                0x4150000000000018ULL
+        },
+        .generationSeed =
+            0x4D33303138434C49ULL
+    };
+
+    const math::Double3 anchorDirection{
+        1.0,
+        0.0,
+        0.0
+    };
+
+    const auto anchorFrame =
+        world::MakeSurfaceFrame(
+            anchorDirection);
+
+    const math::Double3 physicalDirection =
+        world::DirectionAtSurfaceOffset(
+            planet,
+            anchorFrame,
+            {1'250.0, -750.0});
+
+    const terrain::TerrainGenerationRevisions
+        revisions{
+            .geology = 101U,
+            .climate = 102U,
+            .authoring = 103U,
+            .biome = 104U,
+            .water = 105U,
+            .processes = 106U
+        };
+
+    const terrain::PhysicalTerrainPageKey
+        physicalKey{
+            .address = {
+                .planet = planet.id,
+                .tile =
+                    world::TileForDirection(
+                        physicalDirection,
+                        10U)
+            },
+            .resolution = 65U,
+            .revisions = revisions
+        };
+
+    const u64 physicalFingerprintBefore =
+        terrain::PhysicalPageFingerprint(
+            physicalKey);
+
+    const u64 hydraulicSeedBefore =
+        terrain::DeriveTerrainSeed(
+            planet.generationSeed,
+            terrain::TerrainSeedDomain::
+                HydraulicErosion,
+            physicalKey.address);
+
+    const terrain_gpu::
+        PersistentGpuTerrainCacheKey
+        gpuKeyBefore{
+            .address =
+                physicalKey.address,
+            .physicalLod = 0U,
+            .revisions = revisions
+        };
+
+    const u64 gpuFingerprintBefore =
+        terrain_gpu::
+            PersistentGpuTerrainCacheFingerprint(
+                gpuKeyBefore);
+
+    const ClipmapConfig renderConfig{
+        .levelCount = 4U,
+        .gridResolution = 17U,
+        .baseSpacingMeters = 2.0,
+        .levelScale = 2.0,
+        .overlapCells = 2U
+    };
+
+    ClipmapTracker tracker(
+        planet,
+        renderConfig);
+
+    ToroidalResidency residency(
+        renderConfig);
+
+    const world::WorldPosition observerA{
+        .meters =
+            anchorDirection *
+            (planet.radiusMeters +
+             100.0)
+    };
+
+    const auto firstMotion =
+        tracker.Update(
+            observerA);
+
+    const auto firstResidency =
+        residency.Apply(
+            firstMotion);
+
+    Require(
+        firstMotion.levels.size() ==
+                renderConfig.levelCount &&
+        firstResidency.levels.size() ==
+                renderConfig.levelCount,
+        "M30-18 initial render clipmap state must initialize every configured view level.");
+
+    for (u32 index = 0U;
+         index < renderConfig.levelCount;
+         ++index)
+    {
+        Require(
+            firstMotion.levels[index].
+                fullRefresh &&
+            firstResidency.levels[index].
+                fullRefresh,
+            "M30-18 first clipmap observation must populate view residency without participating in physical page identity.");
+    }
+
+    const math::Double3 movedDirection =
+        world::DirectionAtSurfaceOffset(
+            planet,
+            anchorFrame,
+            {24.0, 8.0});
+
+    const world::WorldPosition observerB{
+        .meters =
+            movedDirection *
+            (planet.radiusMeters +
+             100.0)
+    };
+
+    const auto secondMotion =
+        tracker.Update(
+            observerB);
+
+    const auto secondResidency =
+        residency.Apply(
+            secondMotion);
+
+    bool anyViewMotion = false;
+    bool anyPartialRefresh = false;
+    bool anyMovedLevelRebuilt = false;
+    u64 refreshedCells = 0U;
+
+    for (u32 index = 0U;
+         index < renderConfig.levelCount;
+         ++index)
+    {
+        const auto& movement =
+            secondMotion.levels[index];
+
+        const auto& levelResidency =
+            secondResidency.levels[index];
+
+        if (movement.cellShiftX != 0 ||
+            movement.cellShiftY != 0)
+        {
+            anyViewMotion = true;
+
+            // A scrolled ladder level is rebuilt in full (ClipmapTracker::Update);
+            // only banded levels refresh just the strip that came into view.
+            if (levelResidency.fullRefresh)
+            {
+                anyMovedLevelRebuilt = true;
+            }
+        }
+
+        if (!levelResidency.fullRefresh &&
+            !levelResidency.
+                refreshRegions.empty())
+        {
+            anyPartialRefresh = true;
+        }
+
+        for (const auto& region :
+             levelResidency.
+                 refreshRegions)
+        {
+            refreshedCells +=
+                static_cast<u64>(
+                    region.width) *
+                region.height;
+        }
+    }
+
+    Require(
+        anyViewMotion &&
+        (anyMovedLevelRebuilt ||
+         (anyPartialRefresh && refreshedCells > 0U)),
+        "M30-18 moving the observer must alter view residency and refresh the moved levels.");
+
+    const terrain::PhysicalTerrainPageKey
+        physicalKeyAfter =
+            physicalKey;
+
+    const terrain_gpu::
+        PersistentGpuTerrainCacheKey
+        gpuKeyAfter{
+            .address =
+                physicalKeyAfter.address,
+            .physicalLod = 0U,
+            .revisions =
+                physicalKeyAfter.revisions
+        };
+
+    Require(
+        physicalKeyAfter ==
+                physicalKey &&
+        terrain::PhysicalPageFingerprint(
+            physicalKeyAfter) ==
+                physicalFingerprintBefore &&
+        terrain::DeriveTerrainSeed(
+            planet.generationSeed,
+            terrain::TerrainSeedDomain::
+                HydraulicErosion,
+            physicalKeyAfter.address) ==
+                hydraulicSeedBefore,
+        "M30-18 camera/clipmap motion must not alter physical page address, authority revisions, fingerprint or process seed.");
+
+    Require(
+        gpuKeyAfter ==
+                gpuKeyBefore &&
+        terrain_gpu::
+            PersistentGpuTerrainCacheFingerprint(
+                gpuKeyAfter) ==
+                gpuFingerprintBefore,
+        "M30-18 render view movement must not create a new M26 solved-GPU cache identity for unchanged physical page/LOD/revisions.");
+
+    const ClipmapConfig coarserRenderConfig =
+        ClipmapConfigForTier(
+            renderConfig,
+            1U);
+
+    auto reconfiguredTracker =
+        tracker.Reconfigured(
+            coarserRenderConfig);
+
+    ToroidalResidency
+        coarserResidency(
+            coarserRenderConfig);
+
+    const auto reconfiguredMotion =
+        reconfiguredTracker.Update(
+            observerB);
+
+    const auto reconfiguredView =
+        coarserResidency.Apply(
+            reconfiguredMotion);
+
+    Require(
+        reconfiguredMotion.levels.size() ==
+                renderConfig.levelCount &&
+        reconfiguredView.levels.size() ==
+                renderConfig.levelCount,
+        "M30-18 render coverage-tier reconfiguration must remain a view/residency operation.");
+
+    Require(
+        terrain::PhysicalPageFingerprint(
+            physicalKey) ==
+                physicalFingerprintBefore &&
+        terrain_gpu::
+            PersistentGpuTerrainCacheFingerprint(
+                gpuKeyBefore) ==
+                gpuFingerprintBefore,
+        "M30-18 changing render clipmap spacing/tier must leave physical page and M26 cache identities unchanged.");
+}
+
+
+void Test19PlanetFaceSeamConsistency()
+{
+    using namespace terrain_debug;
+
+    constexpr u8 tileLevel = 4U;
+    constexpr u32 tileCount =
+        1U << tileLevel;
+    constexpr u32 resolution = 9U;
+
+    const world::PlanetId planet{
+        .high = 0x4D33305345414D53ULL,
+        .low = 0x0000000000000019ULL
+    };
+
+    const terrain::TerrainGenerationRevisions
+        revisions{
+            .geology = 201U,
+            .climate = 202U,
+            .authoring = 203U,
+            .biome = 204U,
+            .water = 205U,
+            .processes = 206U
+        };
+
+    const auto sourceTileFor =
+        [](const world::CubeFace face,
+           const world::TileEdge edge)
+        {
+            world::PlanetTileId tile{
+                .face = face,
+                .level = tileLevel,
+                .x = tileCount / 2U,
+                .y = tileCount / 2U
+            };
+
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                tile.y = 0U;
+                break;
+            case world::TileEdge::East:
+                tile.x =
+                    tileCount - 1U;
+                break;
+            case world::TileEdge::South:
+                tile.y =
+                    tileCount - 1U;
+                break;
+            case world::TileEdge::West:
+                tile.x = 0U;
+                break;
+            }
+
+            return tile;
+        };
+
+    const auto edgeUv =
+        [](const world::CubeBounds& bounds,
+           const world::TileEdge edge,
+           const f64 t)
+        {
+            const f64 u =
+                bounds.minimumUv.x +
+                (bounds.maximumUv.x -
+                 bounds.minimumUv.x) *
+                    t;
+
+            const f64 v =
+                bounds.minimumUv.y +
+                (bounds.maximumUv.y -
+                 bounds.minimumUv.y) *
+                    t;
+
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                return math::Double2{
+                    u,
+                    bounds.minimumUv.y};
+            case world::TileEdge::East:
+                return math::Double2{
+                    bounds.maximumUv.x,
+                    v};
+            case world::TileEdge::South:
+                return math::Double2{
+                    u,
+                    bounds.maximumUv.y};
+            case world::TileEdge::West:
+                return math::Double2{
+                    bounds.minimumUv.x,
+                    v};
+            }
+
+            return math::Double2{};
+        };
+
+    const auto edgeIndex =
+        [](const world::TileEdge edge,
+           const u32 sample)
+            -> std::size_t
+        {
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                return sample;
+            case world::TileEdge::East:
+                return
+                    static_cast<std::size_t>(
+                        sample) *
+                        resolution +
+                    (resolution - 1U);
+            case world::TileEdge::South:
+                return
+                    static_cast<std::size_t>(
+                        resolution - 1U) *
+                        resolution +
+                    sample;
+            case world::TileEdge::West:
+                return
+                    static_cast<std::size_t>(
+                        sample) *
+                    resolution;
+            }
+
+            return 0U;
+        };
+
+    const auto outwardFlow =
+        [](const world::TileEdge edge)
+        {
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                return world::TileGridOffset{
+                    0, -1};
+            case world::TileEdge::East:
+                return world::TileGridOffset{
+                    1, 0};
+            case world::TileEdge::South:
+                return world::TileGridOffset{
+                    0, 1};
+            case world::TileEdge::West:
+                return world::TileGridOffset{
+                    -1, 0};
+            }
+
+            return world::TileGridOffset{};
+        };
+
+    const auto inwardFlow =
+        [](const world::TileEdge edge)
+        {
+            switch (edge)
+            {
+            case world::TileEdge::North:
+                return world::TileGridOffset{
+                    0, 1};
+            case world::TileEdge::East:
+                return world::TileGridOffset{
+                    -1, 0};
+            case world::TileEdge::South:
+                return world::TileGridOffset{
+                    0, -1};
+            case world::TileEdge::West:
+                return world::TileGridOffset{
+                    1, 0};
+            }
+
+            return world::TileGridOffset{};
+        };
+
+    u32 crossings = 0U;
+    u32 reversedCrossings = 0U;
+    u32 rotatedReceivingEdges = 0U;
+
+    for (u8 rawFace = 0U;
+         rawFace < 6U;
+         ++rawFace)
+    {
+        const auto face =
+            static_cast<world::CubeFace>(
+                rawFace);
+
+        for (u8 rawEdge = 0U;
+             rawEdge < 4U;
+             ++rawEdge)
+        {
+            const auto edge =
+                static_cast<world::TileEdge>(
+                    rawEdge);
+
+            const auto sourceTile =
+                sourceTileFor(
+                    face,
+                    edge);
+
+            const auto mapping =
+                world::NeighborAcrossTileEdge(
+                    sourceTile,
+                    edge);
+
+            Require(
+                mapping.tile.face !=
+                        sourceTile.face &&
+                mapping.tile.level ==
+                        sourceTile.level,
+                "M30-19 border fixture must cross onto a different cube face at the same physical tile level.");
+
+            const auto reciprocal =
+                world::NeighborAcrossTileEdge(
+                    mapping.tile,
+                    mapping.edge);
+
+            Require(
+                reciprocal.tile ==
+                        sourceTile &&
+                reciprocal.edge ==
+                        edge,
+                "M30-19 canonical cube-face edge mapping must be reciprocal.");
+
+            if (mapping.reverseSamples)
+            {
+                ++reversedCrossings;
+            }
+
+            if (mapping.edge != edge)
+            {
+                ++rotatedReceivingEdges;
+            }
+
+            TerrainDebugPageStamp sourceStamp{
+                .address = {
+                    .planet = planet,
+                    .tile = sourceTile
+                },
+                .physicalLod = 3U,
+                .revisions = revisions,
+                .cacheResident = true,
+                .invalidationRevision =
+                    19U
+            };
+
+            TerrainDebugPageStamp neighborStamp{
+                .address = {
+                    .planet = planet,
+                    .tile = mapping.tile
+                },
+                .physicalLod = 3U,
+                .revisions = revisions,
+                .cacheResident = true,
+                .invalidationRevision =
+                    19U
+            };
+
+            const auto probe =
+                ProbeSeam(
+                    sourceStamp,
+                    edge,
+                    &neighborStamp);
+
+            Require(
+                probe.IsContinuousCandidate() &&
+                probe.expectedNeighbor ==
+                    neighborStamp.address,
+                "M30-19 M29 seam provenance must resolve the exact canonical physical neighbor with matching LOD/revisions.");
+
+            TerrainDebugPageData source(
+                sourceStamp,
+                resolution,
+                resolution);
+
+            TerrainDebugPageData neighbor(
+                neighborStamp,
+                resolution,
+                resolution);
+
+            std::vector<f32> sourceScalar(
+                resolution *
+                    resolution,
+                0.0F);
+
+            std::vector<f32> neighborScalar(
+                resolution *
+                    resolution,
+                0.0F);
+
+            std::vector<TerrainDebugVector2>
+                sourceVector(
+                    resolution *
+                        resolution);
+
+            std::vector<TerrainDebugVector2>
+                neighborVector(
+                    resolution *
+                        resolution);
+
+            const auto sourceBounds =
+                world::TileBounds(
+                    sourceTile);
+
+            const auto neighborBounds =
+                world::TileBounds(
+                    mapping.tile);
+
+            for (u32 i = 0U;
+                 i < resolution;
+                 ++i)
+            {
+                const u32 j =
+                    world::
+                        RemapTileEdgeSampleIndex(
+                            mapping,
+                            i,
+                            resolution);
+
+                const f64 sourceT =
+                    static_cast<f64>(i) /
+                    static_cast<f64>(
+                        resolution - 1U);
+
+                const f64 neighborT =
+                    static_cast<f64>(j) /
+                    static_cast<f64>(
+                        resolution - 1U);
+
+                const math::Double3
+                    sourceDirection =
+                        world::
+                            CubeToUnitDirection({
+                                .face =
+                                    sourceTile.face,
+                                .uv =
+                                    edgeUv(
+                                        sourceBounds,
+                                        edge,
+                                        sourceT)
+                            });
+
+                const math::Double3
+                    neighborDirection =
+                        world::
+                            CubeToUnitDirection({
+                                .face =
+                                    mapping.tile.face,
+                                .uv =
+                                    edgeUv(
+                                        neighborBounds,
+                                        mapping.edge,
+                                        neighborT)
+                            });
+
+                Require(
+                    math::Length(
+                        sourceDirection -
+                        neighborDirection) <=
+                        2.0e-12,
+                    "M30-19 remapped source/receiving edge samples must represent the same canonical world-space direction.");
+
+                const f32 sourceValue =
+                    static_cast<f32>(
+                        sourceDirection.x *
+                            3.0 +
+                        sourceDirection.y *
+                            5.0 +
+                        sourceDirection.z *
+                            7.0);
+
+                const f32 neighborValue =
+                    static_cast<f32>(
+                        neighborDirection.x *
+                            3.0 +
+                        neighborDirection.y *
+                            5.0 +
+                        neighborDirection.z *
+                            7.0);
+
+                sourceScalar[
+                    edgeIndex(
+                        edge,
+                        i)] =
+                    sourceValue;
+
+                neighborScalar[
+                    edgeIndex(
+                        mapping.edge,
+                        j)] =
+                    neighborValue;
+
+                const TerrainDebugVector2
+                    sourceValueVector{
+                        .x =
+                            1.0F +
+                            static_cast<f32>(i) *
+                                0.125F,
+                        .y =
+                            -0.75F +
+                            static_cast<f32>(i) *
+                                0.0625F
+                    };
+
+                const auto transformed =
+                    terrain_region::
+                        TransformBoundaryVectorAcrossEdge(
+                            edge,
+                            mapping,
+                            {
+                                static_cast<f64>(
+                                    sourceValueVector.x),
+                                static_cast<f64>(
+                                    sourceValueVector.y)
+                            });
+
+                sourceVector[
+                    edgeIndex(
+                        edge,
+                        i)] =
+                    sourceValueVector;
+
+                neighborVector[
+                    edgeIndex(
+                        mapping.edge,
+                        j)] = {
+                            .x =
+                                static_cast<f32>(
+                                    transformed.x),
+                            .y =
+                                static_cast<f32>(
+                                    transformed.y)
+                        };
+            }
+
+            const auto normalTransform =
+                world::
+                    TransformFlowAcrossTileEdge(
+                        edge,
+                        mapping,
+                        outwardFlow(edge));
+
+            Require(
+                normalTransform ==
+                    inwardFlow(
+                        mapping.edge),
+                "M30-19 an outward page-local normal must become the receiving page's inward normal across every cube-face rotation.");
+
+            source.SetScalar(
+                TerrainDebugField::Soil,
+                sourceScalar);
+
+            neighbor.SetScalar(
+                TerrainDebugField::Soil,
+                neighborScalar);
+
+            const auto sourceScalarView =
+                source.View(
+                    TerrainDebugField::Soil);
+
+            const auto neighborScalarView =
+                neighbor.View(
+                    TerrainDebugField::Soil);
+
+            const auto scalarComparison =
+                CompareSeamValues(
+                    sourceStamp,
+                    sourceScalarView,
+                    edge,
+                    &neighborStamp,
+                    &neighborScalarView,
+                    2.0e-6);
+
+            Require(
+                scalarComparison.
+                    Comparable() &&
+                scalarComparison.
+                    ValuesContinuous() &&
+                scalarComparison.
+                    samplesCompared ==
+                        resolution &&
+                scalarComparison.
+                    mismatchedSamples ==
+                        0U &&
+                scalarComparison.
+                    maximumDifference <=
+                        2.0e-6,
+                "M30-19 scalar physical field must remain continuous across canonical planet-face seam remapping.");
+
+            source.SetVector(
+                TerrainDebugField::Drainage,
+                sourceVector);
+
+            neighbor.SetVector(
+                TerrainDebugField::Drainage,
+                neighborVector);
+
+            const auto sourceVectorView =
+                source.View(
+                    TerrainDebugField::
+                        Drainage);
+
+            const auto neighborVectorView =
+                neighbor.View(
+                    TerrainDebugField::
+                        Drainage);
+
+            const auto vectorComparison =
+                CompareSeamValues(
+                    sourceStamp,
+                    sourceVectorView,
+                    edge,
+                    &neighborStamp,
+                    &neighborVectorView,
+                    1.0e-6);
+
+            Require(
+                vectorComparison.
+                    Comparable() &&
+                vectorComparison.
+                    ValuesContinuous() &&
+                vectorComparison.
+                    samplesCompared ==
+                        resolution &&
+                vectorComparison.
+                    mismatchedSamples ==
+                        0U,
+                "M30-19 vector physical field must remain continuous after canonical cube-face tangent-frame transformation.");
+
+            ++crossings;
+        }
+    }
+
+    Require(
+        crossings == 24U &&
+        reversedCrossings > 0U &&
+        rotatedReceivingEdges > 0U,
+        "M30-19 acceptance must cover all 24 face-edge crossings including reversed sample order and rotated receiving-edge cases.");
+}
+
+
+void Test20SaveLoadEquivalenceForAuthoredInputs()
+{
+    using namespace surface_authoring;
+
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() /
+        ("orbit-m30-save-load-" +
+         documents::ProjectId::Random().
+             ToString());
+
+    std::filesystem::remove_all(
+        root);
+
+    auto project =
+        documents::ProjectDocument::Create(
+            root,
+            "M30 Save Load Equivalence");
+
+    const auto manifestPath =
+        project.ManifestPath();
+
+    const auto worldPath =
+        project.StartupWorldPath();
+
+    const auto projectIdBefore =
+        project.Manifest().projectId;
+
+    // ---------------------------------------------------------------------
+    // M04 authored terrain-constraint asset: write the production TOML codec
+    // to disk, load it through the production file loader, then regenerate
+    // the derived constraint sample from authored intent only.
+    // ---------------------------------------------------------------------
+
+    const world::PlanetDefinition
+        constraintPlanet{
+            .radiusMeters = 6'000'000.0,
+            .id = {
+                .high =
+                    0x4D3330534156454CULL,
+                .low =
+                    0x4F41440000000020ULL
+            },
+            .generationSeed =
+                0x4D333032304D3034ULL
+        };
+
+    const terrain::PlanetSurfacePosition
+        constraintOrigin{
+            .planet =
+                constraintPlanet.id,
+            .unitDirection =
+                {1.0, 0.0, 0.0},
+            .radialOffsetMeters =
+                0.0
+        };
+
+    const auto constraintWest =
+        terrain::OffsetSurfacePosition(
+            constraintPlanet,
+            constraintOrigin,
+            {-800.0, 0.0});
+
+    const auto constraintEast =
+        terrain::OffsetSurfacePosition(
+            constraintPlanet,
+            constraintOrigin,
+            {800.0, 0.0});
+
+    const SplineConstraintPrimitive
+        authoredSpline{
+            .controlUnitDirections = {
+                constraintWest.
+                    unitDirection,
+                constraintOrigin.
+                    unitDirection,
+                constraintEast.
+                    unitDirection
+            },
+            .halfWidthMeters = 120.0,
+            .falloffMeters = 180.0
+        };
+
+    const BrushConstraintPrimitive
+        authoredBrush{
+            .centerUnitDirection =
+                constraintOrigin.
+                    unitDirection,
+            .innerRadiusMeters =
+                250.0,
+            .outerRadiusMeters =
+                750.0
+        };
+
+    TerrainConstraintSet authoredConstraints{
+        .id = {
+            .high =
+                0x4D333054434F4E53ULL,
+            .low =
+                0x4554000000000020ULL
+        },
+        .planet =
+            constraintPlanet.id,
+        .name =
+            "M30 persisted authored terrain"
+    };
+
+    const auto constraintId =
+        [](const u64 low)
+        {
+            return TerrainConstraintId{
+                .high =
+                    0x4D3330434F4E5354ULL,
+                .low = low
+            };
+        };
+
+    authoredConstraints.
+        height.
+        constraints.
+        push_back({
+            .id =
+                constraintId(
+                    0x2001ULL),
+            .mode =
+                ConstraintCompositionMode::
+                    Add,
+            .primitive =
+                authoredSpline,
+            .value = -180.0,
+            .opacity = 0.85,
+            .enabled = true
+        });
+
+    authoredConstraints.
+        protection.
+        constraints.
+        push_back({
+            .id =
+                constraintId(
+                    0x2002ULL),
+            .mode =
+                ConstraintCompositionMode::
+                    Replace,
+            .primitive =
+                authoredBrush,
+            .value = 0.65,
+            .opacity = 0.75,
+            .enabled = true
+        });
+
+    authoredConstraints.
+        drainage.
+        constraints.
+        push_back({
+            .id =
+                constraintId(
+                    0x2003ULL),
+            .mode =
+                ConstraintCompositionMode::
+                    Add,
+            .primitive =
+                authoredSpline,
+            .value = 0.90,
+            .opacity = 1.0,
+            .enabled = true
+        });
+
+    authoredConstraints.
+        material.
+        constraints.
+        push_back({
+            .id =
+                constraintId(
+                    0x2004ULL),
+            .mode =
+                ConstraintCompositionMode::
+                    Replace,
+            .primitive =
+                authoredBrush,
+            .material =
+                terrain_geology::
+                    reference_rock::
+                        Basalt,
+            .weight = 0.90,
+            .opacity = 0.80,
+            .enabled = true
+        });
+
+    Require(
+        authoredConstraints.IsValid(),
+        "M30-20 authored M04 constraint asset must validate before save.");
+
+    const TerrainConstraintBaseline
+        constraintBaseline{
+            .heightMeters = 900.0,
+            .gradient = {},
+            .upliftMeters = 0.0,
+            .material =
+                terrain_geology::
+                    reference_rock::
+                        Sandstone,
+            .protection = 0.10,
+            .drainage = 0.05
+        };
+
+    const std::array<
+        terrain::PlanetSurfacePosition,
+        3>
+        constraintProbes{{
+            constraintOrigin,
+            terrain::OffsetSurfacePosition(
+                constraintPlanet,
+                constraintOrigin,
+                {0.0, 400.0}),
+            terrain::OffsetSurfacePosition(
+                constraintPlanet,
+                constraintOrigin,
+                {0.0, 1'400.0})
+        }};
+
+    std::array<
+        TerrainConstraintSample,
+        3U>
+        constraintSamplesBefore{};
+
+    for (std::size_t index = 0U;
+         index < constraintProbes.size();
+         ++index)
+    {
+        constraintSamplesBefore[index] =
+            EvaluateTerrainConstraintSet(
+                authoredConstraints,
+                constraintPlanet,
+                constraintProbes[index],
+                constraintBaseline);
+    }
+
+    const std::string constraintText =
+        SerializeTerrainConstraintSetToml(
+            authoredConstraints);
+
+    const auto constraintPath =
+        root /
+        "Content" /
+        "M30.orbitterrainconstraints";
+
+    {
+        std::ofstream output(
+            constraintPath,
+            std::ios::binary |
+                std::ios::trunc);
+
+        Require(
+            output.good(),
+            "M30-20 constraint asset file must open for production-codec persistence.");
+
+        output.write(
+            constraintText.data(),
+            static_cast<std::streamsize>(
+                constraintText.size()));
+
+        Require(
+            output.good(),
+            "M30-20 constraint asset save must write the complete serialized authority.");
+    }
+
+    const auto loadedConstraints =
+        LoadTerrainConstraintSetFile(
+            constraintPath);
+
+    Require(
+        loadedConstraints.id ==
+                authoredConstraints.id &&
+        loadedConstraints.planet ==
+                authoredConstraints.planet &&
+        loadedConstraints.name ==
+                authoredConstraints.name &&
+        loadedConstraints.
+                height.
+                constraints.size() ==
+            1U &&
+        loadedConstraints.
+                protection.
+                constraints.size() ==
+            1U &&
+        loadedConstraints.
+                drainage.
+                constraints.size() ==
+            1U &&
+        loadedConstraints.
+                material.
+                constraints.size() ==
+            1U &&
+        loadedConstraints.
+                height.
+                constraints.front().id ==
+            authoredConstraints.
+                height.
+                constraints.front().id &&
+        loadedConstraints.
+                material.
+                constraints.front().id ==
+            authoredConstraints.
+                material.
+                constraints.front().id &&
+        loadedConstraints.
+                material.
+                constraints.front().
+                material ==
+            terrain_geology::
+                reference_rock::
+                    Basalt,
+        "M30-20 M04 load must preserve authored set/constraint/material stable identities.");
+
+    Require(
+        SerializeTerrainConstraintSetToml(
+            loadedConstraints) ==
+            constraintText,
+        "M30-20 M04 canonical serialization must be stable after save/load.");
+
+    for (std::size_t index = 0U;
+         index < constraintProbes.size();
+         ++index)
+    {
+        const auto after =
+            EvaluateTerrainConstraintSet(
+                loadedConstraints,
+                constraintPlanet,
+                constraintProbes[index],
+                constraintBaseline);
+
+        const auto& before =
+            constraintSamplesBefore[index];
+
+        Require(
+            after.heightMeters ==
+                    before.heightMeters &&
+            after.gradient ==
+                    before.gradient &&
+            after.upliftMeters ==
+                    before.upliftMeters &&
+            after.protection ==
+                    before.protection &&
+            after.drainage ==
+                    before.drainage &&
+            after.material.count ==
+                    before.material.count,
+            "M30-20 regenerated M04 scalar/gradient/material-count outputs must be bit-identical after file reload.");
+
+        for (u32 materialIndex = 0U;
+             materialIndex <
+                 before.material.count;
+             ++materialIndex)
+        {
+            Require(
+                after.material.
+                        materials[
+                            materialIndex] ==
+                    before.material.
+                        materials[
+                            materialIndex] &&
+                after.material.
+                        weights[
+                            materialIndex] ==
+                    before.material.
+                        weights[
+                            materialIndex],
+                "M30-20 regenerated M04 material blend must be bit-identical after reload.");
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // M28 semantic world persistence: author relief + biome selectors/mask +
+    // M21 surface layer + M22 scatter rule, checkpoint the real SQLite world,
+    // destroy the runtime/editor objects, reopen, and compose again.
+    // ---------------------------------------------------------------------
+
+    scene::ObjectId worldObject{};
+    scene::ObjectId systemObject{};
+    scene::ObjectId bodyObject{};
+    scene::ObjectId terrainObject{};
+    scene::ObjectId biomeObject{};
+    scene::ObjectId maskObject{};
+    scene::ObjectId mossObject{};
+    scene::ObjectId treeObject{};
+
+    std::vector<scene::ObjectId>
+        selectorIdsBefore;
+
+    documents::WorldId worldIdBefore{};
+    universe::BodyId bodyIdBefore{};
+
+    terrain::AnalyticTerrainDesc
+        terrainRecipeBefore{};
+
+    terrain_biome::BiomeDefinition
+        biomeDefinitionBefore{};
+
+    terrain_biome::BiomePlacementEvaluation
+        placementBefore{};
+
+    std::vector<
+        terrain_biome::ResolvedBiomeWeight>
+        resolvedBefore;
+
+    editor_model::SurfaceReliefSettings
+        authoredRelief{};
+
+    editor_model::SurfaceBiomePreferences
+        authoredPreferences{};
+
+    editor_model::SurfaceBiomeSettings
+        authoredBiomeSettings{};
+
+    terrain_biome::BiomePlacementContext
+        placementContext{};
+
+    placementContext.unitDirection =
+        {1.0, 0.0, 0.0};
+    placementContext.planetRadiusMeters =
+        6'000'000.0;
+    placementContext.temperatureC =
+        22.0;
+    placementContext.moisture =
+        0.50;
+    placementContext.rainfall =
+        0.45;
+    placementContext.elevationMeters =
+        650.0;
+    placementContext.slopeDegrees =
+        11.0;
+    placementContext.aspectRadians =
+        0.25;
+    placementContext.latitudeRadians =
+        0.0;
+    placementContext.continentality =
+        0.60;
+    placementContext.
+        distanceToCoastWaterMeters =
+        18'000.0;
+    placementContext.drainage =
+        0.35;
+    placementContext.soilDepthMeters =
+        0.70;
+    placementContext.sandDepthMeters =
+        0.05;
+    placementContext.substrateRock =
+        terrain_geology::
+            reference_rock::
+                Basalt;
+    placementContext.solarExposure =
+        0.65;
+    placementContext.windExposure =
+        0.30;
+    placementContext.snowPersistence =
+        0.0;
+
+    Require(
+        placementContext.IsValid(),
+        "M30-20 runtime biome probe context must validate.");
+
+    {
+        documents::WorldDatabase world(
+            worldPath);
+
+        worldIdBefore =
+            world.Id();
+
+        schema::SchemaRegistry schemas;
+        world_model::RegisterSchemas(
+            schemas);
+
+        scene::ObjectStore objects(
+            world);
+
+        commands::CommandService commands(
+            objects,
+            schemas);
+
+        selection::SelectionService
+            selection;
+
+        worldObject =
+            commands.CreateObject(
+                world_model::kWorldType,
+                "World");
+
+        systemObject =
+            commands.CreateObject(
+                world_model::
+                    kCelestialSystemType,
+                "Helion",
+                worldObject);
+
+        bodyObject =
+            commands.CreateObject(
+                world_model::
+                    kCelestialBodyType,
+                "Asterra",
+                systemObject);
+
+        terrainObject =
+            commands.CreateObject(
+                world_model::
+                    kTerrainSurfaceType,
+                "Asterra Terrain",
+                bodyObject);
+
+        commands.SetProperty(
+            bodyObject,
+            world_model::kBodyRadius,
+            6'000'000.0);
+
+        commands.SetProperty(
+            terrainObject,
+            world_model::kTerrainSeed,
+            i64{424'242});
+
+        const scene::ObjectId selected[] = {
+            bodyObject
+        };
+
+        selection.Set(
+            selected);
+
+        editor_model::SurfaceAuthoringModel
+            authoring(
+                objects,
+                commands,
+                selection);
+
+        authoredRelief = {
+            .macroAmplitudeMeters =
+                3'150.0,
+            .macroWavelengthMeters =
+                620'000.0,
+            .detailAmplitudeMeters =
+                425.0,
+            .detailWavelengthMeters =
+                24'000.0,
+            .detailOctaves = 9,
+            .maximumElevationMeters =
+                9'250.0
+        };
+
+        authoring.SetRelief(
+            terrainObject,
+            authoredRelief);
+
+        biomeObject =
+            authoring.AddBiome(
+                terrainObject,
+                "M30 Temperate Basin");
+
+        authoredPreferences = {
+            .temperature = {
+                15.0,
+                28.0,
+                5.0,
+                7.0
+            },
+            .moisture = {
+                0.30,
+                0.70,
+                0.15,
+                0.20
+            },
+            .elevation = {
+                -250.0,
+                2'500.0,
+                350.0,
+                600.0
+            }
+        };
+
+        authoring.SetCommonPreferences(
+            biomeObject,
+            authoredPreferences);
+
+        authoredBiomeSettings = {
+            .minimumResolvedWeight =
+                0.075,
+            .materialInfluence =
+                0.65,
+            .scatterDensityMultiplier =
+                1.25,
+            .hydraulicErosion =
+                0.90,
+            .thermalTransport =
+                1.10,
+            .aeolianTransport =
+                0.55,
+            .glacialErosion =
+                0.25,
+            .coastalErosion =
+                0.80,
+            .chemicalWeathering =
+                1.15
+        };
+
+        authoring.SetBiomeSettings(
+            biomeObject,
+            authoredBiomeSettings);
+
+        maskObject =
+            authoring.PaintLocalOverride(
+                biomeObject,
+                {2.0, 0.0, 0.0},
+                1'000.0,
+                5'000.0,
+                0.80,
+                0.60);
+
+        mossObject =
+            authoring.AddSurfaceLayer(
+                biomeObject,
+                terrain_biome::
+                    BiomeSurfaceLayerKind::
+                        Moss);
+
+        treeObject =
+            authoring.AddScatterRule(
+                biomeObject,
+                terrain_biome::
+                    BiomeScatterKind::
+                        Tree);
+
+        commands.SetProperty(
+            mossObject,
+            world_model::
+                kBiomeSurfaceLayerStrength,
+            0.42);
+
+        commands.SetProperty(
+            mossObject,
+            world_model::
+                kBiomeSurfaceLayerMoistureMin,
+            0.35);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterDensity,
+            0.018);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterSpacing,
+            7.5);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterSeedSalt,
+            i64{2020});
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterRequiresSoil,
+            true);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterMinimumSoilDepth,
+            0.25);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterScaleMin,
+            0.90);
+
+        commands.SetProperty(
+            treeObject,
+            world_model::
+                kBiomeScatterScaleMax,
+            1.15);
+
+        const auto selectors =
+            authoring.Selectors(
+                biomeObject);
+
+        Require(
+            selectors.size() == 3U,
+            "M30-20 M28 biome authoring must persist the three semantic automatic-selector children.");
+
+        selectorIdsBefore.reserve(
+            selectors.size());
+
+        for (const auto& selector :
+             selectors)
+        {
+            selectorIdsBefore.push_back(
+                selector.id);
+        }
+
+        world_model::UniverseComposition
+            universe;
+
+        const auto universeStats =
+            universe.Rebuild(
+                objects);
+
+        Require(
+            universeStats.bodies == 1U,
+            "M30-20 pre-save semantic world must compose one terrain-bearing body.");
+
+        surface_model::SurfaceComposition
+            surfaces;
+
+        const auto surfaceStats =
+            surfaces.Rebuild(
+                objects,
+                universe);
+
+        Require(
+            surfaceStats.
+                    terrainSurfaces ==
+                1U &&
+            surfaceStats.
+                    biomeServices ==
+                1U &&
+            surfaceStats.
+                    biomeDefinitions ==
+                2U,
+            "M30-20 pre-save surface composition must contain BaseBiome plus the authored optional biome.");
+
+        const auto bodyId =
+            universe.BodyForObject(
+                bodyObject);
+
+        Require(
+            bodyId.has_value(),
+            "M30-20 pre-save body must have a stable runtime BodyId.");
+
+        bodyIdBefore =
+            *bodyId;
+
+        const auto* capability =
+            surfaces.Registry().
+                FindTerrainSurface(
+                    bodyIdBefore);
+
+        const auto* analytic =
+            capability != nullptr
+                ? dynamic_cast<
+                      const terrain::
+                          AnalyticTerrainSource*>(
+                      capability->terrain.
+                          get())
+                : nullptr;
+
+        Require(
+            analytic != nullptr,
+            "M30-20 authored terrain surface must compose to the production analytic terrain source.");
+
+        terrainRecipeBefore =
+            analytic->Description();
+
+        const auto* biomeService =
+            surfaces.BiomesForBody(
+                bodyIdBefore);
+
+        Require(
+            biomeService != nullptr &&
+            biomeService->
+                    Definitions().
+                    size() ==
+                2U,
+            "M30-20 authored biome must reach the production M19/M20 service before save.");
+
+        biomeDefinitionBefore =
+            biomeService->
+                Definitions()[1];
+
+        Require(
+            biomeDefinitionBefore.
+                    placement.
+                    selectors.
+                    size() ==
+                3U &&
+            biomeDefinitionBefore.
+                    placement.
+                    authoredMasks.
+                    size() ==
+                1U &&
+            biomeDefinitionBefore.
+                    surface.
+                    layers.
+                    size() ==
+                1U &&
+            biomeDefinitionBefore.
+                    scatter.
+                    layers.
+                    size() ==
+                1U,
+            "M30-20 pre-save runtime biome must contain selectors, authored mask, M21 layer and M22 scatter rule.");
+
+        placementBefore =
+            biomeService->
+                EvaluatePlacement(
+                    biomeDefinitionBefore,
+                    placementContext);
+
+        resolvedBefore =
+            biomeService->
+                ResolvePlacement(
+                    placementContext);
+
+        Require(
+            !resolvedBefore.empty(),
+            "M30-20 pre-save biome placement must produce a resolved coverage vector.");
+
+        world.Checkpoint();
+    }
+
+    // Every editor/runtime owner above is destroyed here. Reopen only from
+    // project/world persistence and reconstruct the same runtime products.
+    auto reopenedProject =
+        documents::ProjectDocument::Open(
+            manifestPath);
+
+    Require(
+        reopenedProject.
+                Manifest().
+                projectId ==
+            projectIdBefore &&
+        reopenedProject.
+                StartupWorldPath() ==
+            worldPath,
+        "M30-20 reopening the project must preserve ProjectId and startup world authority.");
+
+    {
+        documents::WorldDatabase world(
+            reopenedProject.
+                StartupWorldPath());
+
+        Require(
+            world.Id() ==
+                worldIdBefore &&
+            world.SchemaVersion() ==
+                documents::
+                    kCurrentWorldSchemaVersion,
+            "M30-20 reopened SQLite world must preserve WorldId and current schema.");
+
+        schema::SchemaRegistry schemas;
+        world_model::RegisterSchemas(
+            schemas);
+
+        scene::ObjectStore objects(
+            world);
+
+        // ObjectStore::Revision is intentionally session-local. Persistence
+        // equivalence is based on semantic authority, not carrying a process
+        // counter across application restarts.
+        Require(
+            objects.Revision() == 0U,
+            "M30-20 reopened ObjectStore should begin a fresh session revision rather than persisting derived change counters.");
+
+        const std::array<
+            scene::ObjectId,
+            8>
+            stableObjects{{
+                worldObject,
+                systemObject,
+                bodyObject,
+                terrainObject,
+                biomeObject,
+                maskObject,
+                mossObject,
+                treeObject
+            }};
+
+        for (const auto object :
+             stableObjects)
+        {
+            Require(
+                objects.Find(object).
+                    has_value(),
+                "M30-20 every authored semantic object must reload with its original stable ObjectId.");
+        }
+
+        for (const auto selectorId :
+             selectorIdsBefore)
+        {
+            Require(
+                objects.Find(
+                    selectorId).
+                    has_value(),
+                "M30-20 authored biome selector ObjectIds must survive save/load.");
+        }
+
+        commands::CommandService commands(
+            objects,
+            schemas);
+
+        selection::SelectionService
+            selection;
+
+        editor_model::SurfaceAuthoringModel
+            authoring(
+                objects,
+                commands,
+                selection);
+
+        const auto reliefAfter =
+            authoring.Relief(
+                terrainObject);
+
+        Require(
+            reliefAfter.
+                    macroAmplitudeMeters ==
+                authoredRelief.
+                    macroAmplitudeMeters &&
+            reliefAfter.
+                    macroWavelengthMeters ==
+                authoredRelief.
+                    macroWavelengthMeters &&
+            reliefAfter.
+                    detailAmplitudeMeters ==
+                authoredRelief.
+                    detailAmplitudeMeters &&
+            reliefAfter.
+                    detailWavelengthMeters ==
+                authoredRelief.
+                    detailWavelengthMeters &&
+            reliefAfter.
+                    detailOctaves ==
+                authoredRelief.
+                    detailOctaves &&
+            reliefAfter.
+                    maximumElevationMeters ==
+                authoredRelief.
+                    maximumElevationMeters,
+            "M30-20 M28 relief authority must reload exactly through the production authoring model.");
+
+        const auto preferencesAfter =
+            authoring.CommonPreferences(
+                biomeObject);
+
+        Require(
+            preferencesAfter.
+                    temperature.minimum ==
+                authoredPreferences.
+                    temperature.minimum &&
+            preferencesAfter.
+                    temperature.maximum ==
+                authoredPreferences.
+                    temperature.maximum &&
+            preferencesAfter.
+                    moisture.minimum ==
+                authoredPreferences.
+                    moisture.minimum &&
+            preferencesAfter.
+                    moisture.maximum ==
+                authoredPreferences.
+                    moisture.maximum &&
+            preferencesAfter.
+                    elevation.minimum ==
+                authoredPreferences.
+                    elevation.minimum &&
+            preferencesAfter.
+                    elevation.maximum ==
+                authoredPreferences.
+                    elevation.maximum,
+            "M30-20 persisted biome preference bands must reload exactly.");
+
+        const auto settingsAfter =
+            authoring.BiomeSettings(
+                biomeObject);
+
+        Require(
+            settingsAfter.
+                    minimumResolvedWeight ==
+                authoredBiomeSettings.
+                    minimumResolvedWeight &&
+            settingsAfter.
+                    materialInfluence ==
+                authoredBiomeSettings.
+                    materialInfluence &&
+            settingsAfter.
+                    scatterDensityMultiplier ==
+                authoredBiomeSettings.
+                    scatterDensityMultiplier &&
+            settingsAfter.
+                    hydraulicErosion ==
+                authoredBiomeSettings.
+                    hydraulicErosion &&
+            settingsAfter.
+                    thermalTransport ==
+                authoredBiomeSettings.
+                    thermalTransport &&
+            settingsAfter.
+                    aeolianTransport ==
+                authoredBiomeSettings.
+                    aeolianTransport &&
+            settingsAfter.
+                    glacialErosion ==
+                authoredBiomeSettings.
+                    glacialErosion &&
+            settingsAfter.
+                    coastalErosion ==
+                authoredBiomeSettings.
+                    coastalErosion &&
+            settingsAfter.
+                    chemicalWeathering ==
+                authoredBiomeSettings.
+                    chemicalWeathering,
+            "M30-20 persisted biome process/material/scatter settings must reload exactly.");
+
+        const auto masksAfter =
+            authoring.Masks(
+                biomeObject);
+
+        Require(
+            masksAfter.size() ==
+                1U &&
+            masksAfter.front().id ==
+                maskObject &&
+            masksAfter.front().
+                    centerUnitDirection ==
+                math::Double3{
+                    1.0, 0.0, 0.0} &&
+            masksAfter.front().
+                    innerRadiusMeters ==
+                1'000.0 &&
+            masksAfter.front().
+                    outerRadiusMeters ==
+                5'000.0 &&
+            masksAfter.front().
+                    value ==
+                0.80 &&
+            masksAfter.front().
+                    opacity ==
+                0.60,
+            "M30-20 authored local biome mask geometry/weight/opacity must survive world reopen.");
+
+        const auto selectorsAfter =
+            authoring.Selectors(
+                biomeObject);
+
+        Require(
+            selectorsAfter.size() ==
+                selectorIdsBefore.size(),
+            "M30-20 selector child count must survive world reopen.");
+
+        for (const auto selectorId :
+             selectorIdsBefore)
+        {
+            Require(
+                std::any_of(
+                    selectorsAfter.begin(),
+                    selectorsAfter.end(),
+                    [&](const auto& selector)
+                    {
+                        return
+                            selector.id ==
+                            selectorId;
+                    }),
+                "M30-20 each automatic selector must retain its stable semantic identity.");
+        }
+
+        const auto treeDensity =
+            objects.GetProperty(
+                treeObject,
+                world_model::
+                    kBiomeScatterDensity);
+
+        const auto treeSalt =
+            objects.GetProperty(
+                treeObject,
+                world_model::
+                    kBiomeScatterSeedSalt);
+
+        const auto mossStrength =
+            objects.GetProperty(
+                mossObject,
+                world_model::
+                    kBiomeSurfaceLayerStrength);
+
+        Require(
+            treeDensity.has_value() &&
+            std::get<f64>(
+                *treeDensity) ==
+                0.018 &&
+            treeSalt.has_value() &&
+            std::get<i64>(
+                *treeSalt) ==
+                2020 &&
+            mossStrength.has_value() &&
+            std::get<f64>(
+                *mossStrength) ==
+                0.42,
+            "M30-20 exact M21/M22 child-rule properties must survive SQLite save/load.");
+
+        world_model::UniverseComposition
+            universe;
+
+        static_cast<void>(
+            universe.Rebuild(
+                objects));
+
+        const auto bodyIdAfter =
+            universe.BodyForObject(
+                bodyObject);
+
+        Require(
+            bodyIdAfter.has_value() &&
+            *bodyIdAfter ==
+                bodyIdBefore,
+            "M30-20 stable semantic body ObjectId must regenerate the identical runtime BodyId after reopen.");
+
+        surface_model::SurfaceComposition
+            surfaces;
+
+        const auto surfaceStats =
+            surfaces.Rebuild(
+                objects,
+                universe);
+
+        Require(
+            surfaceStats.
+                    terrainSurfaces ==
+                1U &&
+            surfaceStats.
+                    biomeServices ==
+                1U &&
+            surfaceStats.
+                    biomeDefinitions ==
+                2U &&
+            surfaceStats.
+                    sourceRevision ==
+                objects.Revision(),
+            "M30-20 reopened authored world must recompose one terrain service and one optional biome from the fresh session state.");
+
+        const auto* capability =
+            surfaces.Registry().
+                FindTerrainSurface(
+                    *bodyIdAfter);
+
+        const auto* analytic =
+            capability != nullptr
+                ? dynamic_cast<
+                      const terrain::
+                          AnalyticTerrainSource*>(
+                      capability->terrain.
+                          get())
+                : nullptr;
+
+        Require(
+            analytic != nullptr,
+            "M30-20 reopened terrain authority must regenerate the analytic terrain capability.");
+
+        const auto& terrainRecipeAfter =
+            analytic->Description();
+
+        Require(
+            terrainRecipeAfter.seed ==
+                    terrainRecipeBefore.seed &&
+            terrainRecipeAfter.
+                    macroAmplitudeMeters ==
+                terrainRecipeBefore.
+                    macroAmplitudeMeters &&
+            terrainRecipeAfter.
+                    macroWavelengthMeters ==
+                terrainRecipeBefore.
+                    macroWavelengthMeters &&
+            terrainRecipeAfter.
+                    detailAmplitudeMeters ==
+                terrainRecipeBefore.
+                    detailAmplitudeMeters &&
+            terrainRecipeAfter.
+                    detailWavelengthMeters ==
+                terrainRecipeBefore.
+                    detailWavelengthMeters &&
+            terrainRecipeAfter.
+                    detailOctaves ==
+                terrainRecipeBefore.
+                    detailOctaves &&
+            terrainRecipeAfter.
+                    maximumElevationAboveSeaLevelMeters ==
+                terrainRecipeBefore.
+                    maximumElevationAboveSeaLevelMeters,
+            "M30-20 save/load must regenerate an identical production terrain recipe from authored semantic inputs.");
+
+        const auto* biomeService =
+            surfaces.BiomesForBody(
+                *bodyIdAfter);
+
+        Require(
+            biomeService != nullptr &&
+            biomeService->
+                    Definitions().
+                    size() ==
+                2U,
+            "M30-20 reopened world must regenerate BaseBiome plus the persisted optional biome.");
+
+        const auto biomeAfter =
+            biomeService->
+                Definitions()[1];
+
+        Require(
+            biomeAfter.id ==
+                    biomeDefinitionBefore.id &&
+            biomeAfter.name ==
+                    biomeDefinitionBefore.name &&
+            biomeAfter.
+                    placement.mode ==
+                biomeDefinitionBefore.
+                    placement.mode &&
+            biomeAfter.
+                    placement.
+                    minimumResolvedWeight ==
+                biomeDefinitionBefore.
+                    placement.
+                    minimumResolvedWeight &&
+            biomeAfter.
+                    placement.
+                    selectors.size() ==
+                biomeDefinitionBefore.
+                    placement.
+                    selectors.size() &&
+            biomeAfter.
+                    placement.
+                    authoredMasks.size() ==
+                1U &&
+            biomeAfter.
+                    placement.
+                    authoredMasks.front().id ==
+                biomeDefinitionBefore.
+                    placement.
+                    authoredMasks.front().id &&
+            biomeAfter.
+                    surface.
+                    materialInfluence ==
+                biomeDefinitionBefore.
+                    surface.
+                    materialInfluence &&
+            biomeAfter.
+                    surface.
+                    layers.size() ==
+                1U &&
+            biomeAfter.
+                    surface.
+                    layers.front().kind ==
+                biomeDefinitionBefore.
+                    surface.
+                    layers.front().kind &&
+            biomeAfter.
+                    surface.
+                    layers.front().strength ==
+                biomeDefinitionBefore.
+                    surface.
+                    layers.front().strength &&
+            biomeAfter.
+                    scatter.
+                    densityMultiplier ==
+                biomeDefinitionBefore.
+                    scatter.
+                    densityMultiplier &&
+            biomeAfter.
+                    scatter.
+                    layers.size() ==
+                1U &&
+            biomeAfter.
+                    scatter.
+                    layers.front().id ==
+                biomeDefinitionBefore.
+                    scatter.
+                    layers.front().id &&
+            biomeAfter.
+                    scatter.
+                    layers.front().kind ==
+                biomeDefinitionBefore.
+                    scatter.
+                    layers.front().kind &&
+            biomeAfter.
+                    scatter.
+                    layers.front().
+                    densityPerSquareMeter ==
+                biomeDefinitionBefore.
+                    scatter.
+                    layers.front().
+                    densityPerSquareMeter &&
+            biomeAfter.
+                    scatter.
+                    layers.front().
+                    minimumSpacingMeters ==
+                biomeDefinitionBefore.
+                    scatter.
+                    layers.front().
+                    minimumSpacingMeters &&
+            biomeAfter.
+                    scatter.
+                    layers.front().
+                    seedSalt ==
+                biomeDefinitionBefore.
+                    scatter.
+                    layers.front().
+                    seedSalt,
+            "M30-20 persisted semantic IDs/properties must regenerate identical M20/M21/M22 runtime identities and rules.");
+
+        const auto placementAfter =
+            biomeService->
+                EvaluatePlacement(
+                    biomeAfter,
+                    placementContext);
+
+        Require(
+            placementAfter.
+                    automaticWeight ==
+                placementBefore.
+                    automaticWeight &&
+            placementAfter.
+                    authoredWeight ==
+                placementBefore.
+                    authoredWeight &&
+            placementAfter.
+                    finalWeight ==
+                placementBefore.
+                    finalWeight,
+            "M30-20 biome placement evaluation must be bit-identical after world save/load.");
+
+        const auto resolvedAfter =
+            biomeService->
+                ResolvePlacement(
+                    placementContext);
+
+        Require(
+            resolvedAfter.size() ==
+                resolvedBefore.size(),
+            "M30-20 resolved biome coverage cardinality must survive world save/load.");
+
+        for (std::size_t index = 0U;
+             index <
+                 resolvedBefore.size();
+             ++index)
+        {
+            Require(
+                resolvedAfter[index].id ==
+                        resolvedBefore[index].id &&
+                resolvedAfter[index].weight ==
+                        resolvedBefore[index].weight &&
+                resolvedAfter[index].base ==
+                        resolvedBefore[index].base,
+                "M30-20 resolved biome IDs/weights/base flags must be bit-identical after reload.");
+        }
+
+        world.Checkpoint();
+    }
+
+    std::filesystem::remove_all(
+        root);
+}
+
+} // namespace
+
+int main()
+{
+    Test01StratigraphyExposure();
+    Test02BedrockStripping();
+    Test03SedimentDepositionBurial();
+    Test04HydraulicMassConservation();
+    Test05AeolianMassConservation();
+    Test06ThermalReposeConvergence();
+    Test07CrossPageWaterFlux();
+    Test08CrossPageSedimentFlux();
+    Test09CrossPageDuneMigration();
+    Test10FastFlowDrainageReference();
+    Test11AuthoredCanyonPersistence();
+    Test12BiomeFallback();
+    Test13AutomaticAuthoredBiomeBlend();
+    Test14ExposedRockMaterialResolution();
+    Test15DeterministicScatter();
+    Test16CacheHitStability();
+    Test17RevisionInvalidation();
+    Test18ClipmapPhysicalPageIndependence();
+    Test19PlanetFaceSeamConsistency();
+    Test20SaveLoadEquivalenceForAuthoredInputs();
+
+    std::cout
+        << "Orbit V0.0.4 M30 validation: 20/20 deterministic cases passed.\n";
+    return EXIT_SUCCESS;
+}

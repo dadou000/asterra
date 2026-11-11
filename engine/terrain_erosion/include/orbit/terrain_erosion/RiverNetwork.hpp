@@ -56,6 +56,9 @@ struct RiverConstraint
 
 struct RiverNetworkConfig
 {
+    // Maximum spacing along an ordinary channel reach. Headwaters, sharp
+    // bends, confluences and page exits are always retained as graph nodes.
+    f64 maximumNodeSpacingMeters{500.0};
     f64 minimumDrainageAreaSquareMeters{25'000.0};
     f64 minimumDischargeCubicMetersPerSecond{0.05};
 
@@ -107,6 +110,15 @@ struct RiverNetworkNode
     f64 drainageAreaSquareMeters{0.0};
     f64 dischargeCubicMetersPerSecond{0.0};
 
+    // Automatically derived hydraulic readouts for the generated graph.
+    // The local water presentation uses the same 82% channel fill convention.
+    f32 waterLevelMeters{0.0F};
+    f32 slope{0.0F};
+    f32 velocityMetersPerSecond{0.0F};
+    f32 manningRoughness{0.035F};
+    f64 crossSectionAreaSquareMeters{0.0};
+    f64 suspendedSedimentKg{0.0};
+
     f32 channelWidthMeters{0.0F};
     f32 channelDepthMeters{0.0F};
 
@@ -126,6 +138,15 @@ struct RiverNetworkSegment
 
     bool active{true};
     bool cutoffSegment{false};
+
+    f32 slope{0.0F};
+    f32 velocityMetersPerSecond{0.0F};
+    f32 manningRoughness{0.035F};
+    f64 suspendedSedimentKg{0.0};
+
+    // M09 cell-centre samples between sparse graph nodes, including both
+    // endpoints. This keeps incision/rendering on the drainage route.
+    std::vector<math::Double2> routingPathMeters;
 };
 
 struct RiverBoundaryLink
@@ -212,7 +233,8 @@ struct RiverSelection
 [[nodiscard]] RiverNetwork BuildRiverNetwork(
     const terrain_hydrology::DrainagePage& drainage,
     std::span<const RiverConstraint> constraints = {},
-    const RiverNetworkConfig& config = {});
+    const RiverNetworkConfig& config = {},
+    const SedimentExchangePage* sediment = nullptr);
 
 // Selectable Studio-facing query over stable node/segment IDs.
 [[nodiscard]] RiverSelection SelectNearestRiver(

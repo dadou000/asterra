@@ -5,6 +5,7 @@
 #include <orbit/celestial_atmosphere/AtmosphereRenderer.hpp>
 #include <orbit/celestial_clouds/CloudField.hpp>
 #include <orbit/celestial_clouds/CloudRenderer.hpp>
+#include <orbit/celestial_clouds/UnifiedCloudRenderer.hpp>
 #include <orbit/celestial_compact_render/CompactObjectRenderer.hpp>
 #include <orbit/celestial_ocean/OceanOptics.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
@@ -18,10 +19,12 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/studio_ui/SunAuditViewportIndicator.hpp>
+#include <orbit/lighting/TerrainSunShadow.hpp>
+#include <orbit/math/RigidTransform.hpp>
 #include <orbit/lighting/EmissiveInvalidation.hpp>
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
 #include <orbit/lighting/HybridReflectionRenderer.hpp>
-#include <orbit/lighting/ExactReflectionQueryRenderer.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
 #include <orbit/lighting/MaterialEmissionSurfaceOverride.hpp>
 #include <orbit/lighting/ProxySunShadow.hpp>
@@ -32,13 +35,22 @@
 #include <orbit/lighting/RepresentationLightingContinuity.hpp>
 #include <orbit/lighting/ScreenSpaceFinalGather.hpp>
 #include <orbit/lighting/SoftwareProxyVisibility.hpp>
+#include <orbit/lighting/TransientFlashRegistry.hpp>
+#include <orbit/mesh_render/EmissiveLights.hpp>
+#include <orbit/mesh_render/GlassSurface.hpp>
+#include <orbit/mesh_render/MeshLibrary.hpp>
+#include <orbit/mesh_render/MeshSdfScene.hpp>
+#include <orbit/mesh_render/MeshShadow.hpp>
+#include <orbit/mesh_render/MeshSurface.hpp>
 #include <orbit/lighting/SurfaceDebugRenderer.hpp>
+#include <orbit/post_process/AntiAliasing.hpp>
 #include <orbit/post_process/ColorLut.hpp>
 #include <orbit/post_process/DisplayResolve.hpp>
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
 #include <orbit/post_process/HighlightEffects.hpp>
 #include <orbit/post_process/LuminanceHistogram.hpp>
 #include <orbit/post_process/OutputTransform.hpp>
+#include <orbit/studio_ui/StormDomain.hpp>
 #include <orbit/studio_ui/SurfaceVolumeDebugRenderer.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
@@ -57,11 +69,19 @@
 #include <orbit/time/SimulationTime.hpp>
 #include <orbit/world_model/CelestialLightingService.hpp>
 
+#include <future>
+#include <stop_token>
 #include <array>
+#include <atomic>
+#include <set>
 #include <chrono>
 #include <functional>
+#include <future>
 #include <map>
+#include <orbit/jobs/JobSystem.hpp>
+
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -74,6 +94,10 @@ class ContentService;
 
 namespace orbit::studio_ui
 {
+namespace viewport_detail { struct ResolvedStudioDirectLight; }
+struct StudioScenePassContext;
+struct StudioLightingPassContext;
+
 struct StudioRenderedView
 {
     std::string id;
@@ -360,6 +384,31 @@ public:
         rhi::Device& device,
         const shader::Compiler& compiler,
         u32 framesInFlight = 1U);
+    ~StudioViewportRenderer();
+
+    // The simulated storm domain (storm.* RPC and the Weather Lab panel's Storm domain section): requests are queued here and built,
+    // stepped and drawn by the cloud pass on the render thread.
+    [[nodiscard]] StormDomainMailbox& StormMailbox() noexcept { return stormMailbox_; }
+    void SetStrikePauseHandler(std::function<void()> handler) { strikePauseHandler_ = std::move(handler); }
+    // Called (once per flash) when frame_strike is on: the flash's centre and radius in the camera's planet-fixed frame, and the view's
+    // vertical field of view and aspect. Studio turns the camera to it and backs off until the whole channel fits.
+    void SetStrikeFrameHandler(std::function<void(const math::Double3&, f64, f64, f64)> handler) { strikeFrameHandler_ = std::move(handler); }
+
+    // Lightning flashes lighting the scene (RPC `lightning.*`). Thread-safe: the RPC thread fires, the render thread reads.
+    u64 FireLightning(const lighting::FlashRequest& request);
+    // Cloud shader tunables at runtime (clouds.set_defines): recompiles the cloud shaders; returns the compile error or
+    // an empty string (the previous shaders stay in use on error).
+    std::string SetCloudShaderDefines(const std::string& defines);
+    [[nodiscard]] const std::string& CloudShaderDefines() const noexcept;
+    // Split view of the cloud march (clouds.split_set): left of `position` with CloudShaderDefines(), right with `defines`.
+    std::string SetCloudSplit(bool enabled, const std::string& defines, f32 position);
+    [[nodiscard]] bool CloudSplitEnabled() const noexcept;
+    [[nodiscard]] const std::string& CloudSplitDefines() const noexcept;
+    [[nodiscard]] f32 CloudSplitPosition() const noexcept;
+    [[nodiscard]] std::vector<lighting::FlashStatus> LightningStatus() const;
+    void ClearLightning();
+    void SetLightningStormAnchor(const lighting::StormAnchor& anchor);
+    u64 AddLightningStormFlash(optical_transport::DischargeGraph graph);
 
     // True while far terrain patches are still being built, so the host can
     // keep rendering at full rate until the view has finished refining.
@@ -450,6 +499,80 @@ public:
         const StudioComposeCpuTimingRecorder& cpuTimingRecorder = {});
 
 private:
+    void ComposeLightingPasses(StudioLightingPassContext& context);
+    // Lights of the flashes alive now, in the lighting frame. Both the tiled-light pass and the cloud pass call this.
+    [[nodiscard]] std::vector<lighting::LocalLight> TransientFlashLights(const lighting::CameraPlacement& camera);
+    // The clock the lightning flashes run on: it follows the simulation clock up to real time (rate 1) and stops with it, so pausing holds a
+    // flash in the middle of its stroke and a rate below 1 plays it in slow motion; above 1 the weather speeds up and flashes stay at real
+    // time (a stroke lasts milliseconds, a faster clock would step over it between frames).
+    [[nodiscard]] f64 FlashClockSeconds() const { return flashClock_.load(); }
+    void TickFlashClock(time::SimulationTime atTime);
+    std::atomic<f64> flashClock_{0.0};
+    // The stretch of flash clock the last frame covered: the lights integrate their energy over it and the arcs draw the power of the same
+    // window, so the two always show the same emission. At least a millisecond wide (a paused clock still shows the instant it holds).
+    f64 flashWindowStart_{0.0};
+    f64 flashWindowEnd_{0.0};
+    std::atomic<f64> simulationRate_{1.0};   // estimated simulation seconds per wall second
+    f64 flashLastWall_{-1.0};
+    f64 flashLastSim_{0.0};
+    f64 flashLastSimChangeWall_{0.0};
+    // The lit channel segments of the live flashes as overlay lines relative to `camera` (empty when none is lit or arcs are off).
+    std::atomic<u32> lastArcSegments_{0U};
+    // Pauses the simulation (through the handler Studio installs) just before a flash that is in view starts; see StormLightningSettings.
+    void WatchStrikes(const render_view::CameraState& camera, u32 width, u32 height);
+    std::function<void()> strikePauseHandler_;
+    std::function<void(const math::Double3&, f64, f64, f64)> strikeFrameHandler_;
+    // Where the electrified window sits (set by the storm update when the lightning runs), and its charge, for the grid display.
+    struct LightningGridFrame
+    {
+        bool valid{false};
+        math::Double3 centre{}, east{}, north{}, up{};
+        f64 offsetEast{0.0};    // the window's west edge, metres east of the domain centre
+        f64 offsetNorth{0.0};
+        f64 spacing{500.0};
+        u32 cells{0};
+        u32 levels{0};
+    } lightningFrame_;
+    std::shared_ptr<const StormChargeBlocks> lightningBlocks_;
+    [[nodiscard]] std::vector<editor_ui::PreviewLine> ElectrificationGridLines(const render_view::CameraState& camera);
+    std::set<u64> strikeSeen_;
+    [[nodiscard]] std::vector<editor_ui::PreviewLine> FlashArcLines(const render_view::CameraState& camera, u32 height);
+    void ComposeAtmospherePasses(StudioLightingPassContext& context);
+
+
+    void ComposeVolumePasses(
+        render_graph::RenderGraph& graph,
+        StudioRenderViewSet& views,
+        studio_session::StudioSession& session,
+        render_view::RenderView* view,
+        const StudioRenderViewInfo& info,
+        const render_view::ImportedTargets& targets,
+        const std::string& prefix,
+        std::optional<world_model::ResolvedVolumeDomain>& selectedVolume,
+        volume_fields::VolumeFieldStorage*& sharedVolumeStorage,
+        std::optional<volume_fields::ImportedVolumeFields>& sharedVolumeFields,
+        u32 frameIndex,
+        render_graph::BufferHandle sharedRadianceCellsHandle,
+        render_graph::BufferHandle sharedRadianceLevelsHandle,
+        u32 sharedRadianceLevelCount,
+        const studio_session::StudioRuntimeSnapshot& snapshot,
+        time::SimulationTime atTime,
+        const viewport_detail::ResolvedStudioDirectLight& studioDirectLight,
+        const std::function<void(std::string_view)>& recordComposeStage);
+
+    void ComposeTerrainPass(StudioScenePassContext& context);
+    void ComposeBodyPreviewPass(StudioScenePassContext& context);
+
+
+    void ComposePostProcess(
+        render_graph::RenderGraph& graph,
+        render_view::RenderView* view,
+        const StudioRenderViewInfo& info,
+        const render_view::ImportedTargets& targets,
+        const std::string& prefix,
+        u32 frameIndex,
+        post_process::AntiAliasingMode antiAliasingMode);
+
     [[nodiscard]] std::vector<StudioRenderedView> ComposeBase(
         render_graph::RenderGraph& graph,
         StudioRenderViewSet& views,
@@ -486,6 +609,13 @@ private:
         u64 fingerprint{0};
         std::unique_ptr<celestial_clouds::CloudFieldProduct> field;
         std::unique_ptr<celestial_clouds::GpuCloudFieldProduct> gpu;
+        // The next field being built off the render thread: building one takes about a second (the weather noise over six faces), and the
+        // simulation clock asks for a new one every simulated second, so playing at rate 1 or more used to stall the frame each time.
+        // Until it lands the previous field keeps drawing.
+        std::future<celestial_clouds::CloudFieldProduct> pending;
+        bool hasPending{false};
+        u64 pendingFingerprint{0};
+        universe::BodyId pendingBody{};
     };
     struct GiantPresentation
     {
@@ -522,6 +652,32 @@ private:
         std::unique_ptr<celestial_rings::GpuRingMeshProduct> farMesh;
         celestial_rings::FarRingProfile farProfile{};
     };
+    [[nodiscard]] std::shared_ptr<rhi::Buffer> EnsureTerrainSunShadow(
+        std::string_view viewportId, universe::BodyId body,
+        const std::shared_ptr<const terrain::TerrainSource>& source, f64 radius);
+    struct TerrainSunShadowPresentation
+    {
+        // Semantic identity is independent of viewport and camera.
+        universe::BodyId keyBody{};
+        std::shared_ptr<const terrain::TerrainSource> keySource;
+        f64 keyRadius{0.0};
+        universe::BodyId body{}, pendingBody{};
+        std::shared_ptr<const terrain::TerrainSource> source, pendingSource;
+        f64 radius{0.0}, pendingRadius{0.0};
+        u64 revision{0U};
+        std::shared_ptr<rhi::Buffer> buffer;
+        std::future<lighting::TerrainSunShadowField> pending;
+        std::stop_source cancelBuild;
+        std::unique_ptr<lighting::TerrainSunShadowField> stagedField;
+        std::shared_ptr<rhi::Buffer> stagedBuffer;
+        std::size_t uploadedSamples{0U};
+        std::chrono::steady_clock::time_point retryAfter{};
+    };
+    std::vector<TerrainSunShadowPresentation> terrainSunShadowPresentations_;
+    // Bounded low-priority producer; job completion is polled, never waited on
+    // from the rendering path. Drains safely before renderer destruction.
+    std::unique_ptr<jobs::JobSystem> terrainSunShadowPool_;
+
     struct AtmospherePresentation
     {
         universe::BodyId body{};
@@ -572,8 +728,14 @@ private:
         bool hasHistory{false};
         lighting::LightingView previousView{};
         u64 lightingFingerprint{0U};
+        // Whether the sun was above the camera's horizon when the cache was
+        // last relit; a drop below it flushes held (daylight) cell values.
+        bool sunAboveHorizon{true};
         lighting::EmissiveInvalidationTracker emissiveInvalidationTracker;
         std::unique_ptr<lighting::RadianceClipmapResidency> radianceResidency;
+        // Smoothed CPU cost of estimating one radiance cell (ms); sizes the
+        // per-frame update count so the estimates fit a fixed time budget.
+        f64 radianceEstimateMsPerCell{0.08};
         std::vector<std::unique_ptr<rhi::Buffer>> radianceCellsBuffers;
         std::vector<std::unique_ptr<rhi::Buffer>> radianceLevelsBuffers;
         std::unique_ptr<rhi::Texture> indirectA;
@@ -581,6 +743,15 @@ private:
         std::unique_ptr<rhi::Texture> metaA;
         std::unique_ptr<rhi::Texture> metaB;
         std::unique_ptr<rhi::Texture> scratch;
+        // Pass-need probe: the gather counts surface / smooth / low-coverage
+        // pixels into a small host-visible buffer per frame slot; the CPU reads
+        // a slot when it comes round again and lets passes whose inputs are
+        // absent (reflections, radiance-cache fallback) idle. The holds keep a
+        // pass running for a while after the last frame that needed it.
+        std::vector<std::unique_ptr<rhi::Buffer>> needStatsBuffers;
+        std::vector<u8> needStatsWritten;
+        u32 reflectionsHold{120U};
+        u32 cacheFallbackHold{120U};
     };
     struct VisibilityProxyPresentation
     {
@@ -592,6 +763,39 @@ private:
         std::unique_ptr<lighting::SoftwareProxyVisibilityProvider> provider;
         std::unique_ptr<lighting::HardwareRayQueryVisibilityBatch> hardware;
         lighting::ProxySurfaceGeometry surfaces;
+    };
+    // Imported Static Meshes of the view's target body, resolved at plan time
+    // and drawn by the mesh surface pass.
+    struct StaticMeshPresentation
+    {
+        std::vector<mesh_render::MeshInstance> instances;
+        // Glass Primitives: refracting bodies drawn after lighting (see
+        // mesh_render::GlassSurfaceRenderer), never part of the surface buffer.
+        std::vector<mesh_render::GlassInstance> glass;
+        // Copy of the lit scene the glass pass refracts (recreated on resize).
+        std::unique_ptr<rhi::Texture> glassBackdrop;
+        // Emissive primitives as sphere lights, and the target their lighting
+        // is rendered into (recreated on resize).
+        std::vector<mesh_render::EmissiveLight> emitters;
+        std::unique_ptr<rhi::Texture> emissiveLighting;
+        u32 requested{0U};
+        // First placed mesh (frame coordinates) and the frame/body transform
+        // of this view: where non-mesh geometry is gathered for the field.
+        bool hasAnchor{false};
+        math::Double3 anchorInFrame{};
+        math::RigidTransformD targetFromBody{};
+        // Proxies and a terrain patch around the meshes (distance field).
+        std::shared_ptr<mesh_render::SdfExtraGeometry> sdfExtra;
+        std::shared_ptr<const mesh_render::SdfTerrainPatch> terrainPatch;
+        math::Double3 terrainPatchAnchor{};
+        math::Double3 terrainCoverageAnchorBody{};
+        math::Double3 terrainCoverageEastBody{};
+        math::Double3 terrainCoverageNorthBody{};
+        world::PlanetId terrainCoveragePlanet{};
+        u8 terrainCoverageLevel{255U};
+        std::vector<world::PlanetTileId> terrainCoverageTiles;
+        u64 terrainPatchSourceRevision{~0ULL};
+        u64 terrainPatchCounter{0U};
     };
     struct TerrainPresentation
     {
@@ -621,6 +825,39 @@ private:
     celestial_compact_render::CompactObjectRenderer compactObjectRenderer_;
     celestial_atmosphere::AtmosphereRenderer atmosphereRenderer_;
     celestial_clouds::CloudRenderer cloudRenderer_;
+    // Lazily compiled: a broken experimental B shader must never prevent A boot.
+    std::unique_ptr<celestial_clouds::unified::UnifiedCloudRenderer> unifiedCloudRenderer_;
+    std::string unifiedCloudInitError_;
+    u64 lastUnifiedCloudBudgetWarningBytes_{0U};
+    [[nodiscard]] bool EnsureUnifiedCloudRenderer();
+public:
+    [[nodiscard]] const std::string& UnifiedCloudInitError() const noexcept
+    {
+        return unifiedCloudInitError_;
+    }
+private:
+    StormDomainMailbox stormMailbox_;
+    struct StormRuntime;
+    std::shared_ptr<StormRuntime> storm_;   // shared_ptr: the deleter is captured where the type is complete
+    // The solver's shared read-only GPU export, not A's cached illumination.
+    // Published when UpdateStormDomain finishes, then consumed by A and B.
+    rhi::Buffer* sharedStormCloudExport_{nullptr};
+    void PublishStormCloudExport(rhi::Buffer* buffer) noexcept
+    {
+        sharedStormCloudExport_ = buffer;
+        cloudRenderer_.SetStormBuffer(buffer);
+    }
+    // Builds, steps (in lockstep with `now`) and exports the storm domain and points the cloud renderer at it; call once per frame that
+    // draws clouds on `body`.
+    void UpdateStormDomain(
+        time::SimulationTime now,
+        const universe::BodyId& body,
+        f64 planetRadiusMeters,
+        const math::Double3& cameraBodyMeters,
+        const math::Float3& sunDirectionBody,
+        const celestial_clouds::CloudLayerParameters& layer);
+    mutable std::mutex transientFlashMutex_;
+    lighting::TransientFlashRegistry transientFlashes_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     SurfaceVolumeDebugRenderer surfaceVolumeDebugRenderer_;
     volume_render::UniversalVolumeRenderer universalVolumeRenderer_;
@@ -630,14 +867,65 @@ private:
     bool particleSimulationTimeValid_{false};
     math::Double3 particlePresentationOriginMeters_{};
     render_view::CompositeRenderer debugComposite_;
+    SunAuditViewportIndicator sunAuditIndicator_;
     lighting::DirectLightingRenderer directLightingRenderer_;
     lighting::MaterialEmissionSurfaceOverrideRenderer materialEmissionSurfaceOverride_;
     lighting::ScreenSpaceFinalGatherRenderer finalGatherRenderer_;
     lighting::RadianceCacheSampler radianceCacheSampler_;
     lighting::ProxySunShadowRenderer proxySunShadowRenderer_;
     lighting::ProxySurfaceRenderer proxySurfaceRenderer_;
+    std::unique_ptr<mesh_render::MeshLibrary> meshLibrary_;
+    mesh_render::MeshSurfaceRenderer meshSurfaceRenderer_;
+    mesh_render::GlassSurfaceRenderer glassSurfaceRenderer_;
+    mesh_render::EmissiveLightRenderer emissiveLightRenderer_;
+    mesh_render::MeshSdfScene meshSdfScene_;
+    // Workers for the CPU radiance-cell estimates (created on first use).
+    std::unique_ptr<jobs::JobSystem> radianceEstimatePool_;
+    // The particle pass (simulation step + draw) only runs while particles can
+    // exist: after a spawn, for a grace period longer than any particle life.
+    bool particleEverSpawned_{false};
+    std::chrono::steady_clock::time_point particleLastSpawn_{};
+    mesh_render::MeshSdfDebugRenderer meshSdfDebugRenderer_;
+    // Scratch target of the SDF debug view, per view.
+    std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>>
+        sdfDebugScratch_;
+    mesh_render::MeshShadowMapRenderer meshShadowMapRenderer_;
+    mesh_render::MeshSunShadowRenderer meshSunShadowRenderer_;
+    post_process::AntiAliasingRenderer antiAliasingRenderer_;
+    // Per-view anti-aliasing state: the history ping-pong, the previous
+    // (jittered) camera, and the un-jittered camera the jitter was applied to.
+    struct AntiAliasingPresentation
+    {
+        u32 width{0U};
+        u32 height{0U};
+        std::array<std::unique_ptr<rhi::Texture>, 2> history;
+        std::unique_ptr<rhi::Texture> scratch;
+        u32 readIndex{0U};
+        bool hasHistory{false};
+        u32 frameCounter{0U};
+        post_process::TaaCamera previousCamera{};
+        bool hasBase{false};
+        render_view::CameraState base{};
+        render_view::CameraState applied{};
+    };
+    std::map<std::string, AntiAliasingPresentation, std::less<>>
+        antiAliasingPresentations_;
+    // Sun-space depth map of each view's meshes (colour R32_Float + depth).
+    struct MeshShadowTargets
+    {
+        std::unique_ptr<rhi::Texture> color;
+        std::unique_ptr<rhi::Texture> depth;
+        // Sky-direction occlusion atlas (see mesh_render::MeshShadow.hpp).
+        std::unique_ptr<rhi::Texture> skyColor;
+        std::unique_ptr<rhi::Texture> skyDepth;
+        // Hash of everything the maps were last rendered from; unchanged
+        // inputs (a still camera, sun and meshes) leave the maps valid and
+        // their passes are not recorded.
+        u64 skySignature{0U};
+        u64 sunSignature{0U};
+    };
+    std::map<std::string, MeshShadowTargets, std::less<>> meshShadowTargets_;
     lighting::HybridReflectionRenderer hybridReflectionRenderer_;
-    lighting::ExactReflectionQueryRenderer exactReflectionQueryRenderer_;
     lighting::SurfaceDebugRenderer surfaceDebugRenderer_;
     StudioFlatMapRenderer flatMapRenderer_;
     post_process::LuminanceHistogramRenderer luminanceHistogramRenderer_;
@@ -684,6 +972,8 @@ private:
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> atmosphereScratch_;
     // Half-resolution cloud march result (radiance + transmittance) per view.
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> cloudTargets_;
+    std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> unifiedCloudTargets_;
+    std::map<std::string, std::unique_ptr<celestial_clouds::unified::UnifiedCloudRenderer::SunCache>, std::less<>> unifiedCloudSunCaches_;
     // Temporal accumulation of the cloud march: two resolved targets used as history and
     // output on alternate frames, and the camera the history was resolved for.
     struct CloudTemporal
@@ -694,6 +984,7 @@ private:
         u32 frame{0U};
         celestial_clouds::CloudRenderer::CloudResolveView previous{};
         celestial_clouds::CloudLab previousLab{};
+        f32 splitPosition{-1.0F};   // the split divider the history was resolved for
     };
     std::map<std::string, CloudTemporal, std::less<>> cloudTemporal_;
     // One sun light volume per view: it is tied to that view's camera.
@@ -701,6 +992,7 @@ private:
         cloudLightVolumes_;
     // Half-resolution sun transmittance through the clouds, read by direct lighting.
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> cloudShadowTargets_;
+    std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> unifiedCloudShadowTargets_;
     // Full-resolution sun visibility against authored Visibility Proxies, read by direct lighting.
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> proxySunShadowTargets_;
     // Where each view's cloud lab cloud was placed (body-fixed unit direction).
@@ -717,6 +1009,7 @@ private:
     std::map<std::string, StudioVisibilityProxyDiagnostics, std::less<>> visibilityProxyDiagnostics_;
     std::map<std::string, StudioEmissiveGiDiagnostics, std::less<>> emissiveGiDiagnostics_;
     std::map<std::string, VisibilityProxyPresentation, std::less<>> visibilityProxyPresentations_;
+    std::map<std::string, StaticMeshPresentation, std::less<>> staticMeshPresentations_;
     std::map<std::string, FinalGatherPresentation, std::less<>> finalGatherPresentations_;
     std::map<std::string, LuminanceHistogramPresentation, std::less<>> luminanceHistogramPresentations_;
     std::map<std::string, MacroGlobePresentation, std::less<>> macroGlobePresentations_;

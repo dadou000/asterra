@@ -68,6 +68,13 @@ struct TiledLightGridConfig
 {
     u32 tileSizePixels{16U};
     u32 maximumLightsPerTile{64U};
+
+    // When a tile is covered by more lights than fit, keep the strongest ones
+    // (by flux over squared distance, ties in submission order) and replace the
+    // rest with ONE proxy point light carrying their summed flux at the
+    // flux-weighted centroid, so a crowd of individually weak lights keeps its
+    // total energy. false restores plain first-N truncation.
+    bool aggregateOverflow{true};
 };
 
 struct TiledLightGrid
@@ -84,8 +91,16 @@ struct TiledLightGrid
     std::vector<u32> offsets;
     std::vector<u32> lightIndices;
 
+    // Light-to-tile assignments that did not get an individual slot. With
+    // aggregateOverflow their flux is carried by a proxy; without it it is lost.
     u32 droppedAssignments{0U};
+
+    // Proxy lights appended to `lights` (dropped sets shared by neighbouring
+    // tiles share one proxy). Proxy stableId has kProxyLightIdBit set.
+    u32 proxyLights{0U};
 };
+
+inline constexpr u64 kProxyLightIdBit = 1ULL << 63U;
 
 [[nodiscard]] ResolvedLocalLight ResolveLocalLight(
     const LocalLight& light,

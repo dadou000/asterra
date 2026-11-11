@@ -8,7 +8,10 @@ namespace orbit::studio_ui
 {
 namespace
 {
-constexpr f64 kMinimumObserverAboveReferenceMeters = 0.01;
+// The camera is held above the terrain bed, not above the reference sphere or
+// the water surface: below an ocean the bed is under sea level and the camera
+// may dive to it. This only keeps the observer clear of the planet's centre.
+constexpr f64 kMinimumObserverRadiusMeters = 1.0;
 
 [[nodiscard]] math::Double3 ObserverDirection(
     const world::WorldPosition& observer) noexcept
@@ -115,8 +118,7 @@ constexpr f64 kMinimumObserverAboveReferenceMeters = 0.01;
             planet.radiusMeters +
                 elevation +
                 heightAboveTerrainMeters,
-            planet.radiusMeters +
-                kMinimumObserverAboveReferenceMeters);
+            kMinimumObserverRadiusMeters);
 
     return {
         .meters =
@@ -353,8 +355,7 @@ AdvanceTerrainNavigation(
                 newElevation +
                 state.config.
                     minimumGroundClearanceMeters,
-            terrain.planet.radiusMeters +
-                kMinimumObserverAboveReferenceMeters);
+            kMinimumObserverRadiusMeters);
 
     const f64 newRadius =
         std::max(

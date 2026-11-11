@@ -33,7 +33,14 @@ int main()
         const auto parsed = ParseFlatMapLayer(FlatMapLayerName(layer));
         Check(parsed.has_value() && *parsed == layer, "layer name round trip");
     }
-    Check(!ParseFlatMapLayer("tectonics").has_value(), "unknown layer rejected");
+    Check(ParseFlatMapLayer("tectonics") == FlatMapLayer::Tectonics,
+          "tectonics layer is available");
+    Check(ParseFlatMapLayer("plate_id") == FlatMapLayer::PlateId,
+          "plate id layer is available");
+    Check(ParseFlatMapLayer("boundary_motion") == FlatMapLayer::BoundaryMotion,
+          "boundary motion layer is available");
+    Check(ParseFlatMapLayer("crustal_deformation") == FlatMapLayer::CrustalDeformation,
+          "crustal deformation layer is available");
 
     // Same convention as the text HUD: latitude = asin(y), longitude = atan2(z, x).
     {

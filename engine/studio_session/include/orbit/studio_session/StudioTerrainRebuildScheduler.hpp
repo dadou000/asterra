@@ -133,6 +133,14 @@ public:
     void SetAppliedChangeCallback(
         AppliedChangeCallback callback);
 
+    // Optional veto evaluated for each page right before its next build is
+    // requested; a page whose gate returns false is simply retried on a later
+    // tick. Requests already made earlier in the same tick are visible to the
+    // gate, so a gate can serialize interdependent pages.
+    using PageGate =
+        std::function<bool(const terrain::PhysicalTerrainPageAddress&)>;
+    void SetPageGate(PageGate gate);
+
     // Finalizes completed M27 jobs, flushes expired edits, and submits at most
     // maxBuildRequestsPerTick targets. This call never waits for terrain jobs.
     void Tick(f64 deltaSeconds);
@@ -247,6 +255,7 @@ private:
 
     AppliedChangeCallback
         appliedChangeCallback_;
+    PageGate pageGate_;
 
     u32 peakOutstandingPages_{0U};
 };

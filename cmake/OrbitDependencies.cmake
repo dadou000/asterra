@@ -87,3 +87,40 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(luau)
+
+
+# Optional HTML panel host for Studio (Windows only). Only the WebView2 COM
+# headers are used at build time; WebView2Loader.dll is loaded dynamically at
+# run time from beside the executable, so a missing loader or runtime degrades
+# to "open in browser" instead of failing to start. The package is pinned by
+# hash (nuget.org, Microsoft.Web.WebView2 1.0.4129.50, about 9 MB, BSD-style
+# license; the loader is redistributable).
+option(ORBIT_ENABLE_WEBVIEW2 "Host HTML panels in Studio with Microsoft WebView2 (Windows)" ON)
+set(ORBIT_WEBVIEW2_LOADER_DLL "" CACHE FILEPATH "WebView2Loader.dll copied beside Studio when available")
+
+if(WIN32 AND ORBIT_ENABLE_WEBVIEW2 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    FetchContent_Declare(
+        webview2_sdk
+        URL https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4129.50/microsoft.web.webview2.1.0.4129.50.nupkg
+        URL_HASH SHA256=d3934f482d484b89fb4825df720c710664e1143a1e90f7b3a60794ef33f473d2
+        DOWNLOAD_NAME microsoft.web.webview2.1.0.4129.50.zip
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(webview2_sdk)
+
+    if(EXISTS "${webview2_sdk_SOURCE_DIR}/build/native/include/WebView2.h")
+        add_library(OrbitThirdPartyWebView2 INTERFACE)
+        target_include_directories(OrbitThirdPartyWebView2
+            SYSTEM INTERFACE "${webview2_sdk_SOURCE_DIR}/build/native/include")
+        target_compile_definitions(OrbitThirdPartyWebView2 INTERFACE ORBIT_HAS_WEBVIEW2=1)
+        add_library(Orbit::ThirdPartyWebView2 ALIAS OrbitThirdPartyWebView2)
+        set(ORBIT_WEBVIEW2_LOADER_DLL
+            "${webview2_sdk_SOURCE_DIR}/build/native/x64/WebView2Loader.dll"
+            CACHE FILEPATH "WebView2Loader.dll copied beside Studio when available" FORCE)
+    endif()
+endif()
+
+if(NOT TARGET Orbit::ThirdPartyWebView2)
+    add_library(OrbitThirdPartyWebView2 INTERFACE)
+    add_library(Orbit::ThirdPartyWebView2 ALIAS OrbitThirdPartyWebView2)
+endif()

@@ -166,7 +166,7 @@ namespace
 }
 } // namespace
 
-u64 MacroGlobeFingerprint(
+u64 LegacyMacroGlobeFingerprint(
     const terrain::TerrainSource& source,
     const universe::BodyShape& shape,
     const MacroGlobeConfig& config)
@@ -1052,7 +1052,7 @@ SurfaceOutputs main(VSOutput input)
 )";
 } // namespace
 
-MacroGlobeRenderer::MacroGlobeRenderer(
+LegacyMacroGlobeRenderer::LegacyMacroGlobeRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler)
 {
@@ -1185,7 +1185,7 @@ MacroGlobeRenderer::MacroGlobeRenderer(
     depthSurfacePipeline_ = device.CreateGraphicsPipeline(surfaceDesc);
 }
 
-void MacroGlobeRenderer::Draw(
+void LegacyMacroGlobeRenderer::Draw(
     rhi::CommandList& commands,
     rhi::Texture& target,
     const u32 width,
@@ -1281,7 +1281,7 @@ void MacroGlobeRenderer::Draw(
         globe.IndexCount());
 }
 
-void MacroGlobeRenderer::DrawSurface(
+void LegacyMacroGlobeRenderer::DrawSurface(
     rhi::CommandList& commands,
     rhi::Texture& previewColor,
     rhi::Texture& surfaceBaseRoughness,

@@ -2,9 +2,11 @@
 
 #include <orbit/math/Vector.hpp>
 #include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
+#include <orbit/terrain_impacts/ImpactField.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace orbit::studio_session
@@ -22,4 +24,16 @@ BuildTerrainAuthoringInvalidations(
     u32 downstreamRadiusTiles = 2U,
     terrain_dependency::TerrainChangeKind kind =
         terrain_dependency::TerrainChangeKind::TerrainAuthoring);
+
+// Diffs two persisted impact-history recipes. Local authored crater and flow
+// edits invalidate only their conservative influence bounds; procedural
+// populations and global age/environment/fracture changes invalidate the
+// whole planet.
+[[nodiscard]] std::vector<terrain_dependency::TerrainInvalidationRequest>
+BuildImpactHistoryInvalidations(
+    const world::PlanetDefinition& planet,
+    std::string_view previousToml,
+    std::string_view nextToml,
+    u8 physicalTileLevel,
+    u32 downstreamRadiusTiles = 3U);
 } // namespace orbit::studio_session

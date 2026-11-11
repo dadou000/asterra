@@ -6,6 +6,7 @@
 #include <orbit/paths/PathProfile.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 
+#include <cstddef>
 #include <vector>
 
 namespace orbit::path_geometry
@@ -35,6 +36,9 @@ struct PathBuildOptions
     // All derived products use this common station spacing so visual,
     // collision and AI/reference products cannot drift independently.
     f64 sampleSpacingMeters{4.0};
+    // Per-chunk guard. A planet-long source must be spatially tiled, never
+    // expanded into billions of stations on one synchronous build.
+    std::size_t maximumStations{16384U};
 
     [[nodiscard]] bool operator==(
         const PathBuildOptions&) const noexcept = default;

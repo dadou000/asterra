@@ -28,6 +28,8 @@ struct DiscoveredProject
     std::filesystem::path manifestPath;
     std::string displayName;
     std::filesystem::file_time_type modified{};
+    // Lives under a test-content folder (the engine's bundled examples); the browser can hide these.
+    bool testContent{false};
 };
 
 struct ProjectDiscoveryOptions
@@ -38,6 +40,8 @@ struct ProjectDiscoveryOptions
     std::size_t maximumResults{64U};
     // The scan stops after this long so a huge folder cannot stall the browser.
     std::chrono::milliseconds timeBudget{4000};
+    // Projects below any of these folders are marked testContent.
+    std::vector<std::filesystem::path> testContentRoots;
 };
 
 // Project-browser application model. The only persisted browser state is an
@@ -74,6 +78,9 @@ public:
     [[nodiscard]] static std::vector<DiscoveredProject> DiscoverProjects(
         const std::vector<std::filesystem::path>& roots,
         const ProjectDiscoveryOptions& options = {});
+
+    // The engine's own folder of example/test projects (examples/ beside the executable), if present.
+    [[nodiscard]] static std::vector<std::filesystem::path> InternalProjectFolders();
 
     void ForgetRecentProject(
         const std::filesystem::path& path);

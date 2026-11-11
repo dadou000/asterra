@@ -8,6 +8,7 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 
@@ -26,18 +27,12 @@ void Write(
         std::ios::trunc);
     output << text;
 }
-} // namespace
 
-int main()
+// Everything that opens the project database lives in Run(): remove_all() throws on
+// Windows while SQLite still holds the files open, so it must run after Run() returns.
+int Run(const std::filesystem::path& root)
 {
     using namespace orbit;
-
-    const auto root =
-        std::filesystem::temp_directory_path() /
-        ("orbit-m41-selection-" +
-         documents::ProjectId::Random().ToString());
-
-    std::filesystem::remove_all(root);
 
     auto project =
         documents::ProjectDocument::Create(
@@ -113,7 +108,8 @@ int main()
         !inspected.selectedEmissive ||
         !inspected.emissionGiEnabled ||
         inspected.emissionLuminanceNits != 2400.0 ||
-        inspected.emissionGiScale != 0.65)
+        // The material stores the GI scale as f32, so 0.65 comes back as 0.65F.
+        std::abs(inspected.emissionGiScale - 0.65) > 1.0e-6)
     {
         return 2;
     }
@@ -151,6 +147,19 @@ int main()
         return 4;
     }
 
-    std::filesystem::remove_all(root);
     return 0;
+}
+} // namespace
+
+int main()
+{
+    const auto root =
+        std::filesystem::temp_directory_path() /
+        ("orbit-m41-selection-" +
+         orbit::documents::ProjectId::Random().ToString());
+
+    std::filesystem::remove_all(root);
+    const int result = Run(root);
+    std::filesystem::remove_all(root);
+    return result;
 }

@@ -1,0 +1,25 @@
+{
+  "_comment": "Five cloud-march sampling variants judged by the council. Needs a build that has CLOUD_JITTER_FIX / CLOUD_INCLOUD_STEP_SCALE and the ORBIT_CLOUD_DEFINES hook. Scenes use the Earth system's Main world at a pinned sim time.",
+  "world": "Worlds/Main.orbitworld",
+  "body": "Earth",
+  "baseline": "baseline",
+  "controls": 1,
+  "variants": {
+    "baseline":    {"env": {}},
+    "jitter_fix":  {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_JITTER_FIX=1"}},
+    "fine":        {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_INCLOUD_STEP_SCALE=0.6"}},
+    "coarse":      {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_INCLOUD_STEP_SCALE=1.6"}},
+    "coarse_fix":  {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_INCLOUD_STEP_SCALE=1.6;CLOUD_JITTER_FIX=1"}}
+  },
+  "scenes": [
+    {"name": "cumulus_far", "time_microseconds": 18070405751, "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 1200, "yaw_deg": 0, "pitch_deg": 8}},
+    {"name": "cumulus_near", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.05157, "lon_deg": 0.03666, "alt_m": 2600, "yaw_deg": 35.3, "pitch_deg": 21.74}},
+    {"name": "orbit_400km", "local_time_seconds": 43200,
+     "pose": {"kind": "approach", "target": {"lat_deg": 5.3045, "lon_deg": 0.0},
+              "origin": {"lat_deg": 0, "lon_deg": 0, "alt_km": 1590.95}, "alt_km": 400}},
+    {"name": "cumulus_lowsun", "local_time_seconds": 63600,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 1200, "yaw_deg": 40, "pitch_deg": 8}}
+  ]
+}

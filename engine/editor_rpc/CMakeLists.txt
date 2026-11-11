@@ -26,6 +26,7 @@ target_link_libraries(OrbitEditorRpc
     PRIVATE
         Orbit::EditorModel
         Orbit::EditorSession
+        Orbit::WorldModel
 )
 
 target_compile_features(OrbitEditorRpc PUBLIC cxx_std_23)

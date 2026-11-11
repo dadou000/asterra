@@ -55,9 +55,12 @@ namespace
     const f64 radius =
         math::Length(observer.meters);
 
+    // The observer may be below the reference sphere (under an ocean the bed is
+    // below sea level); it only has to stay clear of the planet's centre.
+    static_cast<void>(planet);
     return
         std::isfinite(radius) &&
-        radius > planet.radiusMeters;
+        radius > 1.0;
 }
 
 [[nodiscard]] terrain::PhysicalTerrainPageAddress
@@ -554,7 +557,7 @@ bool StudioTerrainRuntimeBridge::SetObserver(
             observer))
     {
         throw std::invalid_argument(
-            "Studio terrain observer must remain above the active planet surface.");
+            "Studio terrain observer must remain away from the planet centre.");
     }
 
     if (found->second->observer.meters ==
@@ -604,6 +607,20 @@ StudioTerrainRuntimeBridge::Capture(
 
     return Snapshot(
         *found->second);
+}
+
+std::optional<StudioTerrainObserverSite>
+StudioTerrainRuntimeBridge::ObserverSite(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found = runtimes_.find(viewportId);
+    if (found == runtimes_.end())
+    {
+        return std::nullopt;
+    }
+    return StudioTerrainObserverSite{
+        .body = found->second->body,
+        .observer = found->second->observer};
 }
 
 std::vector<

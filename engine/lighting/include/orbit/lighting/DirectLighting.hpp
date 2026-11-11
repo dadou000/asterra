@@ -27,6 +27,22 @@ struct DirectLightingSettings
     // atmosphere/sky-visibility term. It is deliberately a shared lighting
     // setting rather than renderer-local preview fill.
     f32 ambientIrradianceScale{0.035F};
+    // Planet-fixed direct stellar visibility at the actual surface point.
+    f32 planetRadiusMeters{0.0F};
+    f32 stellarAngularRadiusRadians{0.00465F};
+    u8 sunAuditMethod{0U};
+    bool sunAuditDebug{false};
+    rhi::Buffer* sunAuditTerrain{nullptr};
+    // Current sky irradiance summary (scene-linear, normalized by the solar
+    // reference). Drives the coarse analytic ambient used where the radiance
+    // cache has no valid cell yet.
+    math::Float3 skyIrradianceLinear{};
+    // Terrain sky-visibility channel carried by the toroidal clipmap (see
+    // orbit/terrain/TerrainAmbientLayout.hpp): the ambient texels of every
+    // level and the per-frame level table. Null or zero levels turn it off.
+    rhi::Buffer* terrainAmbient{nullptr};
+    rhi::Buffer* terrainAmbientLevels{nullptr};
+    u32 terrainAmbientLevelCount{0U};
 };
 
 class DirectLightingRenderer
@@ -75,5 +91,6 @@ public:
 private:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::Buffer> dummyParticleLightGrid_;
+    std::unique_ptr<rhi::Buffer> emptySunAuditTerrain_;
 };
 } // namespace orbit::lighting

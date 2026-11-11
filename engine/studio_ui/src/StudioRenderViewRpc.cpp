@@ -1,4 +1,7 @@
 #include <algorithm>
+#include <orbit/mesh_render/MeshLibrary.hpp>
+#include <orbit/post_process/AntiAliasing.hpp>
+#include <orbit/studio_ui/StudioFlatMap.hpp>
 #include <orbit/studio_ui/StudioRenderViewRpc.hpp>
 
 #include <cmath>
@@ -99,6 +102,23 @@ constexpr i64 kFailed = 1071;
     const auto found = object.find(key);
     if (found == object.end() || !found->second.IsNumber() ||
         !std::isfinite(found->second.AsNumber()))
+    {
+        throw rpc::Error(
+            -32602, std::string(key) + " must be a finite number.");
+    }
+    return found->second.AsNumber();
+}
+
+[[nodiscard]] std::optional<f64> OptionalFiniteNumber(
+    const Value::Object& object,
+    const char* key)
+{
+    const auto found = object.find(key);
+    if (found == object.end())
+    {
+        return std::nullopt;
+    }
+    if (!found->second.IsNumber() || !std::isfinite(found->second.AsNumber()))
     {
         throw rpc::Error(
             -32602, std::string(key) + " must be a finite number.");
@@ -301,6 +321,7 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"clipmap_partial_updates", layers.clipmapPartialUpdates},
         {"physical_pages", layers.physicalPages},
         {"clouds", layers.clouds},
+        {"cloud_b_preview", layers.cloudBPreview},
         {"cloud_resolution_scale", static_cast<f64>(layers.cloudResolutionScale)},
         {"cloud_temporal", layers.cloudTemporal},
         {"cloud_godray_strength", static_cast<f64>(layers.cloudGodrayStrength)},
@@ -308,13 +329,40 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"bypass_cloud_shadow", layers.bypassCloudShadow},
         {"bypass_proxy_sun_shadow", layers.bypassProxySunShadow},
         {"bypass_proxy_surfaces", layers.bypassProxySurfaces},
+        {"bypass_mesh_surfaces", layers.bypassMeshSurfaces},
+        {"bypass_sdf_gi", layers.bypassSdfGi},
+        {"bypass_sdf_terrain", layers.bypassSdfTerrain},
+        {"bypass_sdf_proxies", layers.bypassSdfProxies},
         {"bypass_sky_cache", layers.bypassSkyCache},
+        {"bypass_terrain_ambient", layers.bypassTerrainAmbient},
         {"bypass_indirect_lighting", layers.bypassIndirectLighting},
         {"bypass_near_field_water", layers.bypassNearFieldWater},
         {"bypass_atmosphere", layers.bypassAtmosphere},
+        {"terrain_occluded_atmosphere", layers.terrainOccludedAtmosphere},
+        {"atmosphere_audit_mode", static_cast<f64>(layers.atmosphereAuditMode)},
+        {"atmosphere_audit_radiance_only", layers.atmosphereAuditRadianceOnly},
+        {"sun_audit_method", static_cast<f64>(layers.sunAuditMethod)},
+        {"sun_audit_disc_debug", layers.sunAuditDiscDebug},
+        {"sun_audit_relief_debug", layers.sunAuditReliefDebug},
+        {"sun_audit_sources_debug", layers.sunAuditSourcesDebug},
         {"bypass_hybrid_reflections", layers.bypassHybridReflections},
+        {"reflection_exact_triangles", layers.reflectionExactTriangles},
+        {"reflection_temporal", layers.reflectionTemporal},
+        {"reflection_maximum_roughness", static_cast<f64>(layers.reflectionMaximumRoughness)},
+        {"reflection_distance_meters", static_cast<f64>(layers.reflectionDistanceMeters)},
+        {"reflection_debug_view", static_cast<f64>(layers.reflectionDebugView)},
         {"bypass_radiance_cache", layers.bypassRadianceCache},
         {"indirect_coverage_view", layers.indirectCoverageView},
+        {"gi_only_view", layers.giOnlyView},
+        {"sdf_debug_view", static_cast<f64>(layers.sdfDebugView)},
+        {"gi_intensity", static_cast<f64>(layers.giIntensity)},
+        {"render_scale", static_cast<f64>(layers.renderScale)},
+        {"taa_jitter_scale", static_cast<f64>(layers.taaJitterScale)},
+        {"mesh_shadow_softness", static_cast<f64>(layers.meshShadowSoftness)},
+        {"anti_aliasing",
+         std::string(post_process::AntiAliasingModeName(
+             static_cast<post_process::AntiAliasingMode>(
+                 std::min<u8>(layers.antiAliasing, 2U))))},
         {"cloud_volume_debug_altitude", static_cast<f64>(layers.cloudVolumeDebugAltitude)},
         {"cloud_lab", CloudLabToRpc(layers.cloudLab)},
         {"clipmap_band_edges_meters", BandEdgesToRpc(layers)}});
@@ -561,6 +609,55 @@ void RegisterStudioRenderViewRpc(
     rpc::Dispatcher& dispatcher,
     StudioRenderViewSet& views)
 {
+    dispatcher.Register(
+        {
+            .name = "mesh.status",
+            .description =
+                "Returns every imported mesh the renderer has requested: "
+                "path, state (loading | ready | failed), error, triangle, "
+                "part, material and texture counts (textures_resident of "
+                "textures_total while they stream in), bounds in metres and "
+                "import warnings.",
+            .mutating = false
+        },
+        [](const Value&)
+        {
+            Value::Array meshes;
+            for (const auto& status : mesh_render::LatestMeshStatuses())
+            {
+                Value::Array warnings;
+                for (const auto& warning : status.warnings)
+                {
+                    warnings.emplace_back(warning);
+                }
+                const auto bounds = [](const std::array<f64, 3>& v)
+                {
+                    return Value(Value::Array{
+                        Value(v[0]), Value(v[1]), Value(v[2])});
+                };
+                meshes.emplace_back(Value::Object{
+                    {"path", status.path},
+                    {"state",
+                     std::string(
+                         status.state == mesh_render::MeshLoadState::Ready
+                             ? "ready"
+                             : status.state == mesh_render::MeshLoadState::Failed
+                                   ? "failed"
+                                   : "loading")},
+                    {"error", status.error},
+                    {"triangles", static_cast<f64>(status.triangles)},
+                    {"parts", static_cast<f64>(status.parts)},
+                    {"materials", static_cast<f64>(status.materials)},
+                    {"textures_total", static_cast<f64>(status.texturesTotal)},
+                    {"textures_resident",
+                     static_cast<f64>(status.texturesResident)},
+                    {"bounds_min_meters", bounds(status.boundsMin)},
+                    {"bounds_max_meters", bounds(status.boundsMax)},
+                    {"warnings", Value(std::move(warnings))}});
+            }
+            return Value(Value::Object{{"meshes", Value(std::move(meshes))}});
+        });
+
     dispatcher.Register(
         {
             .name = "view.surface_debug_get",
@@ -833,18 +930,139 @@ void RegisterStudioRenderViewRpc(
                     layers.clipmapPartialUpdates);
                 applyFlag("physical_pages", layers.physicalPages);
                 applyFlag("clouds", layers.clouds);
+                applyFlag("cloud_b_preview", layers.cloudBPreview);
                 applyFlag("cloud_temporal", layers.cloudTemporal);
                 applyFlag("cloud_light_volume", layers.cloudLightVolume);
                 applyFlag("bypass_cloud_shadow", layers.bypassCloudShadow);
                 applyFlag("bypass_proxy_sun_shadow", layers.bypassProxySunShadow);
                 applyFlag("bypass_proxy_surfaces", layers.bypassProxySurfaces);
+                applyFlag("bypass_mesh_surfaces", layers.bypassMeshSurfaces);
+                applyFlag("bypass_sdf_gi", layers.bypassSdfGi);
+                applyFlag("bypass_sdf_terrain", layers.bypassSdfTerrain);
+                applyFlag("bypass_sdf_proxies", layers.bypassSdfProxies);
                 applyFlag("bypass_sky_cache", layers.bypassSkyCache);
+                applyFlag("bypass_terrain_ambient", layers.bypassTerrainAmbient);
                 applyFlag("bypass_indirect_lighting", layers.bypassIndirectLighting);
                 applyFlag("bypass_near_field_water", layers.bypassNearFieldWater);
                 applyFlag("bypass_atmosphere", layers.bypassAtmosphere);
+                applyFlag("terrain_occluded_atmosphere", layers.terrainOccludedAtmosphere);
+                applyFlag("atmosphere_audit_radiance_only",
+                    layers.atmosphereAuditRadianceOnly);
+                if (const auto mode = values.find("atmosphere_audit_mode");
+                    mode != values.end())
+                {
+                    if (!mode->second.IsNumber() ||
+                        !std::isfinite(mode->second.AsNumber()) ||
+                        std::floor(mode->second.AsNumber()) != mode->second.AsNumber() ||
+                        mode->second.AsNumber() < 0.0 ||
+                        mode->second.AsNumber() > 4.0)
+                        throw rpc::Error(kInvalid,
+                            "atmosphere_audit_mode must be an integer from 0 to 4.");
+                    layers.atmosphereAuditMode =
+                        static_cast<u8>(mode->second.AsNumber());
+                }
+                applyFlag("sun_audit_disc_debug", layers.sunAuditDiscDebug);
+                applyFlag("sun_audit_relief_debug", layers.sunAuditReliefDebug);
+                applyFlag("sun_audit_sources_debug", layers.sunAuditSourcesDebug);
+                if (const auto audit = values.find("sun_audit_method");
+                    audit != values.end())
+                {
+                    if (!audit->second.IsNumber() ||
+                        !std::isfinite(audit->second.AsNumber()) ||
+                        std::floor(audit->second.AsNumber()) != audit->second.AsNumber() ||
+                        audit->second.AsNumber() < 0.0 || audit->second.AsNumber() > 3.0)
+                        throw rpc::Error(kInvalid, "sun_audit_method must be an integer from 0 to 3.");
+                    layers.sunAuditMethod = static_cast<u8>(audit->second.AsNumber());
+                }
                 applyFlag("bypass_hybrid_reflections", layers.bypassHybridReflections);
+                applyFlag("reflection_exact_triangles", layers.reflectionExactTriangles);
+                applyFlag("reflection_temporal", layers.reflectionTemporal);
+                const auto reflectionNumber = [&values](const char* key, f64 current, f64 lo, f64 hi)
+                {
+                    const auto found = values.find(key);
+                    if (found == values.end()) return current;
+                    if (!found->second.IsNumber() || !std::isfinite(found->second.AsNumber()))
+                        throw rpc::Error(kInvalid, std::string(key) + " must be a finite number.");
+                    return std::clamp(found->second.AsNumber(), lo, hi);
+                };
+                layers.reflectionMaximumRoughness = static_cast<f32>(reflectionNumber(
+                    "reflection_maximum_roughness", layers.reflectionMaximumRoughness, 0.0, 1.0));
+                layers.reflectionDistanceMeters = static_cast<f32>(reflectionNumber(
+                    "reflection_distance_meters", layers.reflectionDistanceMeters, 0.1, 1000.0));
+                layers.reflectionDebugView = static_cast<u32>(reflectionNumber(
+                    "reflection_debug_view", layers.reflectionDebugView, 0.0, 2.0));
                 applyFlag("bypass_radiance_cache", layers.bypassRadianceCache);
                 applyFlag("indirect_coverage_view", layers.indirectCoverageView);
+                applyFlag("gi_only_view", layers.giOnlyView);
+                if (const auto giFound = values.find("gi_intensity");
+                    giFound != values.end())
+                {
+                    if (!giFound->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "gi_intensity must be a number.");
+                    }
+                    layers.giIntensity = std::clamp(
+                        static_cast<f32>(giFound->second.AsNumber()), 0.0F, 16.0F);
+                }
+                if (const auto scaleFound = values.find("render_scale");
+                    scaleFound != values.end())
+                {
+                    if (!scaleFound->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "render_scale must be a number 0.25..1.");
+                    }
+                    layers.renderScale = std::clamp(
+                        static_cast<f32>(scaleFound->second.AsNumber()), 0.25F, 1.0F);
+                }
+                if (const auto sdfFound = values.find("sdf_debug_view");
+                    sdfFound != values.end())
+                {
+                    if (!sdfFound->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "sdf_debug_view must be a number 0..5.");
+                    }
+                    layers.sdfDebugView = static_cast<u8>(std::clamp(
+                        static_cast<i32>(sdfFound->second.AsNumber()), 0, 5));
+                }
+                if (const auto softFound = values.find("mesh_shadow_softness");
+                    softFound != values.end())
+                {
+                    if (!softFound->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "mesh_shadow_softness must be a number.");
+                    }
+                    layers.meshShadowSoftness = std::clamp(
+                        static_cast<f32>(softFound->second.AsNumber()), 0.0F, 32.0F);
+                }
+                if (const auto jitterFound = values.find("taa_jitter_scale");
+                    jitterFound != values.end())
+                {
+                    if (!jitterFound->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "taa_jitter_scale must be a number.");
+                    }
+                    layers.taaJitterScale = std::clamp(
+                        static_cast<f32>(jitterFound->second.AsNumber()), 0.0F, 1.0F);
+                }
+                if (const auto aaFound = values.find("anti_aliasing");
+                    aaFound != values.end())
+                {
+                    post_process::AntiAliasingMode mode{};
+                    if (!aaFound->second.IsString() ||
+                        !post_process::ParseAntiAliasingMode(
+                            aaFound->second.AsString(), mode))
+                    {
+                        throw rpc::Error(
+                            kInvalid,
+                            "anti_aliasing must be \"off\", \"fxaa\" or \"taa\".");
+                    }
+                    layers.antiAliasing = static_cast<u8>(mode);
+                }
                 if (const auto debugAltitude = values.find("cloud_volume_debug_altitude");
                     debugAltitude != values.end())
                 {
@@ -1163,6 +1381,90 @@ void RegisterStudioRenderViewRpc(
 
     dispatcher.Register(
         {
+            .name = "viewport.fly_to",
+            .description =
+                "Puts the terrain camera over a latitude/longitude in one "
+                "call (map.travel plus pose_set without hand-building "
+                "vectors). Give latitude_degrees and longitude_degrees; "
+                "altitude_meters (above the reference sphere, so negative is "
+                "below sea level), yaw_degrees and pitch_degrees (negative "
+                "looks down) are optional and keep the travel defaults when "
+                "omitted. The viewport returns to perspective mode. Returns "
+                "the resulting pose plus height_above_terrain_meters. id "
+                "defaults to studio.primary.",
+            .mutating = true
+        },
+        [&views](const Value& params)
+        {
+            const std::string id = ViewIdOrPrimary(params);
+            const auto& object = RequireObject(params);
+            const f64 latitude = NumberFromRpc(object, "latitude_degrees");
+            const f64 longitude = NumberFromRpc(object, "longitude_degrees");
+            if (std::abs(latitude) > 90.0)
+            {
+                throw rpc::Error(-32602, "latitude_degrees must be within -90..90.");
+            }
+            const auto altitude = OptionalFiniteNumber(object, "altitude_meters");
+            const auto yaw = OptionalFiniteNumber(object, "yaw_degrees");
+            const auto pitch = OptionalFiniteNumber(object, "pitch_degrees");
+            constexpr f64 kRadians = 3.14159265358979323846 / 180.0;
+            try
+            {
+                if (!views.FocusTerrainDirection(
+                        id, FlatMapDirectionFromLatLon(latitude, longitude)))
+                {
+                    throw rpc::Error(
+                        kFailed,
+                        "The viewport has no current terrain runtime to fly with.");
+                }
+                views.SetViewportMode(
+                    id, studio_session::ViewportMode::Perspective);
+                auto pose = views.ViewPose(id);
+                if (!pose.has_value())
+                {
+                    throw rpc::Error(
+                        kInvalid,
+                        "View '" + id + "' has no target body or camera pose.");
+                }
+                if (altitude.has_value() || yaw.has_value() || pitch.has_value())
+                {
+                    if (altitude.has_value())
+                    {
+                        const f64 radius = views.TextDiagnostics(id).planetRadiusMeters;
+                        if (!(radius > 0.0))
+                        {
+                            throw rpc::Error(
+                                kFailed, "The target body has no planet radius.");
+                        }
+                        pose->observerMeters =
+                            math::Normalize(pose->observerMeters) * (radius + *altitude);
+                    }
+                    if (yaw.has_value()) pose->yawRadians = *yaw * kRadians;
+                    if (pitch.has_value()) pose->pitchRadians = *pitch * kRadians;
+                    static_cast<void>(views.RestoreViewPose(id, *pose));
+                    pose = views.ViewPose(id);
+                }
+                const auto readout = views.NavigationReadout(id);
+                Value result = PoseToRpc(id, *pose);
+                auto& out = result.AsObject();
+                out.emplace("height_above_terrain_meters",
+                    readout.has_value()
+                        ? Value(readout->heightAboveTerrainMeters)
+                        : Value());
+                return result;
+            }
+            catch (const rpc::Error&)
+            {
+                throw;
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kFailed, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
             .name = "view.zoom_get",
             .description =
                 "Camera zoom of a Studio RenderView: a telephoto factor on "
@@ -1205,6 +1507,83 @@ void RegisterStudioRenderViewRpc(
                 views.SetZoom(id, zoom);
                 return Value(Value::Object{
                     {"id", id}, {"zoom", views.Zoom(id)}});
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kFailed, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "view.camera_get",
+            .description =
+                "Gets the rendered viewport camera lens: vertical field of "
+                "view in degrees and equivalent focal length for a 24 mm "
+                "sensor height. id defaults to studio.primary.",
+            .mutating = false
+        },
+        [&views](const Value& params)
+        {
+            const std::string id = ViewIdOrPrimary(params);
+            try
+            {
+                return Value(Value::Object{
+                    {"id", id},
+                    {"fov_degrees", views.CameraFovDegrees(id)},
+                    {"focal_length_mm", views.CameraFocalLengthMillimeters(id)},
+                    {"sensor_height_mm", 24.0},
+                    {"zoom", views.Zoom(id)}});
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kInvalid, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "view.camera_set",
+            .description =
+                "Sets the viewport camera lens using exactly one of "
+                "fov_degrees (0..170) or focal_length_mm (2..500, on a "
+                "24 mm sensor height). id defaults to studio.primary.",
+            .mutating = true
+        },
+        [&views](const Value& params)
+        {
+            const std::string id = ViewIdOrPrimary(params);
+            const auto& object = RequireObject(params);
+            const auto fov = object.find("fov_degrees");
+            const auto focal = object.find("focal_length_mm");
+            if ((fov == object.end()) == (focal == object.end()))
+            {
+                throw rpc::Error(
+                    -32602,
+                    "Provide exactly one of fov_degrees or focal_length_mm.");
+            }
+            try
+            {
+                if (fov != object.end())
+                {
+                    static_cast<void>(views.SetCameraFovDegrees(
+                        id, NumberFromRpc(object, "fov_degrees")));
+                }
+                else
+                {
+                    static_cast<void>(views.SetCameraFocalLengthMillimeters(
+                        id, NumberFromRpc(object, "focal_length_mm")));
+                }
+                return Value(Value::Object{
+                    {"id", id},
+                    {"fov_degrees", views.CameraFovDegrees(id)},
+                    {"focal_length_mm", views.CameraFocalLengthMillimeters(id)},
+                    {"sensor_height_mm", 24.0},
+                    {"zoom", views.Zoom(id)}});
+            }
+            catch (const rpc::Error&)
+            {
+                throw;
             }
             catch (const std::exception& exception)
             {

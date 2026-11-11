@@ -1,4 +1,9 @@
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/terrain/TerrainAmbientLayout.hpp>
+#include <orbit/lighting/SunVisibilityShader.hpp>
+#include <orbit/lighting/TerrainSunShadow.hpp>
+#include <string>
+#include <stdexcept>
 
 #include <algorithm>
 #include <array>
@@ -89,51 +94,56 @@ StructuredBuffer<GpuRadianceCell> g_radianceCells;
 [[vk::binding(5, 0)]]
 StructuredBuffer<GpuRadianceLevelInfo> g_radianceLevels;
 
-[[vk::binding(6, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_baseRoughness;
-[[vk::binding(6, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_baseSampler;
 
-[[vk::binding(7, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_normalMetallic;
-[[vk::binding(7, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_normalSampler;
 
-[[vk::binding(8, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_emissionClass;
-[[vk::binding(8, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_emissionSampler;
 
-[[vk::binding(9, 0)]]
+[[vk::binding(12, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth;
-[[vk::binding(9, 0)]]
+[[vk::binding(12, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler;
 
 // Sun transmittance through the cloud layer (red), reduced resolution.
-[[vk::binding(10, 0)]]
+[[vk::binding(13, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_cloudShadow;
-[[vk::binding(10, 0)]]
+[[vk::binding(13, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_cloudShadowSampler;
 
 // Lighting from authored Visibility Proxies at full resolution (red = sun
 // visibility, 1 = lit; gba = sky irradiance x open hemisphere); written by
 // ProxySunShadowRenderer.
-[[vk::binding(11, 0)]]
+[[vk::binding(14, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_proxySunShadow;
-[[vk::binding(11, 0)]]
+[[vk::binding(14, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_proxySunShadowSampler;
+
+[[vk::binding(6, 0)]] ByteAddressBuffer g_sunAuditTerrain;
+// Terrain sky visibility carried by the toroidal clipmap (see TerrainAmbientLayout.hpp).
+[[vk::binding(7, 0)]] ByteAddressBuffer g_terrainAmbient;
+[[vk::binding(8, 0)]] ByteAddressBuffer g_terrainAmbientLevels;
 
 struct Constants
 {
@@ -145,6 +155,8 @@ struct Constants
     uint4 localGrid;
     float4 cameraFrameAndParticleGrid;
     float4 extra; // x: cloud shadow bound, y: proxy sun shadow bound, z: radiance level count, w: sky cache strength
+    float4 planetShadow; // x planet radius, y stellar angular radius, z audit method, w audit debug
+    float4 skyIrradiance; // rgb current sky irradiance summary, w terrain ambient level count
 };
 [[vk::push_constant]] Constants g;
 
@@ -158,7 +170,9 @@ struct VSOutput
 // cell at `position` (camera-relative); zero when no level covers it. Same
 // addressing as the cache sampler: the level's window is
 // [-axis/2, axis/2 - 1] cells around its centre.
-float3 CacheSkyIrradiance(float3 position, float3 normal, uint levelCount)
+// `w` is 1 when a valid cell was found; 0 means no level holds a valid cell here
+// (not yet estimated, or outside every level) and the caller must not read rgb.
+float4 CacheSkyIrradiance(float3 position, float3 normal, uint levelCount)
 {
     [loop]
     for (uint levelIndex = 0u; levelIndex < levelCount; ++levelIndex)
@@ -200,13 +214,29 @@ float3 CacheSkyIrradiance(float3 position, float3 normal, uint levelCount)
             continue;
         }
 
-        return max(
-            cell.skyIrradiance.rgb *
+        // A cell estimated while the sky summary was zero (start-up, night)
+        // is valid but holds no sky at all (skyIrradiance.w = 0). Treating it
+        // as a hit would show black sky fill until the cache gets round to
+        // re-estimating it; treat it as missing so the clipmap terrain
+        // ambient (current sky, immediate) takes over.
+        if (cell.skyIrradiance.w <= 1.0e-6)
+        {
+            continue;
+        }
+
+        // skyIrradiance.w is the sky luminance the cell was baked with; divide
+        // it out so the caller's current-sky scale replaces it (a cell that
+        // has not been re-estimated since the sky changed must not keep the
+        // old, brighter or dimmer sky). 0 = unknown, use as stored.
+        const float bakedSky = cell.skyIrradiance.w;
+        const float rescale = bakedSky > 1.0e-6 ? 1.0 / bakedSky : 1.0;
+        return float4(max(
+            cell.skyIrradiance.rgb * rescale *
                 (1.0 + dot(cell.skyGradient.xyz, normal)),
-            0.0);
+            0.0), 1.0);
     }
 
-    return 0.0;
+    return float4(0.0, 0.0, 0.0, 0.0);
 }
 
 )"
@@ -535,6 +565,84 @@ float4 main(VSOutput input) : SV_Target0
         stellarColor *
         stellarIrradiance;
 
+    // Use each pixel's body-fixed position, not the camera's local horizon:
+    // an orbital camera may see both the daylight and nightside hemisphere.
+    // Analytic globe renderers do not always write geometric depth; for these,
+    // reconstruct the surface from the view ray's sphere intersection.
+    float sunAuditVisibility = 1.0;
+    float sunAuditSphere = 1.0;
+    bool sunAuditPositionValid = false;
+    bool sunAuditTerrainValid = false;
+    if (g.planetShadow.x > 0.0)
+    {
+        const float3 eye = g.cameraFrameAndParticleGrid.xyz;
+        float3 surface = eye;
+        bool surfaceFound = false;
+        const float surfaceDepth = g_depth.Sample(
+            g_depthSampler, input.uv).r;
+        if (surfaceDepth > 0.0)
+        {
+            surface += ReconstructSurfacePosition(
+                surfaceDepth, cameraRay, cameraForward);
+            surfaceFound = true;
+        }
+        else
+        {
+            const float b = dot(eye, cameraRay);
+            const float impact2 = dot(eye, eye) - b * b;
+            const float discriminant = g.planetShadow.x * g.planetShadow.x - impact2;
+            if (discriminant >= 0.0)
+            {
+                const float t = -b - sqrt(discriminant);
+                if (t > 0.0)
+                {
+                    surface += cameraRay * t;
+                    surfaceFound = true;
+                }
+            }
+        }
+        if (surfaceFound)
+        {
+            sunAuditPositionValid = true;
+            const float radial = length(surface);
+            const float ratio = min(g.planetShadow.x /
+                max(radial, g.planetShadow.x), 1.0);
+            const float horizonMu = -sqrt(max(1.0 - ratio * ratio, 0.0));
+            const float sunMu = dot(surface / max(radial, 1.0), stellarDirection);
+            const float angular = max(g.planetShadow.y, 1.0e-5);
+            const float legacyVisibility = smoothstep(
+                horizonMu - angular, horizonMu + angular, sunMu);
+            sunAuditVisibility = legacyVisibility;
+            if (g.planetShadow.z > 0.5)
+            {
+                // Use the same finite-disc geometry as the atmospheric
+                // visibility service. Keep the legacy path unchanged at 0.
+                const float3 surfaceOutside = surface *
+                    (1.0 + max(1.0e-6, 0.5 / max(radial, 1.0)));
+                const float biasedRadius = g.planetShadow.x *
+                    (1.0 - 2.0e-7);
+                sunAuditSphere = SphereStellarVisibility(
+                    surfaceOutside, stellarDirection, biasedRadius, angular);
+                sunAuditVisibility = sunAuditSphere;
+                if (g.planetShadow.z > 1.5 && g.planetShadow.z < 2.5)
+                {
+                    sunAuditTerrainValid = g_sunAuditTerrain.Load(12u) >= 4u;
+                    if (sunAuditTerrainValid)
+                        sunAuditVisibility = TerrainSunVisibility(
+                            g_sunAuditTerrain, surfaceOutside,
+                            stellarDirection, biasedRadius, angular);
+                }
+            }
+            // Diagnostic methods retain their explicit comparison semantics;
+            // the normal path uses the same offscreen relief field as air/clouds.
+            if (g.planetShadow.z < 0.5 && g_sunAuditTerrain.Load(12u) >= 4u)
+                sunAuditVisibility = TerrainSunVisibility(g_sunAuditTerrain,
+                    surface + normalize(surface) * 0.5, stellarDirection,
+                    g.planetShadow.x, g.planetShadow.y);
+            stellarLinear *= sunAuditVisibility;
+        }
+    }
+
     if (g.extra.x > 0.0)
     {
         stellarLinear *=
@@ -559,10 +667,12 @@ float4 main(VSOutput input) : SV_Target0
     const float ambient =
         max(g.lightColorAndAmbient.w, 0.0);
     const float3 ambientLinear =
-        baseColor *
+        g.planetShadow.z > 2.5 ? float3(0.0, 0.0, 0.0) :
+        (baseColor *
         (1.0 - metallic) *
         ambient +
-        proxySkyFill;
+        proxySkyFill);
+    float3 sunAuditSky = ambientLinear;
     float3 sceneLinear = stellarLinear + ambientLinear;
 
     const float depth =
@@ -590,20 +700,60 @@ float4 main(VSOutput input) : SV_Target0
     // above instead.
     const uint skyLevelCount =
         uint(g.extra.z + 0.5);
+    const uint terrainAmbientLevels = uint(g.skyIrradiance.w + 0.5);
 
-    if (depth > 0.0 &&
-        skyLevelCount > 0u &&
+    if (g.planetShadow.z < 2.5 &&
+        depth > 0.0 &&
+        (skyLevelCount > 0u || terrainAmbientLevels > 0u) &&
         g.extra.w > 0.0 &&
         floor(emissionClass.a + 0.01) != 3.0)
     {
         const float3 skyPosition =
             ReconstructSurfacePosition(depth, cameraRay, cameraForward);
 
-        sceneLinear +=
-            baseColor *
-            (1.0 - metallic) *
-            CacheSkyIrradiance(skyPosition, n, skyLevelCount) *
-            (g.extra.w / 3.14159265);
+        const float3 bodyPosition =
+            skyPosition + g.cameraFrameAndParticleGrid.xyz;
+        const float3 bodyUp = normalize(bodyPosition);
+        // Terrain sky visibility from the finest clipmap level covering this
+        // point: geometry only, cosine-weighted (what irradiance needs), and
+        // always at the current sky. It is the primary source wherever it
+        // exists. The 3D cache's own sky channel is a uniform-hemisphere
+        // fraction that over-weights low horizon rays, so it reads about half
+        // as bright on open terrain; mixing the two paints bright and dark
+        // chunks as the cache fills. The cache is the fallback where the
+        // clipmap has nothing (and keeps the sky for anything it alone sees).
+        const float4 terrainSky = terrainAmbientLevels > 0u
+            ? TerrainAmbientLookup(g_terrainAmbientLevels, g_terrainAmbient,
+                terrainAmbientLevels, bodyPosition)
+            : float4(-1.0, 0.0, 0.0, 0.0);
+        const float4 skySample = terrainSky.x < 0.0 && skyLevelCount > 0u
+            ? CacheSkyIrradiance(skyPosition, n, skyLevelCount)
+            : float4(0.0, 0.0, 0.0, 0.0);
+        float3 skyContribution;
+
+        if (terrainSky.x < 0.0 && skySample.w > 0.5)
+        {
+            skyContribution =
+                baseColor *
+                (1.0 - metallic) *
+                skySample.rgb *
+                (g.extra.w / 3.14159265);
+        }
+        else
+        {
+            // Where nothing covers the point a coarse analytic ambient is far
+            // better than none: a flat 70% open fraction and the local up.
+            const float openness = terrainSky.x >= 0.0 ? terrainSky.x : 0.7;
+            const float3 lean = terrainSky.x >= 0.0 ? terrainSky.yzw : bodyUp;
+            skyContribution =
+                baseColor *
+                (1.0 - metallic) *
+                max(g.skyIrradiance.rgb, 0.0) *
+                (0.5 * openness * (1.0 + dot(lean, n)) / 3.14159265);
+        }
+
+        sunAuditSky += skyContribution;
+        sceneLinear += skyContribution;
     }
 
     // Reverse-Z depth 0 is the untouched/far clear value. Analytic globe
@@ -707,6 +857,23 @@ float4 main(VSOutput input) : SV_Target0
     sceneLinear +=
         max(emissionClass.rgb, 0.0);
 
+    if (g.planetShadow.w > 0.5 && g.planetShadow.z > 0.5)
+    {
+        // Linear diagnostic color, not an exposure-dependent shadow fix.
+        // Magenta means no trustworthy body-relative surface position.
+        if (!sunAuditPositionValid)
+            return float4(1.0, 0.0, 1.0, 1.0);
+        if (g.planetShadow.z < 1.5)
+            return float4(sunAuditSphere.xxx, 1.0);
+        if (g.planetShadow.z < 2.5)
+            return float4(sunAuditVisibility, sunAuditSphere,
+                sunAuditTerrainValid ? 1.0 : 0.0, 1.0);
+        return float4(
+            log2(1.0 + max(dot(stellarLinear, float3(0.2126,0.7152,0.0722)), 0.0)) * 0.15,
+            log2(1.0 + max(dot(sunAuditSky, float3(0.2126,0.7152,0.0722)), 0.0)) * 0.15,
+            log2(1.0 + max(dot(emissionClass.rgb, float3(0.2126,0.7152,0.0722)), 0.0)) * 0.15,
+            1.0);
+    }
     return float4(sceneLinear, 1.0);
 }
 )";
@@ -724,9 +891,16 @@ DirectLightingRenderer::DirectLightingRenderer(
             .debug = false
         });
 
+    std::string pixelSource(kPs);
+    const auto entry = pixelSource.find("float4 main(VSOutput input) : SV_Target0");
+    if (entry == std::string::npos)
+        throw std::logic_error("Direct lighting pixel entry point not found.");
+    pixelSource.insert(entry, std::string("#define TA_BUFFER ByteAddressBuffer\n") +
+        terrain::kTerrainAmbientCommonShader + terrain::kTerrainAmbientLookupShader);
+    pixelSource.insert(entry, kSunVisibilityShader);
     const auto ps =
         compiler.Compile({
-            .source = kPs,
+            .source = pixelSource,
             .entryPoint = "main",
             .stage = shader::Stage::Pixel,
             .debug = false
@@ -744,8 +918,8 @@ DirectLightingRenderer::DirectLightingRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 32U,
-            .shaderResourceBuffers = 6U,
+            .pushConstantDwords = 40U,
+            .shaderResourceBuffers = 9U,
             .sampledTextures = 6U,
             .topology =
                 rhi::PrimitiveTopology::TriangleList,
@@ -760,6 +934,7 @@ DirectLightingRenderer::DirectLightingRenderer(
             .colorAttachmentCount = 1U
         });
 
+    emptySunAuditTerrain_ = CreateEmptyTerrainSunShadowBuffer(device);
     dummyParticleLightGrid_ = device.CreateBuffer({
         .sizeBytes = 2U * sizeof(std::array<u32,4U>),
         .usage = rhi::BufferUsage::Structured,
@@ -810,7 +985,7 @@ void DirectLightingRenderer::Draw(
     constexpr f32 kPhotopicLuminousEfficacy =
         683.0F;
 
-    const std::array<u32, 32> constants{
+    const std::array<u32, 40> constants{
         bits(light.directionToLight.x),
         bits(light.directionToLight.y),
         bits(light.directionToLight.z),
@@ -864,7 +1039,17 @@ void DirectLightingRenderer::Draw(
                     radianceLevels != nullptr
                 ? static_cast<f32>(radianceLevelCount)
                 : 0.0F),
-        bits(std::max(skyCacheStrength, 0.0F))
+        bits(std::max(skyCacheStrength, 0.0F)),
+        bits(std::max(settings.planetRadiusMeters, 0.0F)),
+        bits(std::max(settings.stellarAngularRadiusRadians, 0.0F)),
+        bits(static_cast<f32>(std::min<u8>(settings.sunAuditMethod, 3U))),
+        bits(settings.sunAuditDebug ? 1.0F : 0.0F),
+
+        bits(std::max(settings.skyIrradianceLinear.x, 0.0F)),
+        bits(std::max(settings.skyIrradianceLinear.y, 0.0F)),
+        bits(std::max(settings.skyIrradianceLinear.z, 0.0F)),
+        bits(settings.terrainAmbient != nullptr && settings.terrainAmbientLevels != nullptr
+                ? static_cast<f32>(settings.terrainAmbientLevelCount) : 0.0F)
     };
 
     commands.SetRenderTarget(targetSceneColor);
@@ -912,6 +1097,18 @@ void DirectLightingRenderer::Draw(
         radianceLevels != nullptr
             ? *radianceLevels
             : *dummyParticleLightGrid_);
+
+    commands.SetGraphicsBuffer(6U,
+        settings.sunAuditTerrain != nullptr
+            ? *settings.sunAuditTerrain : *emptySunAuditTerrain_);
+    // Without the terrain ambient channel (count 0) the shader never reads
+    // these, but both slots still need a buffer.
+    commands.SetGraphicsBuffer(7U,
+        settings.terrainAmbient != nullptr
+            ? *settings.terrainAmbient : *emptySunAuditTerrain_);
+    commands.SetGraphicsBuffer(8U,
+        settings.terrainAmbientLevels != nullptr
+            ? *settings.terrainAmbientLevels : *emptySunAuditTerrain_);
 
     commands.SetGraphicsTexture(
         0U,

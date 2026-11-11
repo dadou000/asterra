@@ -3,10 +3,14 @@
 #include <orbit/editor_model/CelestialAuthoringModel.hpp>
 #include <orbit/editor_model/CelestialRecipeService.hpp>
 #include <orbit/editor_model/PlanetSurface.hpp>
+#include <orbit/editor_model/ViewportManipulator.hpp>
 
 #include <orbit/math/Vector.hpp>
 #include <orbit/paths/PathNetwork.hpp>
+#include <orbit/world_model/AtmospherePropertySolver.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <optional>
@@ -108,6 +112,189 @@ RequireObjectId(
     }
 
     return *id;
+}
+
+[[nodiscard]] const char* AtmosphereOutcomeName(
+    const world_model::AtmosphereSolveOutcome outcome) noexcept
+{
+    switch (outcome)
+    {
+    case world_model::AtmosphereSolveOutcome::NoChange:
+        return "no_change";
+    case world_model::AtmosphereSolveOutcome::Derived:
+        return "derived";
+    case world_model::AtmosphereSolveOutcome::Conflict:
+        return "conflict";
+    case world_model::AtmosphereSolveOutcome::InvalidInput:
+        return "invalid_input";
+    }
+
+    return "unknown";
+}
+
+[[nodiscard]] scene::ObjectId RequireAtmosphereCapability(
+    const rpc::Value::Object& values,
+    const scene::ObjectStore& objects)
+{
+    const auto id =
+        RequireObjectId(
+            values,
+            "atmosphere");
+
+    const auto object =
+        objects.Find(
+            id);
+
+    if (!object.has_value())
+    {
+        throw rpc::Error(
+            1004,
+            "Object not found.");
+    }
+
+    if (object->type !=
+        world_model::kAtmosphereCapabilityType)
+    {
+        throw rpc::Error(
+            -32602,
+            "atmosphere must be the id of an atmosphere capability object (see celestial.capabilities and object.list).");
+    }
+
+    return id;
+}
+
+[[nodiscard]] rpc::Value AtmosphereReportToValue(
+    const world_model::AtmosphereSolveReport& report,
+    const schema::SchemaRegistry& schemas)
+{
+    rpc::Value::Array events;
+
+    for (const auto& event :
+         report.events)
+    {
+        const auto* property =
+            schemas.FindProperty(
+                world_model::kAtmosphereCapabilityType,
+                event.target);
+
+        events.emplace_back(
+            rpc::Value(
+                rpc::Value::Object{
+                    {"property",
+                     event.target.ToString()},
+                    {"name",
+                     property != nullptr
+                         ? property->name
+                         : std::string{}},
+                    {"outcome",
+                     std::string(
+                         AtmosphereOutcomeName(
+                             event.outcome))},
+                    {"explanation",
+                     event.explanation}
+                }));
+    }
+
+    return rpc::Value(
+        rpc::Value::Object{
+            {"events",
+             rpc::Value(
+                 std::move(events))},
+            {"derived_count",
+             static_cast<f64>(
+                 report.DerivedCount())},
+            {"has_conflict",
+             report.HasConflict()},
+            {"has_invalid_input",
+             report.HasInvalidInput()}
+        });
+}
+
+[[nodiscard]] editor_model::ManipulatorTool ParseManipulatorTool(
+    const std::string& text)
+{
+    if (text == "translate" || text == "move")
+    {
+        return editor_model::ManipulatorTool::Translate;
+    }
+
+    if (text == "rotate")
+    {
+        return editor_model::ManipulatorTool::Rotate;
+    }
+
+    if (text == "scale")
+    {
+        return editor_model::ManipulatorTool::Scale;
+    }
+
+    throw rpc::Error(
+        -32602,
+        "tool must be translate, rotate or scale.");
+}
+
+[[nodiscard]] editor_model::ManipulatorAxis ParseManipulatorAxis(
+    const std::string& text)
+{
+    if (text == "x")
+    {
+        return editor_model::ManipulatorAxis::X;
+    }
+
+    if (text == "y")
+    {
+        return editor_model::ManipulatorAxis::Y;
+    }
+
+    if (text == "z")
+    {
+        return editor_model::ManipulatorAxis::Z;
+    }
+
+    if (text == "uniform")
+    {
+        return editor_model::ManipulatorAxis::Uniform;
+    }
+
+    throw rpc::Error(
+        -32602,
+        "axis must be x, y, z or uniform.");
+}
+
+[[nodiscard]] rpc::Value Double3ToValue(
+    const math::Double3& value)
+{
+    return rpc::Value(
+        rpc::Value::Array{
+            rpc::Value(value.x),
+            rpc::Value(value.y),
+            rpc::Value(value.z)});
+}
+
+[[nodiscard]] editor_model::ManipulatorTarget RequireManipulatorTarget(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId object)
+{
+    if (!objects.Find(object).has_value())
+    {
+        throw rpc::Error(
+            1004,
+            "Object not found.");
+    }
+
+    const auto target =
+        editor_model::ResolveManipulatorTarget(
+            objects,
+            object);
+
+    if (!target.has_value())
+    {
+        throw rpc::Error(
+            -32602,
+            "This object type has no move/rotate/scale properties (supported: Primitive, Visibility Proxy, Point Light, Spot Light).");
+    }
+
+    return *target;
 }
 
 [[nodiscard]] schema::TypeId
@@ -897,9 +1084,13 @@ PathEdgeToRpc(
                 }
             },
             {
-                "profile_override",
-                edge.profileOverride
-            }
+                "profile_override", edge.profileOverride
+            },
+            {"infrastructure_catalog", edge.infrastructureCatalogId},
+            {"infrastructure_version", edge.infrastructureCatalogVersion},
+            {"construction_mode", edge.constructionMode},
+            {"design_speed_kmh", edge.designSpeedKmh},
+            {"ease_turns", edge.easeTurns}
         });
 }
 
@@ -1827,6 +2018,251 @@ EditorRpcService::EditorRpcService(
 
     Register(
         {
+            .name = "atmosphere.presets",
+            .description =
+                "Lists the named atmosphere presets accepted by atmosphere.apply_preset.",
+            .mutating = false
+        },
+        [](const rpc::Value&)
+        {
+            rpc::Value::Array names;
+
+            for (const auto name :
+                 world_model::AtmospherePropertySolver::
+                     Presets())
+            {
+                names.emplace_back(
+                    rpc::Value(
+                        std::string(name)));
+            }
+
+            return rpc::Value(
+                std::move(names));
+        });
+
+    Register(
+        {
+            .name = "atmosphere.solve",
+            .description =
+                "Runs the atmosphere property solver on an atmosphere capability object, deriving dependent properties from the authored ones. Returns the per-property solve report (derived, no_change, conflict, invalid_input) with explanations.",
+            .mutating = true
+        },
+        [&objects,
+         &schemas,
+         &commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            world_model::AtmospherePropertySolver solver(
+                objects,
+                commandService);
+
+            return AtmosphereReportToValue(
+                solver.Solve(
+                    RequireAtmosphereCapability(
+                        values,
+                        objects)),
+                schemas);
+        });
+
+    Register(
+        {
+            .name = "atmosphere.apply_preset",
+            .description =
+                "Applies a named atmosphere preset (see atmosphere.presets) to an atmosphere capability object as one undoable transaction and returns the solve report.",
+            .mutating = true
+        },
+        [&objects,
+         &schemas,
+         &commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            const std::string preset =
+                RequireString(
+                    values,
+                    "preset");
+
+            const auto known =
+                world_model::AtmospherePropertySolver::
+                    Presets();
+
+            if (std::find(
+                    known.begin(),
+                    known.end(),
+                    std::string_view(preset)) ==
+                known.end())
+            {
+                throw rpc::Error(
+                    -32602,
+                    "Unknown atmosphere preset: " +
+                        preset +
+                        " (see atmosphere.presets).");
+            }
+
+            const auto atmosphere =
+                RequireAtmosphereCapability(
+                    values,
+                    objects);
+
+            world_model::AtmospherePropertySolver solver(
+                objects,
+                commandService);
+
+            return AtmosphereReportToValue(
+                solver.ApplyPreset(
+                    atmosphere,
+                    preset),
+                schemas);
+        });
+
+    Register(
+        {
+            .name = "object.transform_info",
+            .description =
+                "Describes how an object can be moved, rotated and scaled with object.transform: which tools it supports, its position and its local axes.",
+            .mutating = false
+        },
+        [&objects](const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+            const auto target =
+                RequireManipulatorTarget(
+                    objects,
+                    RequireObjectId(
+                        values,
+                        "object"));
+
+            rpc::Value::Array tools;
+
+            if (target.canTranslate)
+            {
+                tools.emplace_back(rpc::Value("translate"));
+            }
+
+            if (target.canRotate)
+            {
+                tools.emplace_back(rpc::Value("rotate"));
+            }
+
+            if (target.canScale)
+            {
+                tools.emplace_back(rpc::Value("scale"));
+            }
+
+            return rpc::Value(
+                rpc::Value::Object{
+                    {"object", target.object.ToString()},
+                    {"tools", rpc::Value(std::move(tools))},
+                    {"position", Double3ToValue(target.position)},
+                    {"axis_x", Double3ToValue(target.rotation.xAxis)},
+                    {"axis_y", Double3ToValue(target.rotation.yAxis)},
+                    {"axis_z", Double3ToValue(target.rotation.zAxis)}
+                });
+        });
+
+    Register(
+        {
+            .name = "object.transform",
+            .description =
+                "Moves, rotates or scales an object along one axis as ONE undoable step, exactly like dragging a viewport gizmo handle. tool: translate (amount in meters), rotate (degrees) or scale (positive factor, axis uniform allowed). axis: x, y, z or uniform. space: world (default) or local; scale always uses the object's own axes.",
+            .mutating = true
+        },
+        [&objects,
+         &commandService](const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            const auto target =
+                RequireManipulatorTarget(
+                    objects,
+                    RequireObjectId(
+                        values,
+                        "object"));
+
+            const auto tool =
+                ParseManipulatorTool(
+                    RequireString(
+                        values,
+                        "tool"));
+            const auto axis =
+                ParseManipulatorAxis(
+                    RequireString(
+                        values,
+                        "axis"));
+
+            auto space =
+                editor_model::ManipulatorSpace::World;
+
+            if (const auto found =
+                    values.find("space");
+                found != values.end() &&
+                !found->second.IsNull())
+            {
+                if (!found->second.IsString() ||
+                    (found->second.AsString() != "world" &&
+                     found->second.AsString() != "local"))
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "space must be world or local.");
+                }
+
+                if (found->second.AsString() == "local")
+                {
+                    space =
+                        editor_model::ManipulatorSpace::Local;
+                }
+            }
+
+            const auto& amount =
+                Require(
+                    values,
+                    "amount");
+
+            if (!amount.IsNumber())
+            {
+                throw rpc::Error(
+                    -32602,
+                    "amount must be a number.");
+            }
+
+            editor_model::ViewportManipulator manipulator(
+                objects,
+                commandService);
+
+            try
+            {
+                const std::string summary =
+                    manipulator.ApplyDelta(
+                        target,
+                        tool,
+                        space,
+                        axis,
+                        amount.AsNumber());
+
+                return rpc::Value(
+                    rpc::Value::Object{
+                        {"ok", true},
+                        {"summary", summary}
+                    });
+            }
+            catch (const std::invalid_argument& error)
+            {
+                throw rpc::Error(
+                    -32602,
+                    error.what());
+            }
+        });
+
+    Register(
+        {
             .name = "property.set",
             .description =
                 "Sets a schema property through CommandService.",
@@ -2168,6 +2604,30 @@ EditorRpcService::EditorRpcService(
                         profile
                     }
                 });
+        });
+
+    Register(
+        {
+            .name = "infrastructure.set_intent",
+            .description = "Set road/rail catalog and construction intent on a path edge in one undoable transaction.",
+            .mutating = true
+        },
+        [&objects, &commandService](const rpc::Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const auto edge = RequireObjectId(values, "edge");
+            const auto& cat = Require(values, "catalog_id");
+            const auto& ver = Require(values, "catalog_version");
+            const auto& mode = Require(values, "construction_mode");
+            const auto& speed = Require(values, "design_speed_kmh");
+            const auto& ease = Require(values, "ease_turns");
+            if (!cat.IsString() || !ver.IsInteger() || !mode.IsString() ||
+                !speed.IsNumber() || !ease.IsBool())
+                throw rpc::Error(-32602, "Invalid infrastructure intent parameter types.");
+            paths::PathNetworkService service(objects, commandService);
+            service.SetInfrastructureIntent(edge, cat.AsString(), ver.AsInteger(),
+                mode.AsString(), speed.AsNumber(), ease.AsBool());
+            return PathEdgeToRpc(*service.FindEdge(edge));
         });
 
     Register(

@@ -732,6 +732,8 @@ VulkanDevice::VulkanDevice(
       debugMessenger_(debugMessenger),
       renderDoc_(std::move(renderDoc))
 {
+    progress_ = std::make_unique<GpuProgress>(nativeDevice_);
+
     VkSamplerCreateInfo samplerCreateInfo{};
     samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerCreateInfo.magFilter = VK_FILTER_LINEAR;
@@ -771,6 +773,14 @@ VulkanDevice::~VulkanDevice()
     if (nativeDevice_ != VK_NULL_HANDLE)
     {
         vkDeviceWaitIdle(nativeDevice_);
+    }
+
+    // Deferred destroys call into the allocator and device, so they run
+    // (and the progress timeline goes) before either is torn down.
+    if (progress_ != nullptr)
+    {
+        progress_->Flush();
+        progress_.reset();
     }
 
     if (defaultSampler_ != VK_NULL_HANDLE)
@@ -837,7 +847,8 @@ std::unique_ptr<Queue> VulkanDevice::CreateQueue(const QueueType type)
         nativeQueue,
         graphicsFamilyIndex_,
         type,
-        functions_);
+        functions_,
+        progress_.get());
 }
 
 std::unique_ptr<Fence> VulkanDevice::CreateFence(const u64 initialValue)
@@ -882,7 +893,7 @@ VulkanDevice::CreateCommandAllocator(const QueueType type)
     }
 
     return std::make_unique<VulkanCommandAllocator>(
-        nativeDevice_, type, pool);
+        nativeDevice_, type, pool, progress_.get());
 }
 
 std::unique_ptr<CommandList> VulkanDevice::CreateCommandList(
@@ -914,13 +925,16 @@ std::unique_ptr<CommandList> VulkanDevice::CreateCommandList(
             "Orbit failed to allocate a Vulkan command buffer.");
     }
 
-    return std::make_unique<VulkanCommandList>(
+    auto commandList = std::make_unique<VulkanCommandList>(
         nativeDevice_,
         allocator.Type(),
         vulkanAllocator->Native(),
         commandBuffer,
         functions_,
-        defaultSampler_);
+        defaultSampler_,
+        progress_.get());
+    commandList->NoteAllocator(*vulkanAllocator);
+    return commandList;
 }
 } // namespace detail
 

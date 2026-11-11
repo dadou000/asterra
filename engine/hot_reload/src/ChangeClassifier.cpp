@@ -137,6 +137,11 @@ ChangeKind ClassifyChange(const std::filesystem::path& path)
         // they can be swapped independently, so for now they use the seamless
         // incremental Studio generation refresh rather than being consumed by
         // the direct-resource queue with no effect.
+        if (generic.find("engine/weather_gpu/shaders/") != std::string::npos)
+        {
+            // GpuStormSolver::ReloadShaders swaps the pipelines in place and keeps the running ones when the edit does not compile.
+            return ChangeKind::EngineShader;
+        }
         return IsContentPath(generic)
             ? ChangeKind::Shader
             : ChangeKind::RestartRequired;
@@ -145,6 +150,17 @@ ChangeKind ClassifyChange(const std::filesystem::path& path)
     if (IsOneOf(extension, {".lua", ".luau"}))
     {
         return ChangeKind::Script;
+    }
+
+    // Studio HTML panel pages live in a web/ folder (apps/editor/web, engine/<module>/web).
+    if ((generic.starts_with("apps/") || generic.starts_with("engine/") ||
+         generic.find("/apps/") != std::string::npos || generic.find("/engine/") != std::string::npos) &&
+        generic.find("/web/") != std::string::npos &&
+        IsOneOf(
+            extension,
+            {".html", ".htm", ".js", ".mjs", ".css", ".svg", ".json", ".woff2", ".woff", ".png", ".jpg", ".webp"}))
+    {
+        return ChangeKind::WebAsset;
     }
 
     if (filename.ends_with(".orbitimport.toml") ||
@@ -190,6 +206,10 @@ std::string_view ChangeKindName(const ChangeKind kind) noexcept
         return "native-module";
     case ChangeKind::Shader:
         return "shader";
+    case ChangeKind::EngineShader:
+        return "engine-shader";
+    case ChangeKind::WebAsset:
+        return "web-asset";
     case ChangeKind::Script:
         return "script";
     case ChangeKind::Content:

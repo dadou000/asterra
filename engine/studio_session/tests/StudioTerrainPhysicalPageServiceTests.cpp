@@ -6,16 +6,22 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <source_location>
 #include <thread>
 
 namespace
 {
-void Check(const bool condition)
+void Check(
+    const bool condition,
+    const std::source_location location =
+        std::source_location::current())
 {
     if (!condition)
     {
         std::cerr
-            << "Studio M12 physical page service test failed.\n";
+            << "Studio M12 physical page service test failed at line "
+            << location.line()
+            << ".\n";
         std::exit(1);
     }
 }

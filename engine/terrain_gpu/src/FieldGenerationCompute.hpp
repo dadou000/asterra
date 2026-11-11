@@ -91,6 +91,17 @@ static const uint kParamCraterCumulativeExponent = 50;
 static const uint kParamLocalCraterLevels = 51;
 static const uint kParamLocalCraterBaseSpacingMeters = 52;
 static const uint kParamLocalCraterDensity = 53;
+static const uint kParamBakedTectonicResolution = 54;
+static const uint kParamRiverIndexCount = 55;
+static const uint kParamRiverSegmentCount = 56;
+static const uint kParamIncisionResolution = 57;
+static const uint kParamGeologyResolution = 58;
+static const uint kParamGeologyLevelCount = 59;
+static const uint kParamPhacelleStrength = 60;
+static const uint kParamPhacelleScale = 61;
+static const uint kParamPhacelleOctaves = 62;
+static const uint kParamPhacelleLowlandFade = 63;
+static const uint kParamPhacelleNonMountainWeight = 64;
 
 static const uint kMaxHotspotAgeSteps = 6u;
 static const uint kPlateStrideBytes = 36u;
@@ -108,6 +119,10 @@ ByteAddressBuffer g_hotspots : register(t2);
 RWByteAddressBuffer g_output : register(u3);
 [[vk::binding(4, 0)]]
 ByteAddressBuffer g_craters : register(t4);
+[[vk::binding(5, 0)]]
+ByteAddressBuffer g_bakedTectonics : register(t5);
+[[vk::binding(6, 0)]]
+ByteAddressBuffer g_rivers : register(t6);
 
 // float4, not float3, for every basis vector below: HLSL/DXC pads a
 // bare float3 push-constant member out to a 16-byte slot anyway (the
@@ -372,27 +387,86 @@ void OctaveBand(
 }
 
 // === Tectonics (elevation-relevant subset only: convergenceMask and
-// plateBiasMeters -- divergence/transform/continental-flag outputs exist
-// only for the CPU-side 2D map's boundary classification, unused here) ===
+// plateBiasMeters -- divergence/transform/collision-class outputs exist
+// only for the CPU side (2D map, macro geology), unused here) ===
 )" R"(
-float3 SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMeters)
+// Baked tectonic rasters: interleaved {convergence, plate bias, structural
+// elevation} per texel of six
+// cube faces, each with a one-texel gutter (mirrors BakedTectonicRasters).
+float4 BakedTectonicTexel(uint face, int x, int y, uint resolution)
 {
+    uint stride = resolution + 2u;
+    uint index = (face * stride + uint(y + 1)) * stride + uint(x + 1);
+    return asfloat(g_bakedTectonics.Load4(index * 16u));
+}
+
+float SampleBakedConvergenceAndBias(float3 direction, out float plateBiasMeters, out float structuralMeters, out float collisionLand)
+{
+    uint resolution = ParamUint(kParamBakedTectonicResolution);
+    float3 a = abs(direction);
+    uint face = 4u;
+    float2 uv = float2(0.0, 0.0);
+    // Same face selection and orientation as world::UnitDirectionToCube.
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        if (direction.x >= 0.0) { face = 0u; uv = float2(-direction.z, direction.y) / a.x; }
+        else { face = 1u; uv = float2(direction.z, direction.y) / a.x; }
+    }
+    else if (a.y >= a.x && a.y >= a.z)
+    {
+        if (direction.y >= 0.0) { face = 2u; uv = float2(direction.x, -direction.z) / a.y; }
+        else { face = 3u; uv = float2(direction.x, direction.z) / a.y; }
+    }
+    else
+    {
+        if (direction.z >= 0.0) { face = 4u; uv = float2(direction.x, direction.y) / a.z; }
+        else { face = 5u; uv = float2(-direction.x, direction.y) / a.z; }
+    }
+    uv = clamp(uv, float2(-1.0, -1.0), float2(1.0, 1.0));
+
+    float r = float(resolution);
+    float fx = (uv.x + 1.0) * 0.5 * r - 0.5;
+    float fy = (uv.y + 1.0) * 0.5 * r - 0.5;
+    int last = int(resolution) - 1;
+    int x0 = clamp(int(floor(fx)), -1, last);
+    int y0 = clamp(int(floor(fy)), -1, last);
+    float tx = saturate(fx - float(x0));
+    float ty = saturate(fy - float(y0));
+
+    float4 t00 = BakedTectonicTexel(face, x0, y0, resolution);
+    float4 t10 = BakedTectonicTexel(face, x0 + 1, y0, resolution);
+    float4 t01 = BakedTectonicTexel(face, x0, y0 + 1, resolution);
+    float4 t11 = BakedTectonicTexel(face, x0 + 1, y0 + 1, resolution);
+    float4 blended = lerp(lerp(t00, t10, tx), lerp(t01, t11, tx), ty);
+    plateBiasMeters = blended.y;
+    structuralMeters = blended.z;
+    collisionLand = blended.w;
+    return blended.x;
+}
+
+// structuralMeters is baked only (the plate model has no structural elevation),
+// so it is zero on the unbaked path -- same as the CPU.
+float SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMeters, out float structuralMeters, out float collisionLand)
+{
+    if (ParamUint(kParamBakedTectonicResolution) != 0u)
+    {
+        return SampleBakedConvergenceAndBias(direction, plateBiasMeters, structuralMeters, collisionLand);
+    }
+    structuralMeters = 0.0;
+    collisionLand = 0.0;
+
     uint plateCount = ParamUint(kParamPlateCount);
     uint nearest = 0u;
-    uint second = 0u;
-    float d0 = -2.0;
-    float d1 = -2.0;
+    float dTop = -2.0;
+    float dAll[24];
 
     for (uint i = 0; i < plateCount; ++i)
     {
         float d = dot(direction, PlateSeedDirection(i)) + PlateSizeBias(i);
-        if (d > d0)
+        dAll[i] = d;
+        if (d > dTop)
         {
-            second = nearest; d1 = d0; nearest = i; d0 = d;
-        }
-        else if (d > d1)
-        {
-            second = i; d1 = d;
+            nearest = i; dTop = d;
         }
     }
 
@@ -402,35 +476,72 @@ float3 SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMet
         return 0.0;
     }
 
-    float boundaryWidthDot = ParamFloat(kParamBoundaryWidthDot);
-    float boundaryMask = Smooth(1.0 - (d0 - d1) / max(boundaryWidthDot, 1.0e-9));
+    float width = max(ParamFloat(kParamBoundaryWidthDot), 1.0e-9);
 
-    float convergenceMask = 0.0;
-    if (boundaryMask > 0.0)
+    // Every plate within one boundary width of the top takes part in the
+    // local boundary structure; all pairs among them are evaluated so the
+    // mask stays continuous where the runner-up plate changes (mirrors
+    // TectonicField::Sample, kMaxBoundaryCandidates == 8).
+    uint candidates[8];
+    uint candidateCount = 0u;
+    for (uint c = 0; c < plateCount && candidateCount < 8u; ++c)
     {
-        float3 towardSecond = PlateSeedDirection(second) - PlateSeedDirection(nearest);
-        float3 tangentToward = towardSecond - direction * dot(towardSecond, direction);
-        float tangentLenSq = dot(tangentToward, tangentToward);
-        if (tangentLenSq > 0.0)
+        if (dTop - dAll[c] < width)
         {
-            float3 normal = tangentToward / sqrt(tangentLenSq);
-            float3 vNearest = cross(PlateEulerVector(nearest), direction);
-            float3 vSecond = cross(PlateEulerVector(second), direction);
-            float3 relative = vNearest - vSecond;
-
-            float normalSpeed = dot(relative, normal);
-            float convergence = max(0.0, -normalSpeed);
-
-            bool eitherContinental = (PlateIsContinental(nearest) > 0.5) || (PlateIsContinental(second) > 0.5);
-            float collisionScale = eitherContinental ? 1.0 : ParamFloat(kParamOceanicConvergenceScale);
-
-            float referenceSpeed = max(ParamFloat(kParamConvergenceReferenceSpeed), 1.0e-9);
-            convergenceMask = boundaryMask * Smooth(convergence / referenceSpeed) * collisionScale;
+            candidates[candidateCount] = c;
+            candidateCount += 1u;
         }
     }
 
-    float crossBlend = Smooth(0.5 + 0.5 * (d1 - d0) / max(boundaryWidthDot, 1.0e-9));
-    plateBiasMeters = lerp(PlateContinentalBias(nearest), PlateContinentalBias(second), crossBlend);
+    float referenceSpeed = max(ParamFloat(kParamConvergenceReferenceSpeed), 1.0e-9);
+    float convergenceMask = 0.0;
+    for (uint ca = 0; ca < candidateCount; ++ca)
+    {
+        for (uint cb = ca + 1u; cb < candidateCount; ++cb)
+        {
+            uint pi = candidates[ca];
+            uint pj = candidates[cb];
+
+            float weight = min(
+                min(Smooth(1.0 - (dTop - dAll[pi]) / width),
+                    Smooth(1.0 - (dTop - dAll[pj]) / width)),
+                Smooth(1.0 - abs(dAll[pi] - dAll[pj]) / width));
+            if (weight <= 0.0)
+            {
+                continue;
+            }
+
+            float3 towardJ = PlateSeedDirection(pj) - PlateSeedDirection(pi);
+            float3 tangentToward = towardJ - direction * dot(towardJ, direction);
+            float tangentLenSq = dot(tangentToward, tangentToward);
+            if (tangentLenSq <= 0.0)
+            {
+                continue;
+            }
+
+            float3 normal = tangentToward / sqrt(tangentLenSq);
+            float3 relative = cross(PlateEulerVector(pi), direction) - cross(PlateEulerVector(pj), direction);
+            float convergence = max(0.0, -dot(relative, normal));
+
+            bool eitherContinental = (PlateIsContinental(pi) > 0.5) || (PlateIsContinental(pj) > 0.5);
+            float collisionScale = eitherContinental ? 1.0 : ParamFloat(kParamOceanicConvergenceScale);
+
+            convergenceMask = max(convergenceMask, weight * Smooth(convergence / referenceSpeed) * collisionScale);
+        }
+    }
+
+    // Bias blend over every plate near the top; weights g / (1 - g) reproduce
+    // the original two-plate lerp exactly and stay symmetric (see CPU).
+    float biasWeightSum = 0.0;
+    float biasSum = 0.0;
+    for (uint k = 0; k < plateCount; ++k)
+    {
+        float g = Smooth(0.5 + 0.5 * (dAll[k] - dTop) / width);
+        float u = g / (1.0 - g);
+        biasWeightSum += u;
+        biasSum += u * PlateContinentalBias(k);
+    }
+    plateBiasMeters = biasWeightSum > 0.0 ? biasSum / biasWeightSum : PlateContinentalBias(nearest);
     return convergenceMask;
 }
 
@@ -480,7 +591,9 @@ float ContinentalSignal(float3 direction)
 float PlateElevationEstimateMeters(float3 direction)
 {
     float plateBiasMeters;
-    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters);
+    float structuralMeters;
+    float collisionLand;
+    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters, structuralMeters, collisionLand);
 
     float continentalAmplitudeSafe = max(ParamFloat(kParamContinentalAmplitudeMeters), 1.0e-9);
     float blendedSignal = ContinentalSignal(direction) +
@@ -492,7 +605,7 @@ float PlateElevationEstimateMeters(float3 direction)
     float convergenceBump = convergenceMask * ParamFloat(kParamConvergenceUpliftMeters);
     float hotspotBump = HotspotElevationMeters(direction);
 
-    return continentalElevation + convergenceBump + hotspotBump;
+    return continentalElevation + structuralMeters + convergenceBump + hotspotBump;
 }
 
 struct GlobalSample
@@ -515,7 +628,9 @@ GlobalSample SampleGlobalFields(float3 direction, float footprintMeters)
     float mountainWeight = DetailWeight(ParamFloat(kParamGlobalMountainWavelengthMeters), footprintMeters);
 
     float plateBiasMeters;
-    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters);
+    float structuralMeters;
+    float collisionLand;
+    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters, structuralMeters, collisionLand);
 
     float continentSignal = ContinentalSignal(direction);
     float continentalAmplitudeSafe = max(ParamFloat(kParamContinentalAmplitudeMeters), 1.0e-9);
@@ -525,7 +640,9 @@ GlobalSample SampleGlobalFields(float3 direction, float footprintMeters)
     float continentalElevation = (blendedSignal * ParamFloat(kParamContinentalAmplitudeMeters) +
         ParamFloat(kParamContinentalBiasMeters)) * continentalWeight;
 
-    float landMask = Smooth((blendedSignal + 0.15) / 0.55);
+    // Thick continental collision is land whatever the noise coastline says
+    // (mirrors GlobalTerrainFields).
+    float landMask = max(Smooth((blendedSignal + 0.15) / 0.55), collisionLand);
 
     float globalMountainAmplitude = ParamFloat(kParamGlobalMountainAmplitudeMeters);
     float globalMountainWavelength = ParamFloat(kParamGlobalMountainWavelengthMeters);
@@ -545,10 +662,18 @@ GlobalSample SampleGlobalFields(float3 direction, float footprintMeters)
                 globalSeed ^ MakeU64(0x94D049BBu, 0x133111EBu)) * 0.5 + 0.5);
     }
 
-    float mountainElevation = mountainRidges * mountainModulation * landMask * convergenceMask *
-        globalMountainAmplitude * mountainWeight;
+    // The orogenic belt itself comes from the plate boundary and survives zero
+    // noise; ridged noise only sculpts it. The envelope is a smooth raster, so
+    // it does not fade with the footprint -- only the noise sculpting does
+    // (mirrors GlobalTerrainFields).
+    float mountainElevation = (0.65 + 0.35 * mountainRidges * mountainModulation * mountainWeight) *
+        landMask * convergenceMask * globalMountainAmplitude;
 
-    float coarseElevation = continentalElevation + mountainElevation;
+    // ... and it stays above sea level (kCollisionEmergeMeters = 1800); the lift
+    // fades in with the mask, as in GlobalTerrainFields.
+    float unliftedElevation = continentalElevation + mountainElevation + structuralMeters;
+    float coarseElevation = unliftedElevation + collisionLand *
+        max(0.0, ParamFloat(kParamSeaLevelMeters) + collisionLand * 1800.0 - unliftedElevation);
 
     float latitude = saturate(abs(direction.y));
     float climateNoise = SampleBand(direction, radius, ParamFloat(kParamClimateWavelengthMeters),
@@ -660,6 +785,125 @@ float MountainShape(float3 direction, float footprintMeters)
     return ShapeRidge(sum / max(ParamFloat(kParamMountainNormalization), 1.0));
 }
 
+// === Planet-continuous, optional Phacelle erosion ===
+// Adapted from ORBIT v153's slope-guided Phacelle erosion filter.
+// Original filter: Rune Skovbo Johansen (2025), MPL-2.0.
+// See engine/terrain/src/PhacelleErosion.hpp for licensing notes.
+uint ErosionAvalanche(uint v)
+{
+    v ^= v >> 16u; v *= 0x7feb352du; v ^= v >> 15u;
+    v *= 0x846ca68bu; return v ^ (v >> 16u);
+}
+float2 ErosionHash(int2 xy)
+{
+    uint k=uint(xy.x)*0x9e3779b1u ^ uint(xy.y)*0x85ebca77u;
+    return float2(ErosionAvalanche(k)&0xffffffu,ErosionAvalanche(k^0x68bc21ebu)&0xffffffu)/8388608.0-1.0;
+}
+float3 ErosionGradient(float2 p)
+{
+    int2 ip=int2(floor(p)); float2 f=frac(p);
+    float2 u=f*f*f*(f*(f*6.0-15.0)+10.0);
+    float2 du=30.0*f*f*(f*(f-2.0)+1.0);
+    float2 a=ErosionHash(ip),b=ErosionHash(ip+int2(1,0)),c=ErosionHash(ip+int2(0,1)),d=ErosionHash(ip+int2(1,1));
+    float va=dot(a,f),vb=dot(b,f-float2(1,0)),vc=dot(c,f-float2(0,1)),vd=dot(d,f-1.0);
+    float q=va-vb-vc+vd;
+    float value=va+u.x*(vb-va)+u.y*(vc-va)+u.x*u.y*q;
+    float2 slope=a+u.x*(b-a)+u.y*(c-a)+u.x*u.y*(a-b-c+d);
+    slope.x+=du.x*(u.y*q+vb-va);
+    slope.y+=du.y*(u.x*q+vc-va);
+    return float3(value,slope);
+}
+float3 ErosionFbm(float2 p)
+{
+    float3 sum=0.0;float f=3.0,amplitude=1.0;
+    [unroll] for(int i=0;i<3;i++)
+    {
+        float3 g=ErosionGradient(p*f);
+        sum+=float3(g.x,g.yz*f)*amplitude;
+        f*=2.0;amplitude*=0.1;
+    }
+    return sum;
+}
+float2 ErosionPhacelle(float2 p,float2 dir)
+{
+    static const float tau=6.283185307179586;
+    float2 sd=float2(-dir.y,dir.x)*(.7*tau);
+    int2 ij=int2(floor(p));float2 fr=frac(p);
+    float re=0.0,im=0.0,total=0.0;
+    [loop] for(int dy=-1;dy<=2;dy++)
+    [loop] for(int dx=-1;dx<=2;dx++)
+    {
+        int2 offset=int2(dx,dy);
+        float2 cell=ErosionHash(ij+offset);
+        float2 v=fr-float2(offset)-cell*.5;
+        float w=max(0.0,exp(-2.0*dot(v,v))-.01111);
+        if(w<1e-8)continue;
+        float phase=dot(v,sd)+.25*tau;
+        re+=cos(phase)*w;im+=sin(phase)*w;total+=w;
+    }
+    if(total<1e-10)return float2(0,0);
+    float2 value=float2(re,im)/total;
+    return value/max(.5,length(value));
+}
+float ErosionEaseOut(float t){float v=1.0-saturate(t);return 1.0-v*v;}
+float ErosionSmoothStart(float x,float s){if(s<=1e-10)return max(0.0,x);if(x>=s)return x-.5*s;return .5*x*x/s;}
+float ErosionPowInv(float t,float power){return 1.0-pow(1.0-saturate(t),power);}
+float ErosionChart(float2 p,float footprint,float scale,float erosionStrength,uint octaves)
+{
+    float3 f=ErosionFbm(p);
+    float height=.125*f.x*.5+.5,initialHeight=height;
+    float2 slope0=f.yz*.0625;
+    float len=max(length(slope0),1e-10);
+    float2 slope=slope0*(.7/len);
+    float fade=clamp(f.x/.6,-1.0,1.0);
+    float combi=ErosionEaseOut(ErosionSmoothStart(len*1.25,.01*saturate(fade+.5)*1.25));
+    float baseScale=.15*scale;
+    float frequency=1.0/max(1e-4,baseScale*.7);
+    float strength=.22*baseScale*erosionStrength;
+    float roundingMultiplier=1.0;
+    [loop] for(uint k=0u;k<5u;k++)
+    {
+        if(k>=octaves)break;
+        float w=DetailWeight(2700.0/scale/exp2(float(k)),footprint);
+        if(w<=0.0)break;
+        float sl=length(slope);
+        float2 dir=sl>1e-10?slope/sl:float2(0,0);
+        float2 cell=ErosionPhacelle(p*frequency,dir);
+        float2 side=float2(dir.y,-dir.x)*(.7*6.28318530718*frequency);
+        float signCell=cell.y<0.0?-1.0:1.0;
+        slope+=signCell*side*strength*.5;
+        float faded=lerp(fade,cell.x*.5,combi);
+        height+=faded*strength*w;
+        fade=faded;
+        float rounding=.1*saturate(cell.x+.5)*roundingMultiplier;
+        combi=ErosionPowInv(combi,1.5)*ErosionEaseOut(ErosionSmoothStart(abs(cell.y)*1.25,rounding*1.25));
+        strength*=.5;frequency*=2.0;roundingMultiplier*=2.0;
+    }
+    // The native source already provides mountain relief: only add the
+    // signed gully displacement, not v153's replacement-terrain baseline.
+    return (height-initialHeight)*85000.0*.45;
+}
+float PhacelleErosionDeltaMeters(float3 direction,float footprint)
+{
+    float strength=ParamFloat(kParamPhacelleStrength);
+    uint octaves=ParamUint(kParamPhacelleOctaves);
+    if(strength<=0.0||octaves==0u)return 0.0;
+    float scale=ParamFloat(kParamPhacelleScale);
+    float3 w=pow(abs(direction),4.0);
+    float sum=max(1e-15,w.x+w.y+w.z);
+    w*=float3(SmoothStepCubic(0.0,.003,w.x/sum),
+              SmoothStepCubic(0.0,.003,w.y/sum),
+              SmoothStepCubic(0.0,.003,w.z/sum));
+    w/=max(1e-15,w.x+w.y+w.z);
+    float m=ParamFloat(kParamPlanetRadiusMeters)/18000.0;
+    float delta=0.0;
+    if(w.x>1e-12)delta+=w.x*ErosionChart(direction.yz*m,footprint,scale,strength,octaves);
+    if(w.y>1e-12)delta+=w.y*ErosionChart(direction.xz*m,footprint,scale,strength,octaves);
+    if(w.z>1e-12)delta+=w.z*ErosionChart(direction.xy*m,footprint,scale,strength,octaves);
+    return delta;
+}
+
+)" R"(
 // === Rain shadow probe helpers (AnalyticTerrainSource.cpp) ===
 
 float ZonalWindSign(float latitudeDeg, float transitionDegrees)
@@ -977,6 +1221,192 @@ float LocalCraterHeight(float3 direction, float footprintMeters)
     return result;
 }
 )" R"(
+// Baked river network (mirrors BakedRiverNetwork::Sample): per cube-face bucket
+// {offset, count} into a segment index list, then the segments themselves as
+// {a.xyz, b.xyz, widthA, widthB, depthA, depthB}.
+static const uint kRiverBucketsPerFaceEdge = 64u;
+static const uint kRiverRangeBytes = 6u * 64u * 64u * 8u;
+static const uint kRiverSegmentBytes = 40u;
+static const float kRiverInfluenceHalfWidths = 2.0;
+
+float RiverCarveDepth(float3 direction, float footprintMeters)
+{
+    if (ParamUint(kParamRiverSegmentCount) == 0u) return 0.0;
+
+    float3 a = abs(direction);
+    uint face = 4u;
+    float2 uv = float2(0.0, 0.0);
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        if (direction.x >= 0.0) { face = 0u; uv = float2(-direction.z, direction.y) / a.x; }
+        else { face = 1u; uv = float2(direction.z, direction.y) / a.x; }
+    }
+    else if (a.y >= a.x && a.y >= a.z)
+    {
+        if (direction.y >= 0.0) { face = 2u; uv = float2(direction.x, -direction.z) / a.y; }
+        else { face = 3u; uv = float2(direction.x, direction.z) / a.y; }
+    }
+    else
+    {
+        if (direction.z >= 0.0) { face = 4u; uv = float2(direction.x, direction.y) / a.z; }
+        else { face = 5u; uv = float2(-direction.x, direction.y) / a.z; }
+    }
+    uv = clamp(uv, float2(-1.0, -1.0), float2(1.0, 1.0));
+    uint bx = min(uint((uv.x + 1.0) * 0.5 * float(kRiverBucketsPerFaceEdge)), kRiverBucketsPerFaceEdge - 1u);
+    uint by = min(uint((uv.y + 1.0) * 0.5 * float(kRiverBucketsPerFaceEdge)), kRiverBucketsPerFaceEdge - 1u);
+    uint bucket = (face * kRiverBucketsPerFaceEdge + by) * kRiverBucketsPerFaceEdge + bx;
+
+    uint2 range = g_rivers.Load2(bucket * 8u);
+    uint segmentsBase = kRiverRangeBytes + ParamUint(kParamRiverIndexCount) * 4u;
+    float radius = ParamFloat(kParamPlanetRadiusMeters);
+    float footprint = max(footprintMeters, 1.0);
+    float best = 0.0;
+
+    [loop]
+    for (uint i = 0u; i < range.y; ++i)
+    {
+        uint segment = g_rivers.Load(kRiverRangeBytes + (range.x + i) * 4u);
+        uint o = segmentsBase + segment * kRiverSegmentBytes;
+        float4 s0 = asfloat(g_rivers.Load4(o));
+        float4 s1 = asfloat(g_rivers.Load4(o + 16u));
+        float2 s2 = asfloat(g_rivers.Load2(o + 32u));
+
+        float3 pa = s0.xyz;
+        float3 pb = float3(s0.w, s1.x, s1.y);
+        float3 ab = pb - pa;
+        float lengthSquared = dot(ab, ab);
+        float t = lengthSquared > 0.0 ? clamp(dot(direction - pa, ab) / lengthSquared, 0.0, 1.0) : 0.0;
+        float3 q = normalize(pa + ab * t);
+        float distanceMeters = length(direction - q) * radius;
+
+        float width = lerp(s1.z, s1.w, t);
+        float depth = lerp(s2.x, s2.y, t);
+        if (width * 20.0 < footprint) continue;
+
+        float halfWidth = max(0.5 * width, 0.5 * footprint);
+        float amplitude = depth * min(1.0, width / max(width, footprint));
+        float profile = SmoothStepCubic(0.0, 1.0, 1.0 - distanceMeters / (kRiverInfluenceHalfWidths * halfWidth));
+        best = max(best, amplitude * profile);
+    }
+    return best;
+}
+
+// Baked stream-power relief change: bilinear gutter raster stored after the
+// segments in g_rivers (mirrors BakedRiverNetwork::IncisionDeltaMeters).
+float RiverIncisionDelta(float3 direction)
+{
+    uint resolution = ParamUint(kParamIncisionResolution);
+    if (resolution == 0u) return 0.0;
+
+    float3 a = abs(direction);
+    uint face = 4u;
+    float2 uv = float2(0.0, 0.0);
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        if (direction.x >= 0.0) { face = 0u; uv = float2(-direction.z, direction.y) / a.x; }
+        else { face = 1u; uv = float2(direction.z, direction.y) / a.x; }
+    }
+    else if (a.y >= a.x && a.y >= a.z)
+    {
+        if (direction.y >= 0.0) { face = 2u; uv = float2(direction.x, -direction.z) / a.y; }
+        else { face = 3u; uv = float2(direction.x, direction.z) / a.y; }
+    }
+    else
+    {
+        if (direction.z >= 0.0) { face = 4u; uv = float2(direction.x, direction.y) / a.z; }
+        else { face = 5u; uv = float2(-direction.x, direction.y) / a.z; }
+    }
+    uv = clamp(uv, float2(-1.0, -1.0), float2(1.0, 1.0));
+
+    float r = float(resolution);
+    float fx = (uv.x + 1.0) * 0.5 * r - 0.5;
+    float fy = (uv.y + 1.0) * 0.5 * r - 0.5;
+    int last = int(resolution);
+    int x0 = clamp(int(floor(fx)), -1, last - 1);
+    int y0 = clamp(int(floor(fy)), -1, last - 1);
+    float tx = saturate(fx - float(x0));
+    float ty = saturate(fy - float(y0));
+
+    uint stride = resolution + 2u;
+    uint baseBytes = kRiverRangeBytes + ParamUint(kParamRiverIndexCount) * 4u +
+        ParamUint(kParamRiverSegmentCount) * kRiverSegmentBytes;
+    uint i00 = (face * stride + uint(y0 + 1)) * stride + uint(x0 + 1);
+    float v00 = asfloat(g_rivers.Load(baseBytes + i00 * 4u));
+    float v10 = asfloat(g_rivers.Load(baseBytes + (i00 + 1u) * 4u));
+    float v01 = asfloat(g_rivers.Load(baseBytes + (i00 + stride) * 4u));
+    float v11 = asfloat(g_rivers.Load(baseBytes + (i00 + stride + 1u) * 4u));
+    float top = lerp(v00, v10, tx);
+    return lerp(top, lerp(v01, v11, tx), ty);
+}
+
+// Compiled impact and fracture relief follows the optional incision raster in
+// the same immutable river/geology payload buffer.
+float GeologicalReliefDelta(float3 direction, float footprintMeters)
+{
+    uint resolution = ParamUint(kParamGeologyResolution);
+    uint levelCount = ParamUint(kParamGeologyLevelCount);
+    if (resolution == 0u || levelCount == 0u) return 0.0;
+    float3 a = abs(direction);
+    uint face = 4u;
+    float2 uv = float2(0.0, 0.0);
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        if (direction.x >= 0.0) { face = 0u; uv = float2(-direction.z, direction.y) / a.x; }
+        else { face = 1u; uv = float2(direction.z, direction.y) / a.x; }
+    }
+    else if (a.y >= a.x && a.y >= a.z)
+    {
+        if (direction.y >= 0.0) { face = 2u; uv = float2(direction.x, -direction.z) / a.y; }
+        else { face = 3u; uv = float2(direction.x, direction.z) / a.y; }
+    }
+    else
+    {
+        if (direction.z >= 0.0) { face = 4u; uv = float2(direction.x, direction.y) / a.z; }
+        else { face = 5u; uv = float2(-direction.x, direction.y) / a.z; }
+    }
+    uv = clamp(uv, float2(-1.0, -1.0), float2(1.0, 1.0));
+    uint geologyBaseBytes = kRiverRangeBytes + ParamUint(kParamRiverIndexCount) * 4u +
+        ParamUint(kParamRiverSegmentCount) * kRiverSegmentBytes;
+    uint incisionResolution = ParamUint(kParamIncisionResolution);
+    if (incisionResolution != 0u)
+        geologyBaseBytes += 6u * (incisionResolution + 2u) * (incisionResolution + 2u) * 4u;
+    uint levelResolution = resolution;
+    uint selectedLevel = 0u;
+    uint levelByteOffset = 0u;
+    [loop]
+    while (selectedLevel + 1u < levelCount &&
+        footprintMeters >= 4.0 * ParamFloat(kParamPlanetRadiusMeters) / float(levelResolution))
+    {
+        levelByteOffset += 2u * 6u * (levelResolution + 2u) * (levelResolution + 2u) * 4u;
+        levelResolution /= 2u;
+        selectedLevel += 1u;
+    }
+    resolution = levelResolution;
+    uint stride = resolution + 2u;
+    float levelR = float(resolution);
+    float levelFx = (uv.x + 1.0) * 0.5 * levelR - 0.5;
+    float levelFy = (uv.y + 1.0) * 0.5 * levelR - 0.5;
+    int levelLast = int(resolution);
+    int levelX0 = clamp(int(floor(levelFx)), -1, levelLast - 1);
+    int levelY0 = clamp(int(floor(levelFy)), -1, levelLast - 1);
+    float levelTx = saturate(levelFx - float(levelX0));
+    float levelTy = saturate(levelFy - float(levelY0));
+    uint i00 = (face * stride + uint(levelY0 + 1)) * stride + uint(levelX0 + 1);
+    uint impactBytes = geologyBaseBytes + levelByteOffset;
+    uint iceBytes = impactBytes + 6u * stride * stride * 4u;
+    float impact = lerp(
+        lerp(asfloat(g_rivers.Load(impactBytes + i00 * 4u)),
+             asfloat(g_rivers.Load(impactBytes + (i00 + 1u) * 4u)), levelTx),
+        lerp(asfloat(g_rivers.Load(impactBytes + (i00 + stride) * 4u)),
+             asfloat(g_rivers.Load(impactBytes + (i00 + stride + 1u) * 4u)), levelTx), levelTy);
+    float ice = lerp(
+        lerp(asfloat(g_rivers.Load(iceBytes + i00 * 4u)),
+             asfloat(g_rivers.Load(iceBytes + (i00 + 1u) * 4u)), levelTx),
+        lerp(asfloat(g_rivers.Load(iceBytes + (i00 + stride) * 4u)),
+             asfloat(g_rivers.Load(iceBytes + (i00 + stride + 1u) * 4u)), levelTx), levelTy);
+    return impact + ice;
+}
+)" R"(
 struct FullSample
 {
     float elevationMeters;
@@ -1025,6 +1455,26 @@ FullSample GenerateSample(float3 direction, float footprintMeters)
 
     elevation += ProceduralCraterHeight(direction, footprintMeters) +
         LocalCraterHeight(direction, footprintMeters);
+    elevation += GeologicalReliefDelta(direction, footprintMeters);
+
+    // Identical CPU/GPU recipe, applied to the canonical heightfield before
+    // the normal and material passes. Never evaluate this in the draw shader.
+    float erosionMask = max(mountainMask,
+        ParamFloat(kParamPhacelleNonMountainWeight));
+    if (ParamFloat(kParamPhacelleStrength) > 0.0 &&
+        ParamUint(kParamPhacelleOctaves) > 0u && erosionMask > 1.0e-4)
+    {
+        float fadeRange = ParamFloat(kParamPhacelleLowlandFade);
+        float altitude = max(0.0, elevation - seaLevel);
+        float fade = fadeRange <= 0.0 ? 1.0 : Smooth(altitude / fadeRange);
+        if (fade > 0.0)
+        {
+            float delta = PhacelleErosionDeltaMeters(direction, footprintMeters);
+            float headroom = max(0.0, ceiling - elevation);
+            elevation += erosionMask * fade *
+                clamp(delta, -1000.0, min(1000.0, headroom));
+        }
+    }
 
     float coarseElevation = elevation;
     float detailAmplitude = ParamFloat(kParamDetailAmplitudeMeters);
@@ -1054,6 +1504,22 @@ FullSample GenerateSample(float3 direction, float footprintMeters)
 
             elevation += ValueNoise3D(direction * (radius / bandWavelength), bandSeed) *
                 bandAmplitude * weight * detailGain * landformWeight;
+        }
+    }
+
+    // Baked stream-power relief change, land only.
+    if (elevation > seaLevel && ParamUint(kParamIncisionResolution) != 0u)
+    {
+        elevation = max(elevation + RiverIncisionDelta(direction), min(elevation, seaLevel));
+    }
+
+    // Baked river channels: cut into land only, never below the water level.
+    if (elevation > seaLevel)
+    {
+        float carve = RiverCarveDepth(direction, footprintMeters);
+        if (carve > 0.0)
+        {
+            elevation = max(elevation - carve, min(elevation, seaLevel));
         }
     }
 
@@ -1218,9 +1684,14 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
             FullSample coarseSample = GenerateSample(coarseDirection, g_pc.coarseFootprintMeters);
             sample = LerpFullSample(sample, coarseSample, morph);
 
+            // The slope the coarse ring itself computes at this point: its own
+            // footprint and spacing (see fineNormalFootprintMeters / Epsilon in
+            // the request). Using the fine ring's footprint here left the fine
+            // ring's normals lumpy at the ring boundary while the coarse ring's
+            // are smooth: a hard shading edge even where the heights agree.
             float2 coarseFineSlope = SampleFineSlope(
                 g_pc.fineUp.xyz, g_pc.fineEast.xyz, g_pc.fineNorth.xyz, snappedCoarseOffset,
-                fineFootprint, fineEpsilon, radius);
+                g_pc.coarseFootprintMeters, g_pc.coarseSpacingMeters, radius);
             fineSlope = lerp(fineSlope, coarseFineSlope, morph);
         }
     }

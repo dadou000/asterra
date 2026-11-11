@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(Orbit
-    VERSION 0.0.7
+    VERSION 0.0.9
     DESCRIPTION "Orbit - custom engine for Asterra"
     LANGUAGES CXX
 )
@@ -13,6 +13,8 @@ endif()
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+option(ORBIT_ENABLE_VALIDATION_TOOLS "Include scene acceptance commands and isolated terrain validation in Studio" OFF)
 
 option(ORBIT_WARNINGS_AS_ERRORS "Treat Orbit warnings as errors" OFF)
 option(
@@ -47,31 +49,12 @@ if(MSVC AND ORBIT_PROFILER_SYMBOLS)
     endif()
 endif()
 
-# M44 performance captures must identify the exact engine revision that
-# produced them. The fallback keeps source archives/builds without .git usable,
-# but normal repository builds always stamp the current commit.
-execute_process(
-    COMMAND git rev-parse HEAD
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    OUTPUT_VARIABLE ORBIT_GIT_COMMIT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-if(NOT ORBIT_GIT_COMMIT)
-    set(ORBIT_GIT_COMMIT "unknown")
-endif()
-add_compile_definitions(
-    ORBIT_GIT_COMMIT="${ORBIT_GIT_COMMIT}"
-    ORBIT_VERSION_STRING="${PROJECT_VERSION}"
-)
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(OrbitWarnings)
 include(OrbitDependencies)
 include(CTest)
 
 add_subdirectory(engine)
-add_subdirectory(apps/sandbox)
 add_subdirectory(apps/player)
 add_subdirectory(apps/editor)
 add_subdirectory(apps/build)

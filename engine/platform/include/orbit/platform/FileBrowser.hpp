@@ -8,4 +8,8 @@ namespace orbit::platform
 // opened; a file's folder is opened with the file selected. Throws when the path
 // does not exist or the platform refuses.
 void OpenInFileBrowser(const std::filesystem::path& path);
+
+// Opens a file with its default application (an .html file opens in the default
+// browser). Throws when the path does not exist or the platform refuses.
+void OpenWithDefaultApplication(const std::filesystem::path& path);
 } // namespace orbit::platform

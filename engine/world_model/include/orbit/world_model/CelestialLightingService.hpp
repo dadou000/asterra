@@ -60,6 +60,11 @@ public:
         const std::vector<universe::BodyId>& occluders,
         time::SimulationTime atTime) const;
 
+    [[nodiscard]] std::optional<DirectBodyLighting>
+    DominantDirectLightingAtBody(
+        universe::BodyId receiver,
+        time::SimulationTime atTime) const;
+
     [[nodiscard]] std::optional<DirectSurfaceLighting>
     DirectLightingAtSurface(
         universe::BodyId receiver,

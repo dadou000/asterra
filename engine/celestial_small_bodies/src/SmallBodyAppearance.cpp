@@ -245,6 +245,20 @@ f64 EvaluateRadiusScale(
             UnitHash(p.seed)*6.0)*
         p.largeLobeStrength;
 
+    // Deterministic real degree-2 spherical harmonics provide global silhouette
+    // modes without introducing cube-face seams or a high-frequency noise pass.
+    const f64 coefficient0=(UnitHash(p.seed^0x4841524D4F4E3030ULL)-0.5)*0.16;
+    const f64 coefficient1=(UnitHash(p.seed^0x4841524D4F4E3031ULL)-0.5)*0.16;
+    const f64 coefficient2=(UnitHash(p.seed^0x4841524D4F4E3032ULL)-0.5)*0.16;
+    const f64 coefficient3=(UnitHash(p.seed^0x4841524D4F4E3033ULL)-0.5)*0.16;
+    const f64 coefficient4=(UnitHash(p.seed^0x4841524D4F4E3034ULL)-0.5)*0.16;
+    const f64 harmonic=
+        coefficient0*0.3153915653*(3.0*d.y*d.y-1.0)+
+        coefficient1*(-1.0925484306*d.x*d.y)+
+        coefficient2*(1.0925484306*d.y*d.z)+
+        coefficient3*(0.5462742153*(d.x*d.x-d.z*d.z))+
+        coefficient4*(1.0925484306*d.x*d.z);
+
     const f64 relief=
         CraterRelief(p,d);
 
@@ -253,6 +267,7 @@ f64 EvaluateRadiusScale(
         ellipsoid*
         (1.0+
          p.irregularity*(0.68*broad+0.32*medium)+
+         p.irregularity*harmonic+
          lobe+
          relief));
 }
@@ -262,7 +277,7 @@ u64 SmallBodyAppearanceFingerprint(
     const SmallBodyAppearanceConfig& c)
 {
     Validate(p,c);
-    u64 h=0x4d3238534d414c4cULL;
+    u64 h=0x4d3238534d414c32ULL;
     const auto add=[&](u64 v){h=terrain::StableCombine64(h,v);};
     const auto addf=[&](f64 v){add(std::bit_cast<u64>(v));};
 

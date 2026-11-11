@@ -161,6 +161,15 @@ int main()
             curved.has_value());
         ORBIT_TEST_CHECK(
             curved->samples.size() > 3);
+        std::string tooManyReason;
+        const auto tooMany=orbit::path_geometry::BuildPathCenterline({
+            .edge=bezier,.startNode=start,.endNode=end,
+            .targetFrame=root,.frames=&frames,.bodies=&bodies,
+            .curveSampleSpacingMeters=0.00001,.maximumSamples=64
+        },&tooManyReason);
+        ORBIT_TEST_CHECK(!tooMany.has_value());
+        ORBIT_TEST_CHECK(tooManyReason.find("sample budget")!=std::string::npos);
+
         ORBIT_TEST_CHECK(
             curved->samples[
                 curved->samples.size() /

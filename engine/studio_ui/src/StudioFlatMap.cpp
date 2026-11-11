@@ -5,6 +5,8 @@
 #include <orbit/rhi/Pipeline.hpp>
 #include <orbit/rhi/Resource.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
+#include <orbit/terrain/AnalyticTerrainSource.hpp>
+#include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
 
 #include <algorithm>
@@ -161,9 +163,92 @@ struct Rgb
     return PackRgba(LerpRgb(kShallow, kDeep, t));
 }
 
+[[nodiscard]] Rgb PlateColor(const u32 plate) noexcept
+{
+    const f64 hue = std::fmod(
+        static_cast<f64>(plate % terrain::kMaxTectonicPlates) *
+            137.50776405003785,
+        360.0);
+    const f64 sector = hue / 60.0;
+    constexpr f64 chroma = 0.72;
+    const f64 x = chroma * (1.0 - std::abs(std::fmod(sector, 2.0) - 1.0));
+    Rgb color{};
+    if (sector < 1.0) color = {static_cast<f32>(chroma), static_cast<f32>(x), 0.0F};
+    else if (sector < 2.0) color = {static_cast<f32>(x), static_cast<f32>(chroma), 0.0F};
+    else if (sector < 3.0) color = {0.0F, static_cast<f32>(chroma), static_cast<f32>(x)};
+    else if (sector < 4.0) color = {0.0F, static_cast<f32>(x), static_cast<f32>(chroma)};
+    else if (sector < 5.0) color = {static_cast<f32>(x), 0.0F, static_cast<f32>(chroma)};
+    else color = {static_cast<f32>(chroma), 0.0F, static_cast<f32>(x)};
+    return {color.r + 0.12F, color.g + 0.12F, color.b + 0.12F};
+}
+
+// Convergent red, divergent cyan, shear yellow, blended by mask weight: mixed
+// (oblique) boundaries are common, and picking the single largest mask would
+// flip between two colours wherever they are nearly tied.
+[[nodiscard]] Rgb BoundaryBlend(
+    const terrain::GlobalTerrainFieldSample& sample) noexcept
+{
+    constexpr Rgb kConvergent{0.98F, 0.22F, 0.16F};
+    constexpr Rgb kDivergent{0.10F, 0.84F, 0.96F};
+    constexpr Rgb kTransform{1.0F, 0.88F, 0.20F};
+    const f64 total = std::max(
+        sample.convergenceMask + sample.divergenceMask + sample.transformMask, 1.0e-9);
+    const f32 wc = static_cast<f32>(sample.convergenceMask / total);
+    const f32 wd = static_cast<f32>(sample.divergenceMask / total);
+    const f32 wt = static_cast<f32>(sample.transformMask / total);
+    return {
+        kConvergent.r * wc + kDivergent.r * wd + kTransform.r * wt,
+        kConvergent.g * wc + kDivergent.g * wd + kTransform.g * wt,
+        kConvergent.b * wc + kDivergent.b * wd + kTransform.b * wt};
+}
+
+[[nodiscard]] u32 TectonicColor(
+    const terrain::GlobalTerrainFieldSample& sample) noexcept
+{
+    Rgb color = PlateColor(sample.nearestPlate);
+    const f64 strongest = std::max({sample.convergenceMask, sample.divergenceMask, sample.transformMask});
+    if (strongest > 0.08)
+    {
+        color = LerpRgb(color, BoundaryBlend(sample),
+            static_cast<f32>(std::clamp(strongest * 0.95, 0.0, 0.95)));
+    }
+    return PackRgba(color);
+}
+
+// Boundary motion only: dark where plates do not interact, otherwise the
+// convergence / divergence / shear blend, brighter with influence.
+[[nodiscard]] u32 BoundaryMotionColor(
+    const terrain::GlobalTerrainFieldSample& sample) noexcept
+{
+    const f64 strongest = std::clamp(
+        std::max({sample.convergenceMask, sample.divergenceMask, sample.transformMask}),
+        0.0, 1.0);
+    constexpr Rgb kQuiet{0.07F, 0.07F, 0.09F};
+    return PackRgba(LerpRgb(kQuiet, BoundaryBlend(sample), static_cast<f32>(strongest)));
+}
+
+// Distributed deformation: a stress field (dark -> violet -> orange -> pale
+// yellow) with the fault network drawn over it. Stress is broad; fractures are
+// the individual structures inside it.
+[[nodiscard]] u32 CrustalDeformationColor(
+    const terrain::TectonicStructureSample& structure) noexcept
+{
+    const f32 stress = static_cast<f32>(std::clamp(structure.stress, 0.0, 1.0));
+    constexpr Rgb kStops[4] = {
+        {0.04F, 0.04F, 0.10F}, {0.38F, 0.12F, 0.52F}, {0.96F, 0.46F, 0.14F}, {1.0F, 0.95F, 0.65F}};
+    const f32 scaled = stress * 3.0F;
+    const u32 stop = std::min(static_cast<u32>(scaled), 2U);
+    Rgb color = LerpRgb(kStops[stop], kStops[stop + 1U], scaled - static_cast<f32>(stop));
+    const f32 fracture = static_cast<f32>(std::clamp(structure.fractureDensity, 0.0, 1.0));
+    color = LerpRgb(color, Rgb{0.78F, 0.92F, 1.0F}, fracture * 0.9F);
+    return PackRgba(color);
+}
+
 [[nodiscard]] u32 LayerColor(
     const FlatMapLayer layer,
-    const terrain::TerrainSample& sample) noexcept
+    const terrain::TerrainSample& sample,
+    const terrain::GlobalTerrainFieldSample* tectonics = nullptr,
+    const terrain::TectonicStructureSample* structure = nullptr) noexcept
 {
     switch (layer)
     {
@@ -177,6 +262,14 @@ struct Rgb
         return PrecipitationColor(sample.climate.precipitation);
     case FlatMapLayer::WaterDepth:
         return WaterDepthColor(sample);
+    case FlatMapLayer::Tectonics:
+        return tectonics != nullptr ? TectonicColor(*tectonics) : 0xFF202020U;
+    case FlatMapLayer::PlateId:
+        return tectonics != nullptr ? PackRgba(PlateColor(tectonics->nearestPlate)) : 0xFF202020U;
+    case FlatMapLayer::BoundaryMotion:
+        return tectonics != nullptr ? BoundaryMotionColor(*tectonics) : 0xFF202020U;
+    case FlatMapLayer::CrustalDeformation:
+        return structure != nullptr ? CrustalDeformationColor(*structure) : 0xFF202020U;
     }
     return 0xFF000000U;
 }
@@ -403,6 +496,14 @@ std::string_view FlatMapLayerName(const FlatMapLayer layer) noexcept
         return "precipitation";
     case FlatMapLayer::WaterDepth:
         return "water_depth";
+    case FlatMapLayer::Tectonics:
+        return "tectonics";
+    case FlatMapLayer::PlateId:
+        return "plate_id";
+    case FlatMapLayer::BoundaryMotion:
+        return "boundary_motion";
+    case FlatMapLayer::CrustalDeformation:
+        return "crustal_deformation";
     }
     return "elevation";
 }
@@ -742,8 +843,10 @@ public:
         const auto started = std::chrono::steady_clock::now();
         const f64 footprintMeters = std::max(
             2.0 * std::numbers::pi * std::max(source->radiusMeters, 1.0) /
-                static_cast<f64>(kFlatMapWidth),
+            static_cast<f64>(kFlatMapWidth),
             1.0);
+        const auto* const analytic =
+            dynamic_cast<const terrain::AnalyticTerrainSource*>(source->terrain);
 
         while (map.nextRow < kFlatMapHeight)
         {
@@ -757,14 +860,27 @@ public:
                     (static_cast<f64>(map.nextColumn) + 0.5) /
                     static_cast<f64>(kFlatMapWidth);
                 const auto latLon = FlatMapLatLonFromUv({u, v});
-                const terrain::TerrainSample sample = source->terrain->Sample({
+                const terrain::TerrainQuery query{
                     .unitDirection = FlatMapDirectionFromLatLon(
                         latLon.latitudeDegrees,
                         latLon.longitudeDegrees),
                     .footprintMeters = footprintMeters,
                     .planet = source->planet,
                     .radialOffsetMeters = 0.0
-                });
+                };
+                const terrain::TerrainSample sample = source->terrain->Sample(query);
+                const terrain::GlobalTerrainFieldSample* tectonics = nullptr;
+                terrain::GlobalTerrainFieldSample tectonicSample{};
+                terrain::TectonicStructureSample structureSample{};
+                const terrain::TectonicStructureSample* structure = nullptr;
+                if (analytic != nullptr)
+                {
+                    tectonicSample = analytic->GlobalFields().Sample(query);
+                    tectonics = &tectonicSample;
+                    structureSample =
+                        analytic->GlobalFields().SampleTectonicStructure(query.unitDirection);
+                    structure = &structureSample;
+                }
 
                 const std::size_t index =
                     static_cast<std::size_t>(map.nextRow) * kFlatMapWidth +
@@ -774,8 +890,10 @@ public:
                      ++layerIndex)
                 {
                     map.pixels[layerIndex][index] = LayerColor(
-                        static_cast<FlatMapLayer>(layerIndex), sample);
+                        static_cast<FlatMapLayer>(layerIndex), sample, tectonics, structure);
                 }
+                map.plateIds[index] = tectonics != nullptr
+                    ? static_cast<u8>(tectonics->nearestPlate) : static_cast<u8>(255U);
 
                 if ((map.nextColumn & 31U) == 31U &&
                     std::chrono::duration<f64, std::milli>(
@@ -793,6 +911,7 @@ public:
             map.dirty = true;
         }
 
+        OutlinePlates(map);
         map.complete = true;
         map.dirty = true;
     }
@@ -925,6 +1044,8 @@ private:
     struct ViewMap
     {
         std::array<std::vector<u32>, kFlatMapLayerCount> pixels;
+        // Nearest plate per pixel, kept to draw plate outlines when the map completes.
+        std::vector<u8> plateIds;
         bool hasPixels{false};
         FlatMapLayer layer{FlatMapLayer::Elevation};
         FlatMapLayer uploadedLayer{FlatMapLayer::Elevation};
@@ -942,6 +1063,29 @@ private:
         std::vector<std::unique_ptr<rhi::Buffer>> staging;
     };
 
+    // Darkens pixels where the nearest plate changes (east/south neighbour,
+    // wrapping in longitude) on the plate-id layer.
+    static void OutlinePlates(ViewMap& map)
+    {
+        auto& pixels = map.pixels[static_cast<u32>(FlatMapLayer::PlateId)];
+        for (u32 y = 0U; y < kFlatMapHeight; ++y)
+        {
+            for (u32 x = 0U; x < kFlatMapWidth; ++x)
+            {
+                const std::size_t index = static_cast<std::size_t>(y) * kFlatMapWidth + x;
+                const std::size_t east = static_cast<std::size_t>(y) * kFlatMapWidth +
+                    ((x + 1U) % kFlatMapWidth);
+                const bool edge = map.plateIds[index] != map.plateIds[east] ||
+                    (y + 1U < kFlatMapHeight &&
+                     map.plateIds[index] != map.plateIds[index + kFlatMapWidth]);
+                if (edge)
+                {
+                    pixels[index] = 0xFF101010U;
+                }
+            }
+        }
+    }
+
     ViewMap& Entry(const std::string_view viewId)
     {
         auto found = maps_.find(viewId);
@@ -955,6 +1099,8 @@ private:
                     static_cast<std::size_t>(kFlatMapWidth) * kFlatMapHeight,
                     0xFF120F0FU);
             }
+            map.plateIds.assign(
+                static_cast<std::size_t>(kFlatMapWidth) * kFlatMapHeight, static_cast<u8>(255U));
             map.hasPixels = true;
             map.dirty = true;
         }

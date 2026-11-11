@@ -1,7 +1,19 @@
 #include <orbit/lighting/LightingRuntimeProfiler.hpp>
 #include <orbit/studio_ui/StudioRuntimeProfiler.hpp>
 
-#include <cassert>
+#include <cstdlib>
+
+namespace
+{
+// Require() compiles away in Release, which would turn this test into a no-op.
+void Require(const bool condition)
+{
+    if (!condition)
+    {
+        std::abort();
+    }
+}
+} // namespace
 
 int main()
 {
@@ -53,14 +65,14 @@ int main()
     const auto& lightingSnapshot =
         lighting::StudioLightingRuntimeProfiler();
 
-    assert(lightingSnapshot.hasScheduledPlan);
-    assert(lightingSnapshot.hasMeasuredTimings);
-    assert(lightingSnapshot.requested.radianceCacheUpdates == 480U);
-    assert(lightingSnapshot.scheduled.radianceCacheUpdates == 360U);
-    assert(lightingSnapshot.scheduled.preferHardwareRayQuery);
-    assert(lightingSnapshot.measured.HasSection(
+    Require(lightingSnapshot.hasScheduledPlan);
+    Require(lightingSnapshot.hasMeasuredTimings);
+    Require(lightingSnapshot.requested.radianceCacheUpdates == 480U);
+    Require(lightingSnapshot.scheduled.radianceCacheUpdates == 360U);
+    Require(lightingSnapshot.scheduled.preferHardwareRayQuery);
+    Require(lightingSnapshot.measured.HasSection(
         lighting::LightingGpuSection::Gi));
-    assert(lightingSnapshot.measured.SectionMs(
+    Require(lightingSnapshot.measured.SectionMs(
         lighting::LightingGpuSection::Gi) == 1.85F);
 
     studio_ui::ResetStudioVolumeRuntimeProfiler();
@@ -88,13 +100,13 @@ int main()
     const auto& volumeSnapshot =
         studio_ui::StudioVolumeRuntimeProfiler();
 
-    assert(volumeSnapshot.hasSelection);
-    assert(volumeSnapshot.fields.resolutionX == 64U);
-    assert(volumeSnapshot.invalidatedTiles == 4U);
-    assert(volumeSnapshot.solver.iterationsThisFrame == 2U);
-    assert(volumeSnapshot.solver.gpuMilliseconds == 1.25F);
-    assert(volumeSnapshot.renderer.raymarchSteps == 48U);
-    assert(volumeSnapshot.renderer.historyValid);
+    Require(volumeSnapshot.hasSelection);
+    Require(volumeSnapshot.fields.resolutionX == 64U);
+    Require(volumeSnapshot.invalidatedTiles == 4U);
+    Require(volumeSnapshot.solver.iterationsThisFrame == 2U);
+    Require(volumeSnapshot.solver.gpuMilliseconds == 1.25F);
+    Require(volumeSnapshot.renderer.raymarchSteps == 48U);
+    Require(volumeSnapshot.renderer.historyValid);
 
     return 0;
 }

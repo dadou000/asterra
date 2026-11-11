@@ -101,6 +101,30 @@ void SetActiveHotIterationService(
         std::memory_order_release);
 }
 
+bool RequestGitHubUpdate()
+{
+    if (auto* const service =
+            gActiveService.load(std::memory_order_acquire);
+        service != nullptr)
+        return service->QueueGitHubUpdate();
+    return false;
+}
+bool RequestGitHubCheck()
+{
+    auto* service=gActiveService.load(std::memory_order_acquire);
+    return service && service->QueueGitHubCheck();
+}
+
+GitHubUpdateStatus QueryGitHubUpdate()
+{
+    if (auto* const service =
+            gActiveService.load(std::memory_order_acquire);
+        service != nullptr)
+        return service->GitHubUpdateState();
+    return {.stage = "Unavailable",
+            .detail = "Hot iteration is disabled for this Studio session."};
+}
+
 void AddHotIterationWatchRoot(
     const std::filesystem::path& root)
 {

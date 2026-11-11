@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/terrain_impacts/ImpactField.hpp>
 
 namespace orbit::terrain
 {
@@ -33,6 +34,8 @@ struct TerrainSample
     // Ground queries retain the bed. Rendering uses elevation + depth.
     // Interpolate both linearly so wet/dry transitions share the terrain morph.
     f64 standingWaterDepthMeters{0.0};
+    terrain_impacts::CraterProcessSample impactProcesses{};
+    terrain_impacts::IceFractureSample iceFractures{};
 };
 
 [[nodiscard]] BiomeWeights NormalizeBiomeWeights(

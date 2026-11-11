@@ -39,6 +39,11 @@ public:
         return requestCount_.load(std::memory_order_relaxed);
     }
 
+    void SetActivityCallback(std::function<void()> callback)
+    {
+        activityCallback_ = std::move(callback);
+    }
+
     [[nodiscard]] rpc::Dispatcher& Dispatcher() noexcept;
     [[nodiscard]] const rpc::Dispatcher& Dispatcher() const noexcept;
 
@@ -82,6 +87,7 @@ private:
     std::vector<std::string> closedProjectMethods_;
     bool pendingRebind_{false};
     std::atomic<u64> requestCount_{0U};
+    std::function<void()> activityCallback_;
     std::function<void(EditorRpcService&)>
         editorConfigurator_;
     std::optional<ViewportAutomation>

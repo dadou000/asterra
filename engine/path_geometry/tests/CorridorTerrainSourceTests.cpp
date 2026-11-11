@@ -1,0 +1,97 @@
+#include <orbit/path_geometry/CorridorTerrainSource.hpp>
+#include <cmath>
+#include <cstdlib>
+#include <memory>
+
+namespace
+{
+class FlatSource final : public orbit::terrain::TerrainSource
+{
+public:
+    [[nodiscard]] orbit::terrain::TerrainSample Sample(
+        const orbit::terrain::TerrainQuery&) const noexcept override
+    {
+        orbit::terrain::TerrainSample s{};
+        s.elevationMeters = 20.0;
+        s.coarseElevationMeters = 20.0;
+        s.climate.temperatureC = 9.0F;
+        return s;
+    }
+    [[nodiscard]] orbit::u64 Revision() const noexcept override { return 7; }
+};
+void Check(bool valid) { if (!valid) std::abort(); }
+}
+int main()
+{
+    FlatSource base;
+    orbit::world::PlanetDefinition planet{};
+    planet.id = orbit::world::PlanetId::Random();
+    planet.radiusMeters = 1000;
+    orbit::path_geometry::CorridorTerrainLayer road{};
+    road.edge = orbit::scene::ObjectId::Random();
+    road.footprint = {4, 1, 2};
+    road.stations = {
+        {.stationMeters=0, .position={1000,0,-20}, .up={1,0,0}, .lateral={0,1,0}},
+        {.stationMeters=40, .position={1000,0,20}, .up={1,0,0}, .lateral={0,1,0}}
+    };
+    orbit::path_geometry::CorridorTerrainSource overlay(base, planet, {road}, 12);
+    orbit::terrain::TerrainQuery query{};
+    query.planet = planet.id;
+    query.unitDirection = {1,0,0};
+    const auto before = base.Sample(query);
+    const auto after = overlay.Sample(query);
+    Check(before.elevationMeters == 20.0);
+    Check(std::abs(after.elevationMeters) < 1.e-8);
+    Check(after.climate.temperatureC == before.climate.temperatureC);
+    Check(overlay.GenerationRevisions().authoring !=
+          base.GenerationRevisions().authoring);
+    // The rebound snapshot owns its source even after the original caller
+    // releases the last reference; no dangling source pointer is permitted.
+    auto ownedBase = std::make_shared<FlatSource>();
+    std::weak_ptr<FlatSource> weakBase = ownedBase;
+    auto ownedOverlay = overlay.Rebind(ownedBase);
+    ownedBase.reset();
+    Check(!weakBase.expired());
+    Check(std::abs(ownedOverlay->Sample(query).elevationMeters) < 1.e-8);
+    ownedOverlay.reset();
+    Check(weakBase.expired());
+    // Recomposition must not change samples observed by an already
+    // captured worker snapshot, even when a newer source is rebound.
+    auto replacementBase = std::make_shared<FlatSource>();
+    auto oldWorkerSnapshot = overlay.Rebind(replacementBase);
+    const auto replacement = std::make_shared<FlatSource>();
+    const auto newWorkerSnapshot = oldWorkerSnapshot->Rebind(replacement);
+    Check(oldWorkerSnapshot.get() != newWorkerSnapshot.get());
+    Check(oldWorkerSnapshot->Revision() == newWorkerSnapshot->Revision());
+    Check(std::abs(oldWorkerSnapshot->Sample(query).elevationMeters -
+                   newWorkerSnapshot->Sample(query).elevationMeters) < 1.e-8);
+    Check(oldWorkerSnapshot->GenerationRevisions().authoring ==
+          newWorkerSnapshot->GenerationRevisions().authoring);
+
+    // On a curved planet the radial elevation is the station radius minus
+    // the reference radius, not the dot product with a local up vector.
+    // A segment along the tangent at 45 degrees must still cut to zero.
+    const double radial = 1000.0 / std::sqrt(2.0);
+    orbit::path_geometry::CorridorTerrainLayer diagonalRoad{};
+    diagonalRoad.edge = orbit::scene::ObjectId::Random();
+    diagonalRoad.footprint = {4, 1, 2};
+    diagonalRoad.stations = {
+        {.stationMeters=0,
+         .position={radial,radial,-20},
+         .up={1/std::sqrt(2.0),1/std::sqrt(2.0),0},
+         .lateral={-1/std::sqrt(2.0),1/std::sqrt(2.0),0}},
+        {.stationMeters=40,
+         .position={radial,radial,20},
+         .up={1/std::sqrt(2.0),1/std::sqrt(2.0),0},
+         .lateral={-1/std::sqrt(2.0),1/std::sqrt(2.0),0}}
+    };
+    orbit::path_geometry::CorridorTerrainSource diagonal(
+        base, planet, {diagonalRoad}, 13);
+    orbit::terrain::TerrainQuery diagonalQuery = query;
+    diagonalQuery.unitDirection = {radial / 1000.0, radial / 1000.0, 0};
+    Check(std::abs(diagonal.Sample(diagonalQuery).elevationMeters) < 1.e-8);
+
+    query.planet = orbit::world::PlanetId::Random();
+    Check(overlay.Sample(query).elevationMeters == 20.0);
+    return 0;
+}

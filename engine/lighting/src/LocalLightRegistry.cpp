@@ -1,6 +1,9 @@
 #include <orbit/lighting/LocalLightRegistry.hpp>
 
+#include <map>
+
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 
@@ -200,8 +203,19 @@ TiledLightGrid BuildTiledLightGrid(
     const u32 tileCount =
         result.tilesX * result.tilesY;
 
-    std::vector<std::vector<u32>>
-        tileLists(tileCount);
+    // Flat two-pass layout (count, then fill) instead of one heap vector per
+    // tile: a 4K viewport has ~11k tiles and a wide light covers all of them.
+    std::vector<std::array<i32, 5>>
+        lightTileRects;
+    lightTileRects.reserve(lights.size());
+    // Contribution bound per rect: luminance-weighted flux over the squared
+    // distance to the light's nearest point to the camera (>= 1 m).
+    std::vector<f32> lightScores;
+    lightScores.reserve(lights.size());
+    std::vector<u32>
+        tileCounts(tileCount, 0U);
+    std::vector<u32>
+        coverage(tileCount, 0U);
 
     for (const LocalLight& source : lights)
     {
@@ -352,6 +366,24 @@ TiledLightGrid BuildTiledLightGrid(
             }
         }
 
+        lightTileRects.push_back(
+            {minTileX, minTileY, maxTileX, maxTileY,
+             static_cast<i32>(resolvedIndex)});
+
+        const f32 luminance =
+            0.2126F * light.colorLinear.x +
+            0.7152F * light.colorLinear.y +
+            0.0722F * light.colorLinear.z;
+        const f32 nearest =
+            std::max(
+                std::sqrt(math::LengthSquared(
+                    light.positionCameraRelativeMeters)) -
+                    light.rangeMeters,
+                1.0F);
+        lightScores.push_back(
+            light.luminousFluxLumens * luminance /
+            (nearest * nearest));
+
         for (i32 tileY = minTileY;
              tileY <= maxTileY;
              ++tileY)
@@ -360,21 +392,71 @@ TiledLightGrid BuildTiledLightGrid(
                  tileX <= maxTileX;
                  ++tileX)
             {
-                auto& tile =
-                    tileLists[
-                        static_cast<u32>(tileY) *
-                            result.tilesX +
-                        static_cast<u32>(tileX)];
+                ++coverage[
+                    static_cast<std::size_t>(tileY) * result.tilesX +
+                    static_cast<std::size_t>(tileX)];
+            }
+        }
+    }
 
-                if (tile.size() >=
-                    config.maximumLightsPerTile)
+    // Strongest first; stable so equal scores keep submission order. Both the
+    // count and fill passes walk this order, so every tile keeps the same
+    // strongest lights.
+    std::vector<u32> order(lightTileRects.size());
+    for (u32 i = 0U; i < order.size(); ++i)
+    {
+        order[i] = i;
+    }
+    if (config.aggregateOverflow)
+    {
+        std::stable_sort(
+            order.begin(),
+            order.end(),
+            [&lightScores](const u32 a, const u32 b)
+            {
+                return lightScores[a] > lightScores[b];
+            });
+    }
+
+    // Tiles that overflow reserve their last slot for the proxy.
+    std::vector<u32> tileCapacity(tileCount);
+    for (u32 tile = 0U; tile < tileCount; ++tile)
+    {
+        tileCapacity[tile] =
+            config.aggregateOverflow &&
+                    coverage[tile] > config.maximumLightsPerTile
+                ? config.maximumLightsPerTile - 1U
+                : config.maximumLightsPerTile;
+    }
+
+    for (const u32 rectIndex : order)
+    {
+        const auto& rect = lightTileRects[rectIndex];
+        for (i32 tileY = rect[1]; tileY <= rect[3]; ++tileY)
+        {
+            for (i32 tileX = rect[0]; tileX <= rect[2]; ++tileX)
+            {
+                const u32 tile =
+                    static_cast<u32>(tileY) * result.tilesX +
+                    static_cast<u32>(tileX);
+                u32& count = tileCounts[tile];
+                if (count >= tileCapacity[tile])
                 {
                     ++result.droppedAssignments;
                     continue;
                 }
+                ++count;
+            }
+        }
+    }
 
-                tile.push_back(
-                    resolvedIndex);
+    if (config.aggregateOverflow)
+    {
+        for (u32 tile = 0U; tile < tileCount; ++tile)
+        {
+            if (coverage[tile] > config.maximumLightsPerTile)
+            {
+                ++tileCounts[tile];   // the proxy slot
             }
         }
     }
@@ -389,13 +471,112 @@ TiledLightGrid BuildTiledLightGrid(
     {
         result.offsets[tile + 1U] =
             result.offsets[tile] +
-            static_cast<u32>(
-                tileLists[tile].size());
+            tileCounts[tile];
+    }
 
-        result.lightIndices.insert(
-            result.lightIndices.end(),
-            tileLists[tile].begin(),
-            tileLists[tile].end());
+    result.lightIndices.resize(
+        result.offsets[tileCount]);
+
+    // Refill in the same order; lights that no longer fit are collected per
+    // overflowing tile and replaced by one proxy.
+    std::fill(
+        tileCounts.begin(),
+        tileCounts.end(),
+        0U);
+
+    std::map<u32, std::vector<u32>> overflow;
+    for (const u32 rectIndex : order)
+    {
+        const auto& rect = lightTileRects[rectIndex];
+        for (i32 tileY = rect[1]; tileY <= rect[3]; ++tileY)
+        {
+            for (i32 tileX = rect[0]; tileX <= rect[2]; ++tileX)
+            {
+                const u32 tile =
+                    static_cast<u32>(tileY) * result.tilesX +
+                    static_cast<u32>(tileX);
+                u32& count = tileCounts[tile];
+                if (count >= tileCapacity[tile])
+                {
+                    if (config.aggregateOverflow)
+                    {
+                        overflow[tile].push_back(
+                            static_cast<u32>(rect[4]));
+                    }
+                    continue;
+                }
+                result.lightIndices[
+                    result.offsets[tile] + count] =
+                    static_cast<u32>(rect[4]);
+                ++count;
+            }
+        }
+    }
+
+    // One proxy per distinct dropped set: neighbouring tiles overwhelmingly
+    // drop the same lights, so they share it.
+    std::map<std::vector<u32>, u32> proxyOfSet;
+    for (auto& [tile, dropped] : overflow)
+    {
+        std::sort(dropped.begin(), dropped.end());
+        auto found = proxyOfSet.find(dropped);
+        if (found == proxyOfSet.end())
+        {
+            double flux = 0.0;
+            double px = 0.0, py = 0.0, pz = 0.0;
+            double cr = 0.0, cg = 0.0, cb = 0.0;
+            u64 id = 1469598103934665603ULL;   // FNV-1a over member ids
+            for (const u32 index : dropped)
+            {
+                const ResolvedLocalLight& member = result.lights[index];
+                const double f = member.luminousFluxLumens;
+                flux += f;
+                px += f * member.positionCameraRelativeMeters.x;
+                py += f * member.positionCameraRelativeMeters.y;
+                pz += f * member.positionCameraRelativeMeters.z;
+                cr += f * member.colorLinear.x;
+                cg += f * member.colorLinear.y;
+                cb += f * member.colorLinear.z;
+                id = (id ^ member.stableId) * 1099511628211ULL;
+            }
+            ResolvedLocalLight proxy;
+            proxy.type = LocalLightType::Point;
+            proxy.luminousFluxLumens = static_cast<f32>(flux);
+            proxy.positionCameraRelativeMeters = {
+                static_cast<f32>(px / flux),
+                static_cast<f32>(py / flux),
+                static_cast<f32>(pz / flux)};
+            proxy.colorLinear = {
+                static_cast<f32>(cr / flux),
+                static_cast<f32>(cg / flux),
+                static_cast<f32>(cb / flux)};
+            f32 reach = 0.0F;
+            for (const u32 index : dropped)
+            {
+                const ResolvedLocalLight& member = result.lights[index];
+                const math::Float3 d{
+                    member.positionCameraRelativeMeters.x -
+                        proxy.positionCameraRelativeMeters.x,
+                    member.positionCameraRelativeMeters.y -
+                        proxy.positionCameraRelativeMeters.y,
+                    member.positionCameraRelativeMeters.z -
+                        proxy.positionCameraRelativeMeters.z};
+                reach = std::max(
+                    reach,
+                    std::sqrt(math::LengthSquared(d)) +
+                        member.rangeMeters);
+            }
+            proxy.rangeMeters = reach;
+            proxy.stableId = id | kProxyLightIdBit;
+            found = proxyOfSet.emplace(
+                dropped,
+                static_cast<u32>(result.lights.size())).first;
+            result.lights.push_back(proxy);
+            ++result.proxyLights;
+        }
+        result.lightIndices[
+            result.offsets[tile] + tileCounts[tile]] = found->second;
+        ++tileCounts[tile];
     }
 
     return result;

@@ -511,6 +511,8 @@ int main()
     Check(shadingShader != nullptr);
     Check(shadingShader->kind == AssetKind::ShadingShader);
     Check(shadingShader->name == "Regolith");
+    // Writing another asset rebuilds the table, so keep the id, not the pointer.
+    const auto shadingShaderId = shadingShader->id;
     // Not a standalone HLSL stage: no sidecar required, no diagnostic raised.
     for (const auto& diagnostic : content.Diagnostics())
     {
@@ -545,7 +547,7 @@ int main()
     Check(shaderMaterial->shaderMaterial->parameters[1].values[0] == 0.9);
     // It depends on its shader, so a shader edit refreshes dependents.
     Check(shaderMaterial->dependencies.size() == 1);
-    Check(shaderMaterial->dependencies[0] == shadingShader->id);
+    Check(shaderMaterial->dependencies[0] == shadingShaderId);
 
     // Rename and move keep files inside Content and refuse collisions.
     const auto renamed = content.RenameEntry(

@@ -46,6 +46,12 @@ if(BUILD_TESTING)
         COMMAND OrbitPathNetworkTests
     )
 
+    add_executable(OrbitPathSplitTests tests/PathSplitTests.cpp)
+    target_link_libraries(OrbitPathSplitTests PRIVATE Orbit::Documents Orbit::Paths)
+    target_compile_features(OrbitPathSplitTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitPathSplitTests)
+    add_test(NAME Orbit.PathSplit COMMAND OrbitPathSplitTests)
+
     add_executable(OrbitPathProfileTests
         tests/PathProfileTests.cpp
     )

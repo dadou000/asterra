@@ -1,5 +1,4 @@
 add_library(OrbitTerrainMaterialColumn STATIC
-    src/Local3DPromotion.cpp
     src/MaterialColumnPage.cpp
     src/SurfaceResolver.cpp
 )
@@ -63,22 +62,5 @@ if(BUILD_TESTING)
     )
 endif()
 
-
 if(BUILD_TESTING)
-    add_executable(OrbitTerrainLocal3DPromotionTests
-        tests/Local3DPromotionTests.cpp
-    )
-
-    target_link_libraries(OrbitTerrainLocal3DPromotionTests
-        PRIVATE
-            Orbit::TerrainMaterialColumn
-    )
-
-    target_compile_features(OrbitTerrainLocal3DPromotionTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitTerrainLocal3DPromotionTests)
-
-    add_test(
-        NAME Orbit.TerrainLocal3DPromotion
-        COMMAND OrbitTerrainLocal3DPromotionTests
-    )
 endif()

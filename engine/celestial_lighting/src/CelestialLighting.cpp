@@ -9,6 +9,22 @@
 
 namespace orbit::celestial_lighting
 {
+f64 DiscHorizonVisibleFraction(
+    const f64 centerElevationRadians,
+    const f64 stellarAngularRadiusRadians) noexcept
+{
+    if (!std::isfinite(centerElevationRadians) ||
+        !std::isfinite(stellarAngularRadiusRadians) ||
+        stellarAngularRadiusRadians <= 0.0)
+        return centerElevationRadians >= 0.0 ? 1.0 : 0.0;
+    if (centerElevationRadians <= -stellarAngularRadiusRadians) return 0.0;
+    if (centerElevationRadians >= stellarAngularRadiusRadians) return 1.0;
+    const f64 x = std::clamp(
+        centerElevationRadians / stellarAngularRadiusRadians, -1.0, 1.0);
+    return (std::acos(-x) + x * std::sqrt(std::max(0.0, 1.0 - x * x))) /
+        std::numbers::pi_v<f64>;
+}
+
 namespace
 {
 void RequireFinitePositive(
@@ -105,7 +121,10 @@ void RequireFinitePositive(
 }
 } // namespace
 
-OccultationResult FiniteDiscOccultation(
+namespace
+{
+// Purely geometric (area) occultation of a uniformly bright source; the public entry points add limb darkening.
+[[nodiscard]] OccultationResult GeometricOccultation(
     const ApparentDisc& source,
     const ApparentDisc& occluder)
 {
@@ -205,6 +224,93 @@ OccultationResult FiniteDiscOccultation(
     return result;
 }
 
+struct PreparedOccluder
+{
+    math::Double3 direction{};
+    f64 angularRadius{0.0};
+    bool inFront{false};
+    bool contributes{false};
+};
+
+// Deterministic equal-area sampling of the source disc, each sample weighted by the linear limb-darkening law
+// I(mu) = 1 - u (1 - mu), mu = sqrt(1 - (sin(offset) / sin(R))^2). Returns the obscured share of the emitted light
+// by the UNION of the occluder discs, so overlapping occluders are never double-counted. u = 0 gives every sample
+// weight 1, i.e. the plain area fraction.
+[[nodiscard]] f64 SampledObscuration(
+    const ApparentDisc& source,
+    const std::vector<PreparedOccluder>& prepared)
+{
+    const f64 sourceDistance = math::Length(source.centerFromObserverMeters);
+    const f64 sourceAngular = AngularRadius(source);
+    const math::Double3 sourceDirection = source.centerFromObserverMeters / sourceDistance;
+    const math::Double3 reference =
+        std::abs(sourceDirection.y) < 0.9 ? math::Double3{0.0, 1.0, 0.0} : math::Double3{1.0, 0.0, 0.0};
+    const math::Double3 tangentA = math::Normalize(math::Cross(reference, sourceDirection));
+    const math::Double3 tangentB = math::Normalize(math::Cross(sourceDirection, tangentA));
+
+    constexpr u32 kSamples = 8192U;
+    constexpr f64 kGoldenAngle = 2.39996322972865332223;
+    const f64 darkening = std::clamp(source.limbDarkening, 0.0, 1.0);
+    const f64 sinSource = std::sin(sourceAngular);
+
+    f64 coveredWeight = 0.0;
+    f64 totalWeight = 0.0;
+    for (u32 sampleIndex = 0U; sampleIndex < kSamples; ++sampleIndex)
+    {
+        const f64 areaFraction = (static_cast<f64>(sampleIndex) + 0.5) / static_cast<f64>(kSamples);
+        const f64 cosOffset = 1.0 - areaFraction * (1.0 - std::cos(sourceAngular));
+        const f64 offsetAngle = std::acos(std::clamp(cosOffset, -1.0, 1.0));
+        const f64 azimuth = kGoldenAngle * static_cast<f64>(sampleIndex);
+        const math::Double3 tangent = tangentA * std::cos(azimuth) + tangentB * std::sin(azimuth);
+        const math::Double3 sampleDirection =
+            sourceDirection * std::cos(offsetAngle) + tangent * std::sin(offsetAngle);
+
+        f64 weight = 1.0;
+        if (darkening > 0.0 && sinSource > 0.0)
+        {
+            const f64 radial = std::sin(offsetAngle) / sinSource;
+            weight = 1.0 - darkening * (1.0 - std::sqrt(std::max(0.0, 1.0 - radial * radial)));
+        }
+        totalWeight += weight;
+
+        for (const auto& occluder : prepared)
+        {
+            if (!occluder.inFront || !occluder.contributes)
+            {
+                continue;
+            }
+            const f64 separation =
+                std::acos(std::clamp(math::Dot(sampleDirection, occluder.direction), -1.0, 1.0));
+            if (separation <= occluder.angularRadius)
+            {
+                coveredWeight += weight;
+                break;
+            }
+        }
+    }
+    return totalWeight > 0.0 ? coveredWeight / totalWeight : 0.0;
+}
+} // namespace
+
+OccultationResult FiniteDiscOccultation(
+    const ApparentDisc& source,
+    const ApparentDisc& occluder)
+{
+    OccultationResult result = GeometricOccultation(source, occluder);
+    if (source.limbDarkening > 0.0 && result.overlapping && !result.total)
+    {
+        const f64 distance = math::Length(occluder.centerFromObserverMeters);
+        const PreparedOccluder item{
+            .direction = occluder.centerFromObserverMeters / distance,
+            .angularRadius = result.occluderAngularRadiusRadians,
+            .inFront = result.occluderInFront,
+            .contributes = true};
+        result.obscuredFraction = std::clamp(SampledObscuration(source, {item}), 0.0, 1.0);
+        result.visibleFraction = 1.0 - result.obscuredFraction;
+    }
+    return result;
+}
+
 MultiOccluderResult CombinedOccultation(
     const ApparentDisc& source,
     const std::vector<ApparentDisc>& occluders)
@@ -233,42 +339,6 @@ MultiOccluderResult CombinedOccultation(
         };
     }
 
-    const f64 sourceDistance =
-        math::Length(
-            source.centerFromObserverMeters);
-    const f64 sourceAngular =
-        AngularRadius(source);
-    const math::Double3 sourceDirection =
-        source.centerFromObserverMeters /
-        sourceDistance;
-
-    const math::Double3 reference =
-        std::abs(sourceDirection.y) <
-                0.9
-            ? math::Double3{
-                  0.0, 1.0, 0.0}
-            : math::Double3{
-                  1.0, 0.0, 0.0};
-
-    const math::Double3 tangentA =
-        math::Normalize(
-            math::Cross(
-                reference,
-                sourceDirection));
-    const math::Double3 tangentB =
-        math::Normalize(
-            math::Cross(
-                sourceDirection,
-                tangentA));
-
-    struct PreparedOccluder
-    {
-        math::Double3 direction{};
-        f64 angularRadius{0.0};
-        bool inFront{false};
-        bool contributes{false};
-    };
-
     std::vector<PreparedOccluder>
         prepared;
     prepared.reserve(
@@ -285,7 +355,7 @@ MultiOccluderResult CombinedOccultation(
                     centerFromObserverMeters);
 
         const auto exact =
-            FiniteDiscOccultation(
+            GeometricOccultation(
                 source,
                 occluder);
 
@@ -320,7 +390,7 @@ MultiOccluderResult CombinedOccultation(
     // Preserve the analytic single-occluder solution even when callers pass
     // additional non-contributing bodies. Sampling is only necessary for a
     // true multi-disc union and otherwise introduces avoidable quantization.
-    if (contributing == 1U)
+    if (contributing == 1U && !(source.limbDarkening > 0.0))
     {
         for (std::size_t index = 0U;
              index < prepared.size();
@@ -346,94 +416,8 @@ MultiOccluderResult CombinedOccultation(
         }
     }
 
-    // Deterministic equal-area sampling of the source disc. This evaluates
-    // the union of all projected occluder discs, so overlapping occluders
-    // are not double-counted. The single-occluder path above remains fully
-    // analytic.
-    constexpr u32 kSamples = 8192U;
-    constexpr f64 kGoldenAngle =
-        2.39996322972865332223;
-
-    u32 covered = 0U;
-
-    for (u32 sampleIndex = 0U;
-         sampleIndex < kSamples;
-         ++sampleIndex)
-    {
-        const f64 areaFraction =
-            (static_cast<f64>(
-                 sampleIndex) +
-             0.5) /
-            static_cast<f64>(
-                kSamples);
-
-        const f64 cosOffset =
-            1.0 -
-            areaFraction *
-                (1.0 -
-                 std::cos(
-                     sourceAngular));
-
-        const f64 offsetAngle =
-            std::acos(
-                std::clamp(
-                    cosOffset,
-                    -1.0,
-                    1.0));
-        const f64 azimuth =
-            kGoldenAngle *
-            static_cast<f64>(
-                sampleIndex);
-
-        const math::Double3 tangent =
-            tangentA *
-                std::cos(azimuth) +
-            tangentB *
-                std::sin(azimuth);
-
-        const math::Double3 sampleDirection =
-            sourceDirection *
-                std::cos(offsetAngle) +
-            tangent *
-                std::sin(offsetAngle);
-
-        bool occulted = false;
-
-        for (const auto& occluder :
-             prepared)
-        {
-            if (!occluder.inFront ||
-                !occluder.contributes)
-            {
-                continue;
-            }
-
-            const f64 separation =
-                std::acos(
-                    std::clamp(
-                        math::Dot(
-                            sampleDirection,
-                            occluder.direction),
-                        -1.0,
-                        1.0));
-
-            if (separation <=
-                occluder.angularRadius)
-            {
-                occulted = true;
-                break;
-            }
-        }
-
-        if (occulted)
-        {
-            ++covered;
-        }
-    }
-
-    const f64 obscured =
-        static_cast<f64>(covered) /
-        static_cast<f64>(kSamples);
+    // Union of all projected occluder discs, limb-darkening weighted (see SampledObscuration).
+    const f64 obscured = SampledObscuration(source, prepared);
 
     return {
         .visibleFraction =

@@ -33,7 +33,11 @@ enum class SurfaceRepresentation : u8
     AnalyticImpostor,
     CachedImpostor,
     LocalMesh,
-    ProceduralProxy
+    ProceduralProxy,
+    // Imported glTF mesh (mesh_render). Still surface class 3 for every
+    // lighting pass; the mesh sun/sky pass keys on this to give these pixels
+    // sky occlusion from the meshes instead of the proxy-only estimate.
+    StaticMesh
 };
 
 struct SurfaceData

@@ -347,9 +347,16 @@ int main()
         Check(
             capabilities.AsArray()[0].Find("capability")->AsString() ==
             "surface.terrain");
-        Check(!capabilities.AsArray()[0].Find("enabled")->AsBool());
-        Check(capabilities.AsArray()[0].Find("can_enable")->AsBool());
+        // body.create gives every new spherical planet a Terrain Surface, and a surface
+        // with semantic children (its layers) is not removable as a leaf capability.
+        Check(capabilities.AsArray()[0].Find("enabled")->AsBool());
+        Check(!capabilities.AsArray()[0].Find("can_enable")->AsBool());
+        Check(!capabilities.AsArray()[0].Find("can_disable")->AsBool());
+        Check(capabilities.AsArray()[0].Find("object")->IsString());
+        const std::string terrainId =
+            capabilities.AsArray()[0].Find("object")->AsString();
 
+        // Enabling an already enabled capability returns the same object.
         const auto enabledTerrain =
             Call(
                 dispatcher,
@@ -363,68 +370,7 @@ int main()
                     }));
         Check(enabledTerrain.Find("enabled")->AsBool());
         Check(enabledTerrain.Find("object") != nullptr);
-        Check(enabledTerrain.Find("object")->IsString());
-        const std::string terrainId =
-            enabledTerrain.Find("object")->AsString();
-
-        static_cast<void>(
-            Call(dispatcher, "17", "history.undo"));
-        const auto afterCapabilityUndo =
-            Call(
-                dispatcher,
-                "18",
-                "body.capabilities",
-                orbit::rpc::Value(
-                    orbit::rpc::Value::Object{
-                        {"body", bodyId}
-                    }));
-        Check(!afterCapabilityUndo.AsArray()[0].Find("enabled")->AsBool());
-
-        static_cast<void>(
-            Call(dispatcher, "19", "history.redo"));
-        const auto afterCapabilityRedo =
-            Call(
-                dispatcher,
-                "20",
-                "body.capabilities",
-                orbit::rpc::Value(
-                    orbit::rpc::Value::Object{
-                        {"body", bodyId}
-                    }));
-        Check(afterCapabilityRedo.AsArray()[0].Find("enabled")->AsBool());
-        Check(
-            afterCapabilityRedo.AsArray()[0].Find("object")->AsString() ==
-            terrainId);
-
-        const auto disabledTerrain =
-            Call(
-                dispatcher,
-                "21",
-                "body.set_capability",
-                orbit::rpc::Value(
-                    orbit::rpc::Value::Object{
-                        {"body", bodyId},
-                        {"capability", "surface.terrain"},
-                        {"enabled", false}
-                    }));
-        Check(!disabledTerrain.Find("enabled")->AsBool());
-        Check(disabledTerrain.Find("object")->IsNull());
-
-        static_cast<void>(
-            Call(dispatcher, "22", "history.undo"));
-        const auto restoredTerrain =
-            Call(
-                dispatcher,
-                "23",
-                "body.capabilities",
-                orbit::rpc::Value(
-                    orbit::rpc::Value::Object{
-                        {"body", bodyId}
-                    }));
-        Check(restoredTerrain.AsArray()[0].Find("enabled")->AsBool());
-        Check(
-            restoredTerrain.AsArray()[0].Find("object")->AsString() ==
-            terrainId);
+        Check(enabledTerrain.Find("object")->AsString() == terrainId);
 
         const auto finalEvents =
             Call(
@@ -435,9 +381,11 @@ int main()
                     orbit::rpc::Value::Object{
                         {"sequence", orbit::i64{0}}
                     }));
+        // world.created, world.metadata_changed, project.startup_world_changed and
+        // body.created; re-enabling an enabled capability changes nothing.
         Check(
             finalEvents.Find("events")->AsArray().size() ==
-            6);
+            4);
     }
 
     std::filesystem::remove_all(root);

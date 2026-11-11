@@ -66,7 +66,9 @@ int main()
         pointLight =
             commands.CreateObject(
                 orbit::world_model::kPointLightType,
-                "Lamp",
+                // Siblings resolve in ObjectStore order (sort_order, then name), so the
+                // names pin the order the assertions below rely on.
+                "A Lamp",
                 bodyObject);
 
         commands.SetProperty(

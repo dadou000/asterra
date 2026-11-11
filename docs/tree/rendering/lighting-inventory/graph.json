@@ -1,0 +1,1222 @@
+{
+ "version": 1,
+ "title": "Lighting, atmosphere, cloud and weather systems",
+ "legend": {
+  "residency": [
+   "cpu",
+   "gpu",
+   "cpu->gpu",
+   "cpu+gpu",
+   "offline"
+  ],
+  "confidence": [
+   "verified",
+   "inferred"
+  ],
+  "note": "Nodes carry doc paths (tree) and source paths; edges carry transport and size so a canvas can colour CPU/GPU boundaries."
+ },
+ "nodes": [
+  {
+   "id": "star",
+   "label": "Stellar appearance and radiometry",
+   "layer": "source",
+   "module": "OrbitCelestialStellar / OrbitCelestialRadiometry",
+   "residency": "cpu",
+   "summary": "Star luminosity, temperature, limb darkening, angular size; SI radiometry, scene scale and exposure state.",
+   "sources": [
+    "engine/celestial_stellar",
+    "engine/celestial_radiometry"
+   ],
+   "size": "KB",
+   "update_rate": "static",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/celestial/stellar"
+  },
+  {
+   "id": "orbits",
+   "label": "Orbit and rotation providers",
+   "layer": "source",
+   "module": "OrbitCelestialOrbits / OrbitCelestialRotation",
+   "residency": "cpu",
+   "summary": "State(time): body positions and orientations; yields the sun direction in the body-fixed frame.",
+   "sources": [
+    "engine/celestial_orbits",
+    "engine/celestial_rotation"
+   ],
+   "size": "bytes",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/celestial/orbits"
+  },
+  {
+   "id": "finite_disc",
+   "label": "Finite stellar disc and occultation",
+   "layer": "source",
+   "module": "OrbitCelestialLighting",
+   "residency": "cpu+gpu",
+   "summary": "Apparent disc, single/multiple occultation, DiscHorizonVisibleFraction; HLSL mirror in SunVisibilityShader.",
+   "sources": [
+    "engine/celestial_lighting",
+    "engine/lighting/include/orbit/lighting/SunVisibilityShader.hpp"
+   ],
+   "size": "",
+   "update_rate": "per query",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/celestial/lighting"
+  },
+  {
+   "id": "atmo_author",
+   "label": "Atmosphere authoring solver",
+   "layer": "medium",
+   "module": "OrbitWorldModel",
+   "residency": "cpu",
+   "summary": "Derives scattering coefficients from pressure, composition and aerosol inputs; provenance-aware.",
+   "sources": [
+    "engine/world_model"
+   ],
+   "size": "KB",
+   "update_rate": "on edit",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/atmosphere/authoring-solver"
+  },
+  {
+   "id": "atmo_params",
+   "label": "AtmosphereParameters (single authority)",
+   "layer": "medium",
+   "module": "OrbitCelestialAtmosphere",
+   "residency": "cpu",
+   "summary": "One Atmosphere capability per body resolves to parameters; nothing Earth-specific is baked in.",
+   "sources": [
+    "engine/celestial_atmosphere"
+   ],
+   "size": "KB",
+   "update_rate": "on edit",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/atmosphere"
+  },
+  {
+   "id": "atmo_luts",
+   "label": "Static LUTs: transmittance 128x32, multiple scattering 32x16",
+   "layer": "medium",
+   "module": "OrbitCelestialAtmosphere",
+   "residency": "cpu->gpu",
+   "summary": "Derived, never persisted; rebuilt from a fingerprint; SunTransmittanceAt works at any altitude.",
+   "sources": [
+    "engine/celestial_atmosphere"
+   ],
+   "size": "~70 KB RGBA16F",
+   "update_rate": "on parameter edit",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/atmosphere/lut-pipeline"
+  },
+  {
+   "id": "sky_view",
+   "label": "Sky-view LUT 128x64 (per observer)",
+   "layer": "medium",
+   "module": "OrbitCelestialAtmosphere",
+   "residency": "cpu->gpu",
+   "summary": "View/azimuth radiance table; fingerprint includes observer radius and sun direction (zenith cosine snapped to 1/512).",
+   "sources": [
+    "engine/celestial_atmosphere"
+   ],
+   "size": "~64 KB",
+   "update_rate": "altitude / sun change",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/atmosphere/lut-pipeline"
+  },
+  {
+   "id": "sky_sh",
+   "label": "Sky irradiance SH (order 2) and summary",
+   "layer": "medium",
+   "module": "OrbitCelestialAtmosphere + Studio",
+   "residency": "cpu",
+   "summary": "Projects the CPU sky-view texels to SH9; the lighting 'sky summary' every ambient consumer reads. Cloud-blind.",
+   "sources": [
+    "engine/celestial_atmosphere",
+    "engine/studio_ui/src/StudioViewportRenderUtilities.cpp"
+   ],
+   "size": "27 floats",
+   "update_rate": "per view, hashed cache",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/atmosphere/sky-irradiance"
+  },
+  {
+   "id": "atmo_render",
+   "label": "AtmosphereRenderer (composite)",
+   "layer": "medium",
+   "module": "OrbitCelestialAtmosphere",
+   "residency": "gpu",
+   "summary": "sceneColor*T + L per pixel from ground to orbit; same LUTs for surfaces and clouds.",
+   "sources": [
+    "engine/celestial_atmosphere"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/atmosphere"
+  },
+  {
+   "id": "optical_core",
+   "label": "Optical transport core",
+   "layer": "medium",
+   "module": "OrbitOpticalTransport",
+   "residency": "cpu",
+   "summary": "Std-only reference: CacheStamp invalidation, aerosol growth, TransmittanceStats (Jensen-aware), OpticalHierarchy, EmitterTree, DischargeGraph, RefractionTable.",
+   "sources": [
+    "engine/optical_transport"
+   ],
+   "size": "",
+   "update_rate": "",
+   "status": "experimental",
+   "confidence": "verified",
+   "doc": "/rendering/unified-transport/core"
+  },
+  {
+   "id": "weather_model",
+   "label": "WeatherModel and climate",
+   "layer": "weather",
+   "module": "OrbitCelestialClouds",
+   "residency": "cpu",
+   "summary": "Climate-procedural coverage, type and precipitation; storm schedule and sparse storm zones; analytic zone survey.",
+   "sources": [
+    "engine/celestial_clouds/src/WeatherModel.cpp",
+    "engine/celestial_clouds/include/orbit/celestial_clouds/StormSchedule.hpp"
+   ],
+   "size": "KB",
+   "update_rate": "per time quantum (1 s)",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/clouds"
+  },
+  {
+   "id": "cloud_field",
+   "label": "CloudField texels (cube-sphere 193^2 x 6, per layer)",
+   "layer": "weather",
+   "module": "OrbitCelestialClouds",
+   "residency": "cpu->gpu",
+   "summary": "Per column: coverage, optical depth, single-scattering albedo, anisotropy, cloudType, precipitation; layer base/top altitude and peak optical depth. CPU authoritative, GPU HostVisible copy.",
+   "sources": [
+    "engine/celestial_clouds/src/CloudField.cpp",
+    "engine/celestial_clouds/include/orbit/celestial_clouds/CloudField.hpp"
+   ],
+   "size": "~3.6 MB per layer (16 B/texel)",
+   "update_rate": "product rebuild",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/clouds"
+  },
+  {
+   "id": "storm_gpu",
+   "label": "GpuStormSolver (500 km storm domain)",
+   "layer": "weather",
+   "module": "OrbitWeatherGpu",
+   "residency": "gpu",
+   "summary": "Fast storm core as 14 compute kernels; nested fields feed the cloud renderer; readback only for checkpoints.",
+   "sources": [
+    "engine/weather_gpu"
+   ],
+   "size": "large",
+   "update_rate": "per sim step",
+   "status": "experimental",
+   "confidence": "verified",
+   "doc": "/world/weather-lab/gpu-port"
+  },
+  {
+   "id": "storm_electric",
+   "label": "Storm electrification and lightning",
+   "layer": "weather",
+   "module": "OrbitStormElectrification",
+   "residency": "cpu",
+   "summary": "Charge, field solve, stochastic leader flashes, DischargeGraph, random-access flash schedule.",
+   "sources": [
+    "engine/storm_electrification"
+   ],
+   "size": "",
+   "update_rate": "",
+   "status": "experimental",
+   "confidence": "verified",
+   "doc": "/rendering/unified-transport/storm-electrification"
+  },
+  {
+   "id": "cloud_lab",
+   "label": "Cloud lab (one isolated cloud)",
+   "layer": "weather",
+   "module": "OrbitCelestialClouds",
+   "residency": "cpu->gpu",
+   "summary": "RPC-parameterised single cloud of a chosen type, radius, density, maturity; optional sun override.",
+   "sources": [
+    "engine/celestial_clouds"
+   ],
+   "size": "params",
+   "update_rate": "on edit",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/clouds/cloud-lab"
+  },
+  {
+   "id": "cloud_march",
+   "label": "CloudRenderer ray march (system A)",
+   "layer": "cloud",
+   "module": "OrbitCelestialClouds",
+   "residency": "gpu",
+   "summary": "Half-res RGBA16F march of the first layer; own hand-tuned ambient term and octave multiple scattering; temporal resolve.",
+   "sources": [
+    "engine/celestial_clouds/src/CloudRenderer.cpp"
+   ],
+   "size": "half-res target",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/clouds/raymarch"
+  },
+  {
+   "id": "cloud_system_b",
+   "label": "Unified cloud system B (experimental)",
+   "layer": "cloud",
+   "module": "OrbitCelestialClouds",
+   "residency": "gpu",
+   "summary": "Separately owned planet-scale backend: layered extinction, nested storm sampling, sun optical-depth cache; benchmarked against A.",
+   "sources": [
+    "engine/celestial_clouds/src/UnifiedCloudRenderer.cpp"
+   ],
+   "size": "",
+   "update_rate": "",
+   "status": "experimental",
+   "confidence": "verified",
+   "doc": "/rendering/clouds/unified-system-b"
+  },
+  {
+   "id": "cloud_farfield",
+   "label": "Far-field transmittance LUT",
+   "layer": "cloud",
+   "module": "OrbitCelestialClouds + OrbitOpticalTransport",
+   "residency": "cpu->gpu",
+   "summary": "Mean exp(-K s) at four scales over (hardness, coverage); baked from the noise volume.",
+   "sources": [
+    "engine/celestial_clouds/include/orbit/celestial_clouds/CloudFarField.hpp"
+   ],
+   "size": "5x17x4 floats",
+   "update_rate": "static",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/clouds/raymarch"
+  },
+  {
+   "id": "cloud_lightvol",
+   "label": "Cloud light volume (3 toroidal cascades)",
+   "layer": "cloud",
+   "module": "OrbitCelestialClouds",
+   "residency": "gpu",
+   "summary": "Camera-centred optical depth toward the sun (250 m, 2 km, 8 km cells; usable to about 11/92/368 km), refreshed a few voxels per frame, generation-tagged.",
+   "sources": [
+    "engine/celestial_clouds/src/CloudRenderer.cpp"
+   ],
+   "size": "MB",
+   "update_rate": "few voxels/frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/clouds/shadows-and-light-volume"
+  },
+  {
+   "id": "cloud_shadow",
+   "label": "CloudShadow pass (surface sun transmittance)",
+   "layer": "cloud",
+   "module": "OrbitCelestialClouds",
+   "residency": "gpu",
+   "summary": "Half-res per-pixel 16-step march toward the sun through the shell; multiplies the stellar term only; ambient is untouched.",
+   "sources": [
+    "engine/celestial_clouds/src/CloudRenderer.cpp"
+   ],
+   "size": "half-res R",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/clouds/shadows-and-light-volume"
+  },
+  {
+   "id": "planet_appearance",
+   "label": "Planetary appearance product",
+   "layer": "cloud",
+   "module": "OrbitCelestialAppearance",
+   "residency": "cpu->gpu",
+   "summary": "Disposable revisioned far-view product from terrain, climate, biome, water; carries ground albedo for orbit.",
+   "sources": [
+    "engine/celestial_appearance"
+   ],
+   "size": "",
+   "update_rate": "revision",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/celestial/appearance"
+  },
+  {
+   "id": "globe_far",
+   "label": "Macro globe, far renderer, ocean optics",
+   "layer": "cloud",
+   "module": "OrbitCelestialGlobe / FarRender / Ocean",
+   "residency": "gpu",
+   "summary": "Orbital rungs of the representation ladder; composite cloud field and ocean optics.",
+   "sources": [
+    "engine/celestial_globe",
+    "engine/celestial_far_render",
+    "engine/celestial_ocean"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/celestial/globe"
+  },
+  {
+   "id": "celestial_sched",
+   "label": "Celestial work scheduler",
+   "layer": "control",
+   "module": "OrbitCelestialScheduler",
+   "residency": "cpu",
+   "summary": "Frame-budgeted, prioritised derived work with CPU or GPU backend: orbital appearance, atmosphere LUT/sky, cloud field, impostors, rings, aurora.",
+   "sources": [
+    "engine/celestial_scheduler"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/celestial/scheduler"
+  },
+  {
+   "id": "clipmaps",
+   "label": "Terrain clipmaps (20 levels, toroidal)",
+   "layer": "terrain",
+   "module": "OrbitTerrainView / Stream / Render",
+   "residency": "gpu",
+   "summary": "Nested 2:1 levels (1 m to ~16,800 km half extent), 129^2 samples per level, 32 B/sample, azimuthal-equidistant lattice.",
+   "sources": [
+    "engine/terrain_view",
+    "engine/terrain_stream",
+    "engine/terrain_render"
+   ],
+   "size": "~17k samples x 32 B per level",
+   "update_rate": "on scroll / edit",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/terrain/clipmaps"
+  },
+  {
+   "id": "terrain_gpu",
+   "label": "GPU terrain generation and passes",
+   "layer": "terrain",
+   "module": "OrbitTerrainGpu",
+   "residency": "gpu",
+   "summary": "Field generator, region deltas, physical page composite, hydrology/erosion chains; GPU-resident, no CPU Sample for clipmaps.",
+   "sources": [
+    "engine/terrain_gpu"
+   ],
+   "size": "",
+   "update_rate": "on scroll / edit",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/terrain/gpu-passes"
+  },
+  {
+   "id": "terrain_src",
+   "label": "TerrainSource (analytic + baked)",
+   "layer": "terrain",
+   "module": "OrbitTerrain",
+   "residency": "cpu",
+   "summary": "CPU authority for elevation, climate, materials; GPU generator mirrors it; Phacelle erosion lives here.",
+   "sources": [
+    "engine/terrain"
+   ],
+   "size": "",
+   "update_rate": "revision",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/terrain/contracts"
+  },
+  {
+   "id": "terrain_ambient",
+   "label": "Terrain sky-visibility channel",
+   "layer": "terrain",
+   "module": "OrbitTerrainRender / OrbitTerrainGpu",
+   "residency": "gpu",
+   "summary": "Per-sample sky openness and lean in a buffer with each level's toroidal addressing; 16 horizon azimuths, coarse-to-fine merge; level table per frame.",
+   "sources": [
+    "engine/terrain_gpu/src/GpuTerrainAmbient.cpp",
+    "engine/terrain/include/orbit/terrain/TerrainAmbientLayout.hpp"
+   ],
+   "size": "4 B/sample; 80 B/level table",
+   "update_rate": "when a level's samples change",
+   "status": "experimental",
+   "confidence": "verified",
+   "doc": "/rendering/terrain/clipmaps/ambient"
+  },
+  {
+   "id": "sun_field",
+   "label": "Terrain sun-shadow field (body-fixed 1024x512)",
+   "layer": "terrain",
+   "module": "OrbitLighting",
+   "residency": "cpu->gpu",
+   "summary": "Coarse global heightfield from TerrainSource.Sample (background job); shared by surfaces, atmosphere and clouds; per-pixel march in shaders.",
+   "sources": [
+    "engine/lighting/src/TerrainSunShadow.cpp",
+    "engine/studio_ui/src/StudioViewportTerrainSunShadow.cpp"
+   ],
+   "size": "2 MB f32; 256 KiB/frame upload",
+   "update_rate": "per source revision",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/lighting/terrain-sun-visibility"
+  },
+  {
+   "id": "surface_class",
+   "label": "GPU surface classifier / terrain pixel shader",
+   "layer": "terrain",
+   "module": "OrbitTerrainRender",
+   "residency": "gpu",
+   "summary": "Biome and material to albedo, roughness; writes the four G-buffer targets; surface effect stamps spliced in.",
+   "sources": [
+    "engine/terrain_render/src/TerrainSurfaceShader.hpp"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/terrain/surface-material"
+  },
+  {
+   "id": "visibility_reg",
+   "label": "Visibility registry and providers",
+   "layer": "lighting",
+   "module": "OrbitLighting",
+   "residency": "cpu+gpu",
+   "summary": "One provider-agnostic occlusion API over screen-space, analytic, terrain-heightfield, software proxy and hardware ray-query providers.",
+   "sources": [
+    "engine/lighting"
+   ],
+   "size": "",
+   "update_rate": "per query",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/lighting/visibility-and-reflections"
+  },
+  {
+   "id": "proxy_shadow",
+   "label": "Proxy sun shadow",
+   "layer": "lighting",
+   "module": "OrbitLighting",
+   "residency": "gpu",
+   "summary": "One hardware ray per pixel toward the star for authored Visibility Proxies.",
+   "sources": [
+    "engine/lighting/src/ProxySunShadow.cpp"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/lighting/proxy-sun-shadow"
+  },
+  {
+   "id": "direct_light",
+   "label": "DirectLightingRenderer",
+   "layer": "lighting",
+   "module": "OrbitLighting",
+   "residency": "gpu",
+   "summary": "Stellar term x cloud shadow x proxy shadow x terrain visibility, plus sky fill (terrain ambient, cache cell, analytic fallback); 40 push dwords, 9 buffers, 6 textures.",
+   "sources": [
+    "engine/lighting/src/DirectLighting.cpp"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/lighting"
+  },
+  {
+   "id": "radiance_cache",
+   "label": "Radiance clipmap cache (3D)",
+   "layer": "lighting",
+   "module": "OrbitLighting",
+   "residency": "cpu+gpu",
+   "summary": "6 levels x 32^3 cells from 2 m (x4 per level), 96 B cells: L1 bounce plus sky channel; CPU residency and estimator, GPU cells.",
+   "sources": [
+    "engine/lighting/src/RadianceClipmapResidency.cpp",
+    "engine/lighting/src/RadianceEstimator.cpp"
+   ],
+   "size": "~19 MB cells; ~64 cells/frame update",
+   "update_rate": "budgeted, 1.2 ms/frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/lighting/radiance-cache"
+  },
+  {
+   "id": "final_gather",
+   "label": "Screen-space final gather and cache sampler",
+   "layer": "lighting",
+   "module": "OrbitLighting",
+   "residency": "gpu",
+   "summary": "One ray per 2x2 quad with bilateral reconstruction; radiance-cache fallback.",
+   "sources": [
+    "engine/lighting/src/RadianceCacheSampler.cpp"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/lighting/visibility-and-reflections"
+  },
+  {
+   "id": "reflections",
+   "label": "Hybrid and exact reflections",
+   "layer": "lighting",
+   "module": "OrbitLighting",
+   "residency": "gpu",
+   "summary": "Smooth triangle reflections over one cached opaque scene; reads the cache sky channel.",
+   "sources": [
+    "engine/lighting/src/HybridReflectionRenderer.cpp"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "experimental",
+   "confidence": "verified",
+   "doc": "/rendering/lighting/smooth-reflections"
+  },
+  {
+   "id": "lighting_sched",
+   "label": "Lighting scheduler",
+   "layer": "control",
+   "module": "OrbitLighting",
+   "residency": "cpu",
+   "summary": "Per-frame GPU budget and quality policy to a work plan (visibility, GI, reflections, emissive).",
+   "sources": [
+    "engine/lighting/src/LightingScheduler.cpp"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/lighting/scheduler"
+  },
+  {
+   "id": "local_lights",
+   "label": "Tiled local lights, particle grid, emissive",
+   "layer": "lighting",
+   "module": "OrbitLighting",
+   "residency": "cpu->gpu",
+   "summary": "Flux-ranked tile lists with overflow proxies; city light tree; transient lightning lights.",
+   "sources": [
+    "engine/lighting"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/lighting"
+  },
+  {
+   "id": "water",
+   "label": "Near-field and orbital water",
+   "layer": "lighting",
+   "module": "OrbitTerrainRender / OrbitCelestialOcean",
+   "residency": "gpu",
+   "summary": "Bed, water vertex and water pixel shader variants; sky irradiance and sun passed as constants.",
+   "sources": [
+    "engine/terrain_render/src/WaterVolumeShader.cpp"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/terrain/water-volume-shader"
+  },
+  {
+   "id": "exposure",
+   "label": "Eye adaptation and tone mapping",
+   "layer": "output",
+   "module": "OrbitPostProcess",
+   "residency": "gpu",
+   "summary": "Auto-exposure in cd/m^2 from a luminance histogram; highlight protection; TAA.",
+   "sources": [
+    "engine/post_process"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/lighting/eye-adaptation"
+  },
+  {
+   "id": "orchestrator",
+   "label": "StudioViewportLightingPass (frame orchestrator)",
+   "layer": "control",
+   "module": "OrbitStudioUi",
+   "residency": "cpu",
+   "summary": "Builds the render graph per view: gathers sun, sky summary, cache snapshots, terrain buffers; owns bypass flags (RPC and MCP).",
+   "sources": [
+    "engine/studio_ui/src/StudioViewportLightingPass.cpp"
+   ],
+   "size": "",
+   "update_rate": "per frame",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/rendering/lighting"
+  },
+  {
+   "id": "fields",
+   "label": "FieldRegistry (CPU/GPU/hybrid fields)",
+   "layer": "control",
+   "module": "OrbitFields",
+   "residency": "cpu",
+   "summary": "Describes spatial fields with residency and resolution policy; the existing vocabulary for residency decisions.",
+   "sources": [
+    "engine/fields"
+   ],
+   "size": "",
+   "update_rate": "",
+   "status": "stable",
+   "confidence": "verified",
+   "doc": "/world/fields"
+  }
+ ],
+ "edges": [
+  {
+   "source": "star",
+   "target": "direct_light",
+   "label": "irradiance, angular radius",
+   "kind": "data",
+   "transport": "cpu->gpu constants",
+   "size": "tens of B",
+   "update_rate": "per frame"
+  },
+  {
+   "source": "orbits",
+   "target": "direct_light",
+   "label": "sun direction (body-fixed)",
+   "kind": "data",
+   "transport": "cpu->gpu constants",
+   "size": "12 B",
+   "update_rate": "per frame"
+  },
+  {
+   "source": "orbits",
+   "target": "sky_view",
+   "label": "sun direction in sky frame",
+   "kind": "data",
+   "transport": "cpu",
+   "size": "",
+   "update_rate": "snapped 1/512"
+  },
+  {
+   "source": "finite_disc",
+   "target": "direct_light",
+   "label": "disc visibility (HLSL mirror)",
+   "kind": "data",
+   "transport": "shader code",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "atmo_author",
+   "target": "atmo_params",
+   "label": "derived coefficients",
+   "kind": "data",
+   "transport": "cpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "atmo_params",
+   "target": "atmo_luts",
+   "label": "fingerprint, rebuild",
+   "kind": "invalidates",
+   "transport": "cpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "atmo_params",
+   "target": "sky_view",
+   "label": "fingerprint, rebuild",
+   "kind": "invalidates",
+   "transport": "cpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "atmo_luts",
+   "target": "atmo_render",
+   "label": "transmittance, multiple scattering",
+   "kind": "data",
+   "transport": "cpu->gpu upload",
+   "size": "~70 KB",
+   "update_rate": "on edit"
+  },
+  {
+   "source": "sky_view",
+   "target": "atmo_render",
+   "label": "sky radiance",
+   "kind": "data",
+   "transport": "cpu->gpu upload",
+   "size": "~64 KB",
+   "update_rate": "on altitude/sun change"
+  },
+  {
+   "source": "sky_view",
+   "target": "sky_sh",
+   "label": "CPU texels to SH9",
+   "kind": "data",
+   "transport": "cpu",
+   "size": "",
+   "update_rate": "per view"
+  },
+  {
+   "source": "sky_sh",
+   "target": "radiance_cache",
+   "label": "baked sky channel + refresh fingerprint",
+   "kind": "data",
+   "transport": "cpu",
+   "size": "27 floats",
+   "update_rate": "per view"
+  },
+  {
+   "source": "sky_sh",
+   "target": "direct_light",
+   "label": "sky irradiance (rgb) push constants",
+   "kind": "data",
+   "transport": "cpu->gpu constants",
+   "size": "12-16 B",
+   "update_rate": "per frame"
+  },
+  {
+   "source": "sky_sh",
+   "target": "water",
+   "label": "sky irradiance",
+   "kind": "data",
+   "transport": "cpu->gpu constants",
+   "size": "12 B",
+   "update_rate": "per frame"
+  },
+  {
+   "source": "sky_sh",
+   "target": "reflections",
+   "label": "sky irradiance",
+   "kind": "data",
+   "transport": "cpu->gpu constants",
+   "size": "12 B",
+   "update_rate": "per frame"
+  },
+  {
+   "source": "atmo_luts",
+   "target": "cloud_march",
+   "label": "sun transmittance, multiple scattering",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "atmo_luts",
+   "target": "direct_light",
+   "label": "sun transmittance at surface",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "optical_core",
+   "target": "cloud_farfield",
+   "label": "TransmittanceStats",
+   "kind": "data",
+   "transport": "cpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "optical_core",
+   "target": "atmo_render",
+   "label": "refraction table (experimental)",
+   "kind": "data",
+   "transport": "cpu->gpu",
+   "size": "",
+   "update_rate": "static"
+  },
+  {
+   "source": "weather_model",
+   "target": "cloud_field",
+   "label": "coverage, type, precipitation",
+   "kind": "data",
+   "transport": "cpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "cloud_field",
+   "target": "cloud_march",
+   "label": "texel buffer",
+   "kind": "data",
+   "transport": "cpu->gpu HostVisible",
+   "size": "~3.6 MB/layer",
+   "update_rate": "product rebuild"
+  },
+  {
+   "source": "cloud_field",
+   "target": "globe_far",
+   "label": "orbital composite",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "storm_gpu",
+   "target": "cloud_march",
+   "label": "nested storm density",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": "per sim step"
+  },
+  {
+   "source": "storm_gpu",
+   "target": "storm_electric",
+   "label": "microphysics fields",
+   "kind": "data",
+   "transport": "gpu->cpu (checkpoints)",
+   "size": "large",
+   "update_rate": "rare"
+  },
+  {
+   "source": "storm_electric",
+   "target": "local_lights",
+   "label": "transient flash lights",
+   "kind": "data",
+   "transport": "cpu->gpu",
+   "size": "",
+   "update_rate": "per flash"
+  },
+  {
+   "source": "cloud_lab",
+   "target": "cloud_march",
+   "label": "isolated cloud parameters",
+   "kind": "data",
+   "transport": "cpu->gpu constants",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "cloud_farfield",
+   "target": "cloud_march",
+   "label": "far-field transmittance",
+   "kind": "data",
+   "transport": "cpu->gpu",
+   "size": "~1 KB",
+   "update_rate": "static"
+  },
+  {
+   "source": "cloud_march",
+   "target": "cloud_lightvol",
+   "label": "same density, sun march",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "cloud_lightvol",
+   "target": "cloud_march",
+   "label": "sun optical depth",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "cloud_march",
+   "target": "cloud_shadow",
+   "label": "same density as camera march",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "cloud_shadow",
+   "target": "direct_light",
+   "label": "sun transmittance (stellar term only)",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "half-res R",
+   "update_rate": "per frame"
+  },
+  {
+   "source": "cloud_system_b",
+   "target": "cloud_march",
+   "label": "benchmarked against A",
+   "kind": "control",
+   "transport": "",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "planet_appearance",
+   "target": "globe_far",
+   "label": "albedo, climate, water",
+   "kind": "data",
+   "transport": "cpu->gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "celestial_sched",
+   "target": "sky_view",
+   "label": "schedules atmosphere sky/LUT work",
+   "kind": "control",
+   "transport": "",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "celestial_sched",
+   "target": "cloud_field",
+   "label": "schedules cloud field work",
+   "kind": "control",
+   "transport": "",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "terrain_src",
+   "target": "terrain_gpu",
+   "label": "parity mirror",
+   "kind": "data",
+   "transport": "cpu code mirrors gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "terrain_gpu",
+   "target": "clipmaps",
+   "label": "generated samples",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "clipmaps",
+   "target": "terrain_ambient",
+   "label": "level heights",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "terrain_ambient",
+   "target": "direct_light",
+   "label": "sky visibility + lean",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "4 B/sample",
+   "update_rate": "per frame lookup"
+  },
+  {
+   "source": "terrain_src",
+   "target": "sun_field",
+   "label": "Sample() on background job",
+   "kind": "data",
+   "transport": "cpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "sun_field",
+   "target": "direct_light",
+   "label": "terrain sun visibility",
+   "kind": "data",
+   "transport": "cpu->gpu",
+   "size": "2 MB",
+   "update_rate": "per revision"
+  },
+  {
+   "source": "sun_field",
+   "target": "cloud_shadow",
+   "label": "shared body-fixed field",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "sun_field",
+   "target": "atmo_render",
+   "label": "terrain-occluded atmosphere",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "clipmaps",
+   "target": "surface_class",
+   "label": "samples, slopes, biome weights",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "surface_class",
+   "target": "direct_light",
+   "label": "G-buffer (albedo, normal, class)",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "visibility_reg",
+   "target": "radiance_cache",
+   "label": "occlusion for cell estimates",
+   "kind": "data",
+   "transport": "cpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "terrain_src",
+   "target": "visibility_reg",
+   "label": "heightfield provider",
+   "kind": "data",
+   "transport": "cpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "proxy_shadow",
+   "target": "direct_light",
+   "label": "proxy sun visibility",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "radiance_cache",
+   "target": "direct_light",
+   "label": "sky channel (fallback after terrain ambient)",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "96 B/cell",
+   "update_rate": ""
+  },
+  {
+   "source": "radiance_cache",
+   "target": "final_gather",
+   "label": "L1 irradiance fallback",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "radiance_cache",
+   "target": "reflections",
+   "label": "cell sky/L1",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "lighting_sched",
+   "target": "radiance_cache",
+   "label": "update budget",
+   "kind": "control",
+   "transport": "",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "orchestrator",
+   "target": "radiance_cache",
+   "label": "snapshot upload (changed cells)",
+   "kind": "data",
+   "transport": "cpu->gpu",
+   "size": "96 B/changed cell",
+   "update_rate": "~64/frame"
+  },
+  {
+   "source": "orchestrator",
+   "target": "direct_light",
+   "label": "pushes constants, binds buffers",
+   "kind": "control",
+   "transport": "cpu->gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "direct_light",
+   "target": "exposure",
+   "label": "HDR scene color",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "atmo_render",
+   "target": "exposure",
+   "label": "composited sky",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "cloud_march",
+   "target": "exposure",
+   "label": "cloud radiance + transmittance",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "water",
+   "target": "exposure",
+   "label": "water radiance",
+   "kind": "data",
+   "transport": "gpu",
+   "size": "",
+   "update_rate": ""
+  },
+  {
+   "source": "clipmaps",
+   "target": "orchestrator",
+   "label": "ground height readback",
+   "kind": "data",
+   "transport": "gpu->cpu",
+   "size": "16 B",
+   "update_rate": "per frame"
+  },
+  {
+   "source": "fields",
+   "target": "clipmaps",
+   "label": "residency vocabulary (not yet used here)",
+   "kind": "control",
+   "transport": "",
+   "size": "",
+   "update_rate": ""
+  }
+ ]
+}

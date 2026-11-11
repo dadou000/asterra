@@ -90,13 +90,18 @@ float3 MetadataColor(float packed)
 
 float4 main(VSOutput input) : SV_Target0
 {
-    const float4 value =
-        g_source.Sample(g_sampler, input.uv);
+    // Reserve the right-hand diagnostic channel as a separate labeled tile
+    // rather than silently overwriting 12% of the main image.
+    const bool secondary = input.uv.x >= 0.88;
+    const float2 sourceUv = float2(
+        secondary ? (input.uv.x - 0.88) / 0.12 : input.uv.x / 0.88,
+        input.uv.y);
+    const float4 value = g_source.Sample(g_sampler, saturate(sourceUv));
 
     if (g.mode < 1.5)
     {
-        // Base color in the main image; roughness as a right-side strip.
-        if (input.uv.x > 0.88)
+        // Main image = albedo; separate secondary tile = roughness.
+        if (secondary)
         {
             return float4(value.aaa, 1.0);
         }
@@ -105,7 +110,7 @@ float4 main(VSOutput input) : SV_Target0
 
     if (g.mode < 2.5)
     {
-        // Normal remapped from [-1,1], metallic in the side strip.
+        // Main image = normal; secondary tile = metallic.
         if (input.uv.x > 0.88)
         {
             return float4(value.aaa, 1.0);

@@ -1,7 +1,10 @@
 #include <orbit/profiler/Profiler.hpp>
 #include "VulkanObjects.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -112,7 +115,7 @@ void TransitionNewImageBlocking(
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = image;
     barrier.subresourceRange = {
-        aspectMask, 0, 1, 0, 1
+        aspectMask, 0, VK_REMAINING_MIP_LEVELS, 0, 1
     };
 
     VkDependencyInfo dependencyInfo{};
@@ -159,6 +162,8 @@ VkFormat ToNativeTextureFormat(const TextureFormat format)
         return VK_FORMAT_R32_SFLOAT;
     case TextureFormat::RG32_Float:
         return VK_FORMAT_R32G32_SFLOAT;
+    case TextureFormat::RGBA8_SRGB:
+        return VK_FORMAT_R8G8B8A8_SRGB;
     }
 
     throw std::invalid_argument(
@@ -169,12 +174,18 @@ VulkanBuffer::VulkanBuffer(
     const VmaAllocator allocator,
     const VkBuffer nativeBuffer,
     const VmaAllocation allocation,
-    const BufferDesc desc)
+    const BufferDesc desc,
+    GpuProgress* const progress)
     : allocator_(allocator),
       nativeBuffer_(nativeBuffer),
       allocation_(allocation),
-      desc_(desc)
+      desc_(desc),
+      progress_(progress)
 {
+    if (progress_ != nullptr && desc_.memory != MemoryUsage::GpuOnly)
+    {
+        lastUse_ = std::make_shared<std::atomic<u64>>(0U);
+    }
 }
 
 VulkanBuffer::~VulkanBuffer()
@@ -186,7 +197,23 @@ VulkanBuffer::~VulkanBuffer()
 
     if (nativeBuffer_ != VK_NULL_HANDLE)
     {
-        vmaDestroyBuffer(allocator_, nativeBuffer_, allocation_);
+        // Commands already submitted (or still being recorded) may read or
+        // write this buffer: free it once the next submit has completed
+        // instead of stalling the CPU here.
+        const VmaAllocator allocator = allocator_;
+        const VkBuffer buffer = nativeBuffer_;
+        const VmaAllocation allocation = allocation_;
+        auto destroy = [allocator, buffer, allocation]
+        { vmaDestroyBuffer(allocator, buffer, allocation); };
+
+        if (progress_ != nullptr)
+        {
+            progress_->Retire(progress_->NextSerial(), std::move(destroy));
+        }
+        else
+        {
+            destroy();
+        }
     }
 }
 
@@ -217,6 +244,43 @@ std::byte* VulkanBuffer::Map()
     {
         throw std::runtime_error(
             "Orbit Vulkan buffer is already mapped.");
+    }
+
+    // Precise CPU/GPU hazard guard: the host may write (upload) or read
+    // (readback) this memory only once the last submit that referenced it
+    // has completed. A buffer used by a frame already retired, such as one
+    // slot of a per-frame ring, passes without waiting; one reused while
+    // its previous submit is in flight waits exactly as long as needed.
+    if (lastUse_ != nullptr)
+    {
+        const u64 lastUse = lastUse_->load(std::memory_order_acquire);
+        if (!progress_->IsComplete(lastUse))
+        {
+            static const bool logHazards = []
+            {
+                char* value = nullptr;
+                std::size_t length = 0;
+                bool enabled = false;
+                if (_dupenv_s(&value, &length, "ORBIT_RHI_LOG_HAZARDS") == 0 &&
+                    value != nullptr)
+                {
+                    enabled = value[0] == '1';
+                    std::free(value);
+                }
+                return enabled;
+            }();
+            if (logHazards)
+            {
+                std::fprintf(
+                    stderr,
+                    "[orbit.rhi] host Map waits on in-flight submit: "
+                    "%llu bytes, usage %u, memory %u\n",
+                    static_cast<unsigned long long>(desc_.sizeBytes),
+                    static_cast<unsigned>(desc_.usage),
+                    static_cast<unsigned>(desc_.memory));
+            }
+            progress_->Wait(lastUse);
+        }
     }
 
     void* data = nullptr;
@@ -275,6 +339,12 @@ VkBuffer VulkanBuffer::Native() const noexcept
     return nativeBuffer_;
 }
 
+const std::shared_ptr<std::atomic<u64>>&
+VulkanBuffer::UseTracker() const noexcept
+{
+    return lastUse_;
+}
+
 VulkanTexture::VulkanTexture(
     const VkDevice device,
     const VmaAllocator allocator,
@@ -284,7 +354,10 @@ VulkanTexture::VulkanTexture(
     const u32 width,
     const u32 height,
     const TextureFormat format,
-    const bool ownsImage)
+    const bool ownsImage,
+    const u32 mipLevels,
+    const VkSampler sampler,
+    GpuProgress* const progress)
     : device_(device),
       allocator_(allocator),
       nativeImage_(nativeImage),
@@ -294,26 +367,65 @@ VulkanTexture::VulkanTexture(
       height_(height),
       format_(format),
       ownsImage_(ownsImage),
+      mipLevels_(mipLevels),
+      sampler_(sampler),
       // Regular (ownsImage=true) textures are already pre-warmed into
       // their real initial layout by TransitionNewImageBlocking
       // before this constructor runs; a swapchain-provided
       // (ownsImage=false) image starts truly UNDEFINED and unacquired
       // -- see EverUsed()'s declaration in VulkanObjects.hpp.
-      everUsed_(ownsImage)
+      everUsed_(ownsImage),
+      progress_(progress)
 {
 }
 
 VulkanTexture::~VulkanTexture()
 {
-    if (imageView_ != VK_NULL_HANDLE)
+    const VkDevice device = device_;
+    const VmaAllocator allocator = allocator_;
+    const VkSampler sampler = sampler_;
+    const VkImageView imageView = imageView_;
+    const VkImage image =
+        ownsImage_ ? nativeImage_ : static_cast<VkImage>(VK_NULL_HANDLE);
+    const VmaAllocation allocation = allocation_;
+    auto destroy =
+        [device, allocator, sampler, imageView, image, allocation]
     {
-        vkDestroyImageView(device_, imageView_, nullptr);
-    }
+        if (sampler != VK_NULL_HANDLE)
+        {
+            vkDestroySampler(device, sampler, nullptr);
+        }
 
-    if (ownsImage_ && nativeImage_ != VK_NULL_HANDLE)
+        if (imageView != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(device, imageView, nullptr);
+        }
+
+        if (image != VK_NULL_HANDLE)
+        {
+            vmaDestroyImage(allocator, image, allocation);
+        }
+    };
+
+    // The image may still be sampled or rendered to by submitted work.
+    if (progress_ != nullptr)
     {
-        vmaDestroyImage(allocator_, nativeImage_, allocation_);
+        progress_->Retire(progress_->NextSerial(), std::move(destroy));
     }
+    else
+    {
+        destroy();
+    }
+}
+
+u32 VulkanTexture::MipLevels() const noexcept
+{
+    return mipLevels_;
+}
+
+VkSampler VulkanTexture::Sampler() const noexcept
+{
+    return sampler_;
 }
 
 u32 VulkanTexture::Width() const noexcept
@@ -382,7 +494,8 @@ VulkanAccelerationStructure::VulkanAccelerationStructure(
     const VmaAllocation aabbAllocation,
     const VkBuffer instanceBuffer,
     const VmaAllocation instanceAllocation,
-    const u32 primitiveCount)
+    const u32 primitiveCount,
+    GpuProgress* const progress)
     : device_(device),
       allocator_(allocator),
       functions_(&functions),
@@ -396,62 +509,74 @@ VulkanAccelerationStructure::VulkanAccelerationStructure(
       aabbAllocation_(aabbAllocation),
       instanceBuffer_(instanceBuffer),
       instanceAllocation_(instanceAllocation),
-      primitiveCount_(primitiveCount)
+      primitiveCount_(primitiveCount),
+      progress_(progress)
 {
 }
 
 VulkanAccelerationStructure::~VulkanAccelerationStructure()
 {
-    if (functions_ != nullptr &&
-        functions_->vkDestroyAccelerationStructureKHR != nullptr)
+    const VkDevice device = device_;
+    const VmaAllocator allocator = allocator_;
+    const DeviceFunctions* const functions = functions_;
+    const VkAccelerationStructureKHR topLevel = topLevel_;
+    const VkAccelerationStructureKHR bottomLevel = bottomLevel_;
+    const VkBuffer topBuffer = topLevelBuffer_;
+    const VmaAllocation topAllocation = topLevelAllocation_;
+    const VkBuffer bottomBuffer = bottomLevelBuffer_;
+    const VmaAllocation bottomAllocation = bottomLevelAllocation_;
+    const VkBuffer instanceBuffer = instanceBuffer_;
+    const VmaAllocation instanceAllocation = instanceAllocation_;
+    const VkBuffer aabbBuffer = aabbBuffer_;
+    const VmaAllocation aabbAllocation = aabbAllocation_;
+
+    auto destroy = [=]
     {
-        if (topLevel_ != VK_NULL_HANDLE)
+        if (functions != nullptr &&
+            functions->vkDestroyAccelerationStructureKHR != nullptr)
         {
-            functions_->vkDestroyAccelerationStructureKHR(
-                device_,
-                topLevel_,
-                nullptr);
+            if (topLevel != VK_NULL_HANDLE)
+            {
+                functions->vkDestroyAccelerationStructureKHR(
+                    device, topLevel, nullptr);
+            }
+
+            if (bottomLevel != VK_NULL_HANDLE)
+            {
+                functions->vkDestroyAccelerationStructureKHR(
+                    device, bottomLevel, nullptr);
+            }
         }
 
-        if (bottomLevel_ != VK_NULL_HANDLE)
+        if (topBuffer != VK_NULL_HANDLE)
         {
-            functions_->vkDestroyAccelerationStructureKHR(
-                device_,
-                bottomLevel_,
-                nullptr);
+            vmaDestroyBuffer(allocator, topBuffer, topAllocation);
         }
-    }
 
-    if (topLevelBuffer_ != VK_NULL_HANDLE)
-    {
-        vmaDestroyBuffer(
-            allocator_,
-            topLevelBuffer_,
-            topLevelAllocation_);
-    }
+        if (bottomBuffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(allocator, bottomBuffer, bottomAllocation);
+        }
 
-    if (bottomLevelBuffer_ != VK_NULL_HANDLE)
-    {
-        vmaDestroyBuffer(
-            allocator_,
-            bottomLevelBuffer_,
-            bottomLevelAllocation_);
-    }
+        if (instanceBuffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(allocator, instanceBuffer, instanceAllocation);
+        }
 
-    if (instanceBuffer_ != VK_NULL_HANDLE)
-    {
-        vmaDestroyBuffer(
-            allocator_,
-            instanceBuffer_,
-            instanceAllocation_);
-    }
+        if (aabbBuffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(allocator, aabbBuffer, aabbAllocation);
+        }
+    };
 
-    if (aabbBuffer_ != VK_NULL_HANDLE)
+    // Ray-query passes in submitted work may still trace this structure.
+    if (progress_ != nullptr)
     {
-        vmaDestroyBuffer(
-            allocator_,
-            aabbBuffer_,
-            aabbAllocation_);
+        progress_->Retire(progress_->NextSerial(), std::move(destroy));
+    }
+    else
+    {
+        destroy();
     }
 }
 
@@ -1105,7 +1230,8 @@ VulkanDevice::CreateAabbAccelerationStructure(
                 aabbBuffer.allocation,
                 instanceBuffer.buffer,
                 instanceBuffer.allocation,
-                primitiveCount);
+                primitiveCount,
+                progress_.get());
     }
     catch (...)
     {
@@ -1160,8 +1286,9 @@ std::unique_ptr<Buffer> VulkanDevice::CreateBuffer(const BufferDesc& desc)
             "Orbit failed to create a Vulkan buffer.");
     }
 
+    progress_->Collect();
     return std::make_unique<VulkanBuffer>(
-        allocator_, nativeBuffer, allocation, desc);
+        allocator_, nativeBuffer, allocation, desc, progress_.get());
 }
 
 std::unique_ptr<Texture> VulkanDevice::CreateTexture(
@@ -1184,7 +1311,15 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
     imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
     imageCreateInfo.format = nativeFormat;
     imageCreateInfo.extent = {desc.width, desc.height, 1};
-    imageCreateInfo.mipLevels = 1;
+    // Full chain length for the extent; never more than requested.
+    u32 fullChain = 1U;
+    for (u32 extent = std::max(desc.width, desc.height); extent > 1U;
+         extent >>= 1U)
+    {
+        ++fullChain;
+    }
+    const u32 mipLevels = std::clamp(desc.mipLevels, 1U, fullChain);
+    imageCreateInfo.mipLevels = mipLevels;
     imageCreateInfo.arrayLayers = 1;
     imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -1239,7 +1374,7 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
     viewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewCreateInfo.format = nativeFormat;
     viewCreateInfo.subresourceRange = {
-        aspectMask, 0, 1, 0, 1
+        aspectMask, 0, mipLevels, 0, 1
     };
 
     VkImageView imageView = VK_NULL_HANDLE;
@@ -1250,6 +1385,36 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
         vmaDestroyImage(allocator_, nativeImage, allocation);
         throw std::runtime_error(
             "Orbit failed to create a Vulkan texture view.");
+    }
+
+    // Textures with a mip chain or wrap addressing bring their own sampler;
+    // everything else keeps using the device's default clamp sampler.
+    VkSampler sampler = VK_NULL_HANDLE;
+    if (mipLevels > 1U || desc.repeatAddress)
+    {
+        VkSamplerCreateInfo samplerCreateInfo{};
+        samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerCreateInfo.magFilter = VK_FILTER_LINEAR;
+        samplerCreateInfo.minFilter = VK_FILTER_LINEAR;
+        samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        const VkSamplerAddressMode address =
+            desc.repeatAddress
+                ? VK_SAMPLER_ADDRESS_MODE_REPEAT
+                : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerCreateInfo.addressModeU = address;
+        samplerCreateInfo.addressModeV = address;
+        samplerCreateInfo.addressModeW = address;
+        samplerCreateInfo.maxLod = static_cast<float>(mipLevels);
+
+        if (vkCreateSampler(
+                nativeDevice_, &samplerCreateInfo, nullptr, &sampler) !=
+            VK_SUCCESS)
+        {
+            vkDestroyImageView(nativeDevice_, imageView, nullptr);
+            vmaDestroyImage(allocator_, nativeImage, allocation);
+            throw std::runtime_error(
+                "Orbit failed to create a Vulkan texture sampler.");
+        }
     }
 
     TransitionNewImageBlocking(
@@ -1268,12 +1433,18 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
         desc.width,
         desc.height,
         desc.format,
-        true);
+        true,
+        mipLevels,
+        sampler,
+        progress_.get());
 }
 
 VulkanTimestampQueryPool::VulkanTimestampQueryPool(
-    const VkDevice device, const VkQueryPool pool, const u32 count)
-    : device_(device), pool_(pool), count_(count)
+    const VkDevice device,
+    const VkQueryPool pool,
+    const u32 count,
+    GpuProgress* const progress)
+    : device_(device), pool_(pool), count_(count), progress_(progress)
 {
 }
 
@@ -1281,7 +1452,19 @@ VulkanTimestampQueryPool::~VulkanTimestampQueryPool()
 {
     if (pool_ != VK_NULL_HANDLE)
     {
-        vkDestroyQueryPool(device_, pool_, nullptr);
+        const VkDevice device = device_;
+        const VkQueryPool pool = pool_;
+        auto destroy = [device, pool]
+        { vkDestroyQueryPool(device, pool, nullptr); };
+
+        if (progress_ != nullptr)
+        {
+            progress_->Retire(progress_->NextSerial(), std::move(destroy));
+        }
+        else
+        {
+            destroy();
+        }
     }
 }
 
@@ -1338,7 +1521,7 @@ VulkanDevice::CreateTimestampQueryPool(const u32 count)
     }
 
     return std::make_unique<VulkanTimestampQueryPool>(
-        nativeDevice_, pool, count);
+        nativeDevice_, pool, count, progress_.get());
 }
 
 bool VulkanDevice::CalibrateGpuClock(

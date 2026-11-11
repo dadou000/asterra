@@ -1,0 +1,404 @@
+#include <orbit/optical_transport/Atmosphere.hpp>
+#include <orbit/optical_transport/CacheStamp.hpp>
+#include <orbit/optical_transport/CloudRepresentation.hpp>
+#include <orbit/optical_transport/DischargeGraph.hpp>
+#include <orbit/optical_transport/EmitterTree.hpp>
+#include <orbit/optical_transport/OpticalHierarchy.hpp>
+#include <orbit/optical_transport/Refraction.hpp>
+#include <orbit/optical_transport/StellarVisibility.hpp>
+#include <orbit/optical_transport/TransmittanceStats.hpp>
+
+#include <cmath>
+#include <cstdio>
+#include <numbers>
+#include <random>
+#include <vector>
+
+using namespace orbit::optical_transport;
+
+namespace
+{
+int failures = 0;
+void Check(bool ok, const char* what)
+{
+    if (!ok)
+    {
+        std::printf("FAIL: %s\n", what);
+        ++failures;
+    }
+}
+bool Near(double a, double b, double rel) { return std::abs(a - b) <= rel * std::max(std::abs(a), std::abs(b)) + 1.0e-300; }
+} // namespace
+
+int main()
+{
+    // --- cache stamps and dependency invalidation
+    {
+        CacheStamp cached{1, 7, 10.0, 3, 5, 2};
+        CacheStamp need = cached;
+        Check(ClassifyCache(cached, need) == CacheValidity::Current, "cache current");
+        need.mediumVersion = 6;
+        Check(ClassifyCache(cached, need) == CacheValidity::StaleMedium, "medium stale");
+        need = cached; need.sourceVersion = 4;
+        Check(ClassifyCache(cached, need) == CacheValidity::StaleSource, "source stale");
+        need = cached; need.regionId = 8;
+        Check(ClassifyCache(cached, need) == CacheValidity::WrongRegion, "region mismatch");
+        const auto camera = InvalidateForCameraChange();
+        Check(!camera.opticalHierarchy && !camera.stellarVisibility && !camera.directionalRadiance && !camera.surfaceTransport,
+              "camera change invalidates no physical product");
+        const auto light = InvalidateForSourceChange(false);
+        Check(!light.opticalHierarchy && !light.stellarVisibility && light.directionalRadiance, "light change keeps extinction");
+        const auto medium = InvalidateForMediumChange();
+        Check(medium.opticalHierarchy && medium.stellarVisibility && medium.diffuseScattering, "medium change cascades");
+        const auto flash = InvalidateForSourceChange(true);
+        Check(flash.transientAtlas && !flash.diffuseScattering, "lightning leaves the permanent solution");
+    }
+
+    // --- humidity, haze and fog
+    {
+        Check(Near(SaturationVapourPressure(293.15), 2339.0, 0.01), "saturation vapour pressure at 20C");
+        const double rh = RelativeHumidity(0.0073, 101325.0, 293.15);
+        Check(rh > 0.45 && rh < 0.55, "relative humidity derived from mixing ratio");
+        double previous = 0.0;
+        bool monotonic = true;
+        for (double h = 0.0; h <= 0.99; h += 0.05)
+        {
+            const double s = HumidExtinctionScale(AerosolKind::Sulfate, h);
+            monotonic = monotonic && s >= previous;
+            previous = s;
+        }
+        Check(monotonic, "hygroscopic extinction rises with humidity");
+        Check(HumidExtinctionScale(AerosolKind::Sulfate, 0.9) > 2.0 * HumidExtinctionScale(AerosolKind::DustSmoke, 0.9) * 0.0 + 1.0,
+              "sulfate haze grows");
+        Check(HumidExtinctionScale(AerosolKind::Sulfate, 0.9) / HumidExtinctionScale(AerosolKind::Sulfate, 0.0) >
+                  HumidExtinctionScale(AerosolKind::DustSmoke, 0.9) / HumidExtinctionScale(AerosolKind::DustSmoke, 0.0),
+              "hygroscopic aerosol grows more than dust");
+        Check(!IsFog(0.95) && IsFog(1.0), "fog needs saturation");
+        Check(Near(HygroscopicGrowthFactor(0.0, 0.9), 1.0, 1e-12), "insoluble particles do not grow");
+    }
+
+    // --- refractive index and ray bending
+    {
+        const double n = 1.0 + AirRefractivity(0.589, 288.15, 101325.0, 0.0);
+        Check(std::abs(n - 1.000277) < 1.0e-6, "refractive index of standard air near the sodium line");
+        const double humid = AirRefractivity(0.589, 288.15, 101325.0, 1700.0);
+        const double dry = AirRefractivity(0.589, 288.15, 101325.0, 0.0);
+        Check(humid < dry, "moisture lowers refractivity");
+        Check(AirRefractivity(0.45, 288.15, 101325.0, 0.0) > AirRefractivity(0.65, 288.15, 101325.0, 0.0), "blue refracts more");
+        Check(AirRefractivity(0.589, 288.15, 50000.0, 0.0) < 0.55 * dry, "refractivity scales with pressure");
+        const double gradient = RefractiveGradientVertical(dry, 288.15, 0.0065);
+        Check(gradient < 0.0, "refractivity falls with altitude");
+        // A ray moving horizontally bends toward higher n (downward) in a standard atmosphere.
+        Vec3 d{1, 0, 0};
+        for (int i = 0; i < 1000; ++i) d = BendRay(d, {0, gradient, 0}, 1.000277, 100.0);
+        Check(d.y < 0.0, "ray curves toward denser air");
+        Check(Near(d.x * d.x + d.y * d.y + d.z * d.z, 1.0, 1e-9), "direction stays unit");
+        // Zero gradient: straight ray.
+        Vec3 straight = BendRay({0, 1, 0}, {0, 0, 0}, 1.0, 50.0);
+        Check(Near(straight.y, 1.0, 1e-12), "no gradient, no bend");
+    }
+
+    // --- stellar disk visibility and transmission
+    {
+        constexpr double sunRadius = 6.957e8, au = 1.495978707e11;
+        const double alpha = AngularRadius(sunRadius, au);
+        Check(Near(alpha, 4.65e-3, 0.01), "solar angular radius is 0.267 degrees");
+        Check(Near(PenumbraWidth(1000.0, alpha), 9.3, 0.02), "penumbra grows with blocker separation");
+        Check(PenumbraWidth(10.0, alpha) < PenumbraWidth(1000.0, alpha), "near blockers have sharper shadows");
+        Check(Near(DiskVisibilityAcrossEdge(0.0, alpha), 0.5, 1e-2), "edge through centre hides half the disk");
+        Check(DiskVisibilityAcrossEdge(alpha * 2.0, alpha) < 1e-9, "fully covered");
+        Check(Near(DiskVisibilityAcrossEdge(-alpha * 2.0, alpha), 1.0, 1e-9), "fully visible");
+        // Limb darkening: the visible sliver near the limb is dimmer than its area suggests.
+        const double uniformHalf = DiskVisibilityAcrossEdge(0.5 * alpha, alpha, 0.0);
+        const double darkenedHalf = DiskVisibilityAcrossEdge(0.5 * alpha, alpha, 0.6);
+        Check(darkenedHalf < uniformHalf - 0.01, "the visible limb side of a darkened disk carries less than its geometric share");
+        // Sun above the astronomical horizon but behind a mountain.
+        Check(HorizonVisibility(0.10, 0.20, alpha) < 1e-9, "sun hidden behind mountain");
+        Check(HorizonVisibility(0.10, 0.0, alpha) > 0.999, "sun clear of the horizon");
+        const double rising = HorizonVisibility(0.10, 0.10, alpha);
+        Check(rising > 0.45 && rising < 0.55, "sun straddling the ridge is half visible");
+        // Disk-averaged transmission is not exp(-mean tau).
+        const double meanTau = 1.0;
+        const double transmission = DiskTransmission(alpha, 0.0, 41, [&](double x, double) { return x > 0 ? 2.0 * meanTau : 0.0; });
+        Check(transmission > std::exp(-meanTau) + 0.05, "average of transmissions exceeds transmission of average");
+        Check(Near(transmission, 0.5 * (1.0 + std::exp(-2.0)), 0.05), "disk transmission matches the two-half average");
+        const std::vector<double> taus{0.0, 0.0, 0.0, 8.0};
+        const auto stats = FilterOpticalDepths(taus);
+        Check(Near(stats.coverage, 0.25, 1e-12), "coverage fraction preserved");
+        Check(EffectiveOpticalDepth(stats) < stats.meanOpticalDepth, "effective tau below mean tau (Jensen)");
+        Check(Near(stats.meanTransmission, (3.0 + std::exp(-8.0)) / 4.0, 1e-9), "mean transmission preserved");
+    }
+
+    // --- optical hierarchy
+    {
+        constexpr std::uint32_t edge = 16;
+        std::vector<float> field(edge * edge * edge, 0.0f);
+        // A dense blob in one corner, otherwise empty.
+        for (std::uint32_t z = 0; z < 4; ++z)
+            for (std::uint32_t y = 0; y < 4; ++y)
+                for (std::uint32_t x = 0; x < 4; ++x)
+                    field[(z * edge + y) * edge + x] = 0.01f * static_cast<float>(1 + (x + y + z) % 3);
+        OpticalHierarchy h;
+        h.Build(field, edge, 10.0);
+        const double origin[3] = {1.0, 1.0, 0.0};
+        const double dir[3] = {0.0, 0.0, 1.0};
+        double exact = 0.0;
+        for (std::uint32_t z = 0; z < edge; ++z)
+            exact += field[(z * edge + 0) * edge + 0] * 10.0;
+        const auto full = h.OpticalDepth(origin, dir, 160.0, 0);
+        Check(Near(full.estimate, exact, 1e-6), "hierarchy reproduces brute-force optical depth");
+        Check(Near(full.lower, full.upper, 1e-9), "exact traversal has a degenerate interval");
+        const auto coarse = h.OpticalDepth(origin, dir, 160.0, 3);
+        Check(coarse.lower <= exact + 1e-9 && coarse.upper >= exact - 1e-9, "coarse interval is conservative");
+        Check(coarse.nodesVisited < full.nodesVisited, "coarse query visits fewer nodes");
+        // Empty space is skipped.
+        const double farOrigin[3] = {100.0, 100.0, 1.0};
+        const auto empty = h.OpticalDepth(farOrigin, dir, 160.0, 0);
+        Check(empty.estimate == 0.0 && empty.nodesVisited < 40, "empty column skipped cheaply");
+        const auto before = h.Version();
+        const std::size_t touched = h.SetVoxel(10, 10, 10, 0.5f);
+        Check(touched == 5, "edit touches one node per level (dirty range)");
+        Check(h.Version() > before, "edit bumps version");
+        Check(h.Root().maximum >= 0.5f, "root bound reflects the edit");
+    }
+
+    // --- emitter hierarchy
+    {
+        std::mt19937 rng(7);
+        std::uniform_real_distribution<double> u(0.0, 1.0);
+        std::vector<Emitter> city;
+        for (int i = 0; i < 5000; ++i)
+        {
+            Emitter e;
+            e.position[0] = u(rng) * 2000.0;
+            e.position[1] = 5.0;
+            e.position[2] = u(rng) * 2000.0;
+            e.power = 50.0 * (0.5 + u(rng));
+            e.axis[1] = 1.0;  // upward-facing (windows, sky glow)
+            e.directionality = 1.0;
+            city.push_back(e);
+        }
+        EmitterTree tree;
+        tree.Build(city);
+        const double expectedPower = [&] { double s = 0; for (auto& e : city) s += e.power; return s; }();
+        Check(Near(tree.TotalPower(), expectedPower, 1e-9), "tree preserves total power");
+        // Cloud base 2 km above the city, normal facing down; ground receiver facing up.
+        const double cloud[3] = {1000.0, 20000.0, 1000.0};
+        const double down[3] = {0, -1, 0};
+        const double up[3] = {0, 1, 0};
+        Check(tree.ExactIrradiance(cloud, up) == 0.0, "a surface facing away from the city receives nothing");
+        const double exactUp = tree.ExactIrradiance(cloud, down);
+        Check(exactUp > 0.0, "cloud underside is lit by the upward-facing lights");
+        const auto approx = tree.Evaluate(cloud, down, 0.02);
+        Check(Near(approx.irradiance, exactUp, 0.05), "bounded evaluation matches the exact sum");
+                Check(approx.sourcesEvaluated < city.size() / 20, "far receiver uses few nodes");
+        const double nearCloud[3] = {1000.0, 300.0, 1000.0};
+        const auto nearApprox = tree.Evaluate(nearCloud, down, 0.02);
+        Check(nearApprox.sourcesEvaluated > approx.sourcesEvaluated, "near receivers descend into individual sources");
+        Check(Near(nearApprox.irradiance, tree.ExactIrradiance(nearCloud, down), 0.05), "near evaluation also matches");
+        Check(Near(approx.powerAccounted, expectedPower, 1e-9), "evaluation accounts for all power");
+        // Merged directional group stays directional: a node of downward lights emits nothing sideways.
+        const double side[3] = {100000.0, 5.0, 1000.0};
+        const double sideNormal[3] = {-1, 0, 0};
+        Check(tree.NodeIrradiance(tree.Nodes()[0], side, sideNormal) < 1.0e-3 * tree.NodeIrradiance(tree.Nodes()[0], cloud, down),
+              "merged upward lights are not an isotropic point");
+        // Many individually negligible lights still add up.
+        std::vector<Emitter> dim(20000);
+        for (auto& e : dim) { e.position[0] = u(rng) * 100.0; e.position[1] = 0; e.position[2] = u(rng) * 100.0; e.power = 1.0; }
+        EmitterTree dimTree;
+        dimTree.Build(dim);
+        const double r[3] = {50.0, 100.0, 50.0};
+        const double dimExact = dimTree.ExactIrradiance(r, down);
+        const auto dimApprox = dimTree.Evaluate(r, down, 0.01);
+        Check(Near(dimApprox.irradiance, dimExact, 0.03), "thousands of weak lights are aggregated, not dropped");
+    }
+
+    // --- discharge graph and charge
+    {
+        Reservoir upper{30.0}, lower{-20.0};
+        const double total = upper.charge + lower.charge;
+        Check(DischargeGraph::Transfer(upper, lower, 12.0), "transfer succeeds");
+        Check(Near(upper.charge + lower.charge, total, 1e-12), "charge conserved");
+        Check(!DischargeGraph::Transfer(upper, lower, 1000.0), "cannot move more charge than exists");
+        Check(Near(upper.charge, 18.0, 1e-12), "failed transfer changes nothing");
+
+        DischargeGraph g(FlashKind::CloudToGround);
+        Segment trunk;
+        trunk.to[1] = -1000.0;
+        trunk.pulses.push_back({0.100, 1.0e-6, 5.0e4});      // return stroke far shorter than a frame
+        const auto trunkIndex = g.AddSegment(trunk);
+        Segment branch;
+        branch.from[1] = -500.0; branch.to[0] = 300.0; branch.to[1] = -600.0;
+        branch.parent = trunkIndex;
+        branch.pulses.push_back({0.100, 1.0e-4, 100.0});
+        g.AddSegment(branch);
+        Segment faint;  // never conducts strongly
+        faint.to[0] = 50.0;
+        g.AddSegment(faint);
+        Check(Near(g.EnergyInWindow(0.0996, 0.1162), 5.0e4 + 100.0, 1e-9), "microsecond stroke contributes all energy to the frame");
+        Check(Near(g.EnergyInWindow(0.0, 0.05), 0.0, 1e-9), "no emission before the flash");
+        g.Reactivate(trunkIndex, {0.2, 5.0e-5, 8.0e3});  // dart leader reusing the channel
+        Check(Near(g.EnergyInWindow(0.0, 1.0), 5.0e4 + 100.0 + 8.0e3, 1e-9), "reactivated channel adds energy");
+        Check(g.Segments().size() == 3, "reuse adds no new segment");
+        for (const std::size_t cap : {1u, 2u, 8u})
+        {
+            const auto clusters = g.ClusterEmission(0.0, 1.0, cap);
+            double sum = 0.0;
+            for (const auto& c : clusters) sum += c.energy;
+            Check(Near(sum, 5.0e4 + 100.0 + 8.0e3, 1e-9) && clusters.size() <= cap, "clustering is bounded and energy preserving");
+        }
+    }
+
+    // --- cloud representation LOD
+    {
+        CloudRegionDescriptor cirrus;
+        cirrus.distance = 50000.0; cirrus.extent = 100000.0; cirrus.thickness = 500.0; cirrus.verticalOpticalDepth = 0.05;
+        cirrus.pixelAngle = 1.0e-3; cirrus.cloudAltitude = 9000.0;
+        Check(EstimateErrors(CloudForm::FullVolume, cirrus).parallax == 0.0, "full volume is the reference");
+        Check(static_cast<int>(ChooseForm(cirrus, {}, CloudForm::FullVolume, false)) >= static_cast<int>(CloudForm::DepthImpostor),
+              "thin high veil uses a cheap form");
+        CloudRegionDescriptor tower = cirrus;
+        tower.distance = 3000.0; tower.extent = 8000.0; tower.thickness = 12000.0; tower.verticalOpticalDepth = 200.0; tower.cloudAltitude = 1500.0;
+        Check(ChooseForm(tower, {}, CloudForm::FullVolume, false) == CloudForm::FullVolume, "near thick tower stays full 3D");
+        // Same physical region, different cameras: errors are functions of the view, morphology never altered.
+        CloudRegionDescriptor farTower = tower;
+        farTower.distance = 2.0e6;
+        const CloudForm farForm = ChooseForm(farTower, {}, CloudForm::FullVolume, false);
+        Check(static_cast<int>(farForm) >= static_cast<int>(CloudForm::CoarseVolume), "distant tower may simplify its representation");
+        // Hysteresis: a form that is still within a relaxed tolerance is kept.
+        CloudRegionDescriptor edgeCase = tower;
+        edgeCase.distance = 40000.0;
+        const CloudForm a = ChooseForm(edgeCase, {}, CloudForm::FullVolume, false);
+        const CloudForm b = ChooseForm(edgeCase, {}, a, true);
+        Check(a == b, "stable under repeated evaluation");
+        CloudRegionDescriptor limb = cirrus;
+        limb.distance = 300000.0;
+        Check(EstimateErrors(CloudForm::CurvedSheet, limb).limb > EstimateErrors(CloudForm::CurvedSheet, cirrus).limb,
+              "flat-layer error grows toward the limb");
+    }
+
+    // --- transmittance statistics (Laplace samples): linear in the channels, accurate across K
+    {
+        std::mt19937 rng(11);
+        std::uniform_real_distribution<double> u(0.0, 1.0);
+        // A clumpy footprint: ~45% empty, the rest a skewed range of in-cloud depths (like a thresholded noise field).
+        std::vector<double> depths(60000);
+        for (double& d : depths) { const double x = u(rng); d = x < 0.45 ? 0.0 : std::pow(u(rng), 2.2); }
+        const TransmittanceStats stats = FromSamples(depths);
+        double worstLaplace = 0.0, worstMean = 0.0;
+        for (const double k : {0.2, 0.7, 1.5, 4.0, 9.0, 20.0, 40.0})
+        {
+            double truth = 0.0;
+            for (const double d : depths) truth += std::exp(-k * d);
+            truth /= static_cast<double>(depths.size());
+            worstLaplace = std::max(worstLaplace, std::abs(stats.Transmittance(k) - truth));
+            worstMean = std::max(worstMean, std::abs(std::exp(-k * stats.meanDepth) - truth));
+        }
+        Check(worstLaplace < 0.03, "four Laplace channels reconstruct transmittance within 0.03 over K = 0.2..40");
+        Check(worstMean > 5.0 * worstLaplace, "mean-depth filtering is several times worse than the Laplace channels");
+        Check(stats.EffectiveDepth(8.0) < 8.0 * stats.meanDepth, "effective depth is below the mean depth (Jensen)");
+        Check(Near(stats.meanDepth, [&] { double s = 0; for (double d : depths) s += d; return s / depths.size(); }(), 1e-9), "mass conserved");
+
+        // Box-filter mip: blending four child footprints equals computing the parent from all samples.
+        std::vector<TransmittanceStats> children;
+        std::vector<double> weights;
+        for (int c = 0; c < 4; ++c)
+        {
+            const std::span<const double> part(depths.data() + c * 15000, 15000);
+            children.push_back(FromSamples(part));
+            weights.push_back(1.0);
+        }
+        const TransmittanceStats parent = Blend(children, weights);
+        for (int j = 0; j < kLaplaceChannels; ++j) Check(Near(parent.channel[j], stats.channel[j], 1e-12), "mip blend of channels is exact");
+
+        Check(FromSamples({}).Transmittance(5.0) == 1.0, "empty footprint is fully transparent");
+        const std::vector<double> solid(100, 1.0);
+        Check(Near(FromSamples(solid).Transmittance(2.0), std::exp(-2.0), 1e-9), "homogeneous footprint reproduces Beer-Lambert");
+        Check(stats.Transmittance(0.0) == 1.0, "zero scale transmits everything");
+        bool monotone = true;
+        double last = 1.0;
+        for (double k = 0.05; k < 60.0; k *= 1.2) { const double t = stats.Transmittance(k); monotone = monotone && t <= last + 1e-9; last = t; }
+        Check(monotone, "transmittance is monotone in K");
+    }
+
+    // --- planetary refraction from (radius, surface refractivity, scale height)
+    {
+        constexpr double deg = std::numbers::pi / 180.0;
+        const RefractionAtmosphere earth;
+        const RefractionTable table = RefractionTable::Build(earth);
+        Check(table.Valid() && !RefractionTable::Ducting(earth), "Earth is not a ducting atmosphere");
+
+        // Against Saemundsson's formula for the standard atmosphere (true elevation, arcminutes).
+        double worstLow = 0.0, worstHigh = 0.0;
+        for (const double e : {0.0, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 45.0, 70.0})
+        {
+            double apparent = 0.0;
+            Check(table.ApparentElevation(e * deg, 0.0, apparent), "elevations above the horizon are visible");
+            const double bending = (apparent - e * deg) / deg * 60.0;
+            const double reference = 1.02 / std::tan((e + 10.3 / (e + 5.11)) * deg);
+            const double error = std::abs(bending - reference) / reference;
+            (e < 2.0 ? worstLow : worstHigh) = std::max(e < 2.0 ? worstLow : worstHigh, error);
+        }
+        std::printf("refraction vs Saemundsson: worst %.1f %% below 2 deg, %.1f %% above\n", 100.0 * worstLow, 100.0 * worstHigh);
+        Check(worstLow < 0.05, "refraction near the horizon is within 5 percent of the standard formula");
+        Check(worstHigh < 0.07, "refraction elsewhere is within 7 percent of the standard formula");
+        double at45 = 0.0;
+        table.ApparentElevation(45.0 * deg, 0.0, at45);
+        Check(Near(at45 - 45.0 * deg, earth.surfaceRefractivity, 0.01), "at 45 degrees bending is N0 tan(z) = N0");
+
+        // Where the horizon is: an object seen on the horizon is really about 35 arcminutes below it.
+        double truth = 0.0;
+        Check(table.TrueElevation(0.0, 0.0, truth) && Near(-truth / deg * 60.0, 35.0, 0.06), "an object on the horizon is ~35 arcminutes below it");
+        Check(Near(-truth, HorizonRefractionEstimate(earth), 0.12), "closed-form N0 sqrt(pi R / 2H) agrees with the integral within 12 percent");
+        double blocked = 0.0;
+        Check(!table.ApparentElevation(-2.0 * deg, 0.0, blocked), "an object 2 degrees below the horizon stays hidden");
+
+        // The Sun's disc is flattened at the horizon and round overhead.
+        const double c0 = table.VerticalCompression(0.0, 0.0), c10 = table.VerticalCompression(10.0 * deg, 0.0);
+        Check(c0 > 0.80 && c0 < 0.90, "a setting Sun is ~15 percent shorter than wide");
+        Check(c10 > c0 && c10 > 0.98 && c10 <= 1.0 + 1.0e-3, "the disc is round again higher up");
+
+        // Round trip, and the apparent limb sits above the geometric one by terrestrial refraction.
+        bool roundTrip = true;
+        for (const double e : {0.0, 0.5, 3.0, 25.0, 80.0})
+        {
+            double a = 0.0, t = 0.0;
+            roundTrip = roundTrip && table.ApparentElevation(e * deg, 100.0, a) && table.TrueElevation(a, 100.0, t) && std::abs(t - e * deg) < 1.0e-6;
+        }
+        Check(roundTrip, "apparent and true elevation invert each other");
+        bool dip = true;
+        for (const double h : {100.0, 1000.0, 10000.0})
+        {
+            const double ratio = table.ApparentLimbElevation(h) / -RefractionTable::GeometricDip(earth, h);
+            dip = dip && ratio > 0.87 && ratio < 0.96;
+        }
+        Check(dip, "refraction reduces the horizon dip by about 4 to 13 percent");
+
+        // Other planets from the same three numbers.
+        RefractionAtmosphere doubled = earth;
+        doubled.surfaceRefractivity *= 2.0;
+        const RefractionTable twice = RefractionTable::Build(doubled);
+        Check(Near(twice.Bending(10.0 * deg, 0.0), 2.0 * table.Bending(10.0 * deg, 0.0), 0.01), "bending is linear in the surface refractivity");
+        const RefractionAtmosphere mars{3.39e6, 5.1e-6, 11100.0};
+        const RefractionTable thin = RefractionTable::Build(mars);
+        Check(thin.Bending(5.0 * deg, 0.0) < 0.05 * table.Bending(5.0 * deg, 0.0), "a thin atmosphere hardly bends light");
+        double marsTruth = 0.0;
+        thin.TrueElevation(0.0, 0.0, marsTruth);
+        Check(Near(-marsTruth, HorizonRefractionEstimate(mars), 0.12), "the closed form holds on another planet");
+        const RefractionAtmosphere venus{6.05e6, 4.1e-3, 15900.0};
+        const RefractionTable trapped = RefractionTable::Build(venus);
+        double none = 0.0;
+        Check(RefractionTable::Ducting(venus) && !trapped.Valid() && !trapped.ApparentElevation(0.1, 0.0, none) && trapped.Bending(0.1, 0.0) == 0.0,
+              "a Venus-class atmosphere is reported as ducting, not given a wrong answer");
+
+        // The solver link and the curvature ratio.
+        Check(Near(SurfaceRefractivityFromSolver(1.0, 1.0), 2.78e-4, 1.0e-12), "the reference atmosphere maps to the reference refractivity");
+        Check(Near(SurfaceRefractivityFromSolver(2.0, 1.0), 5.56e-4, 1.0e-12) && Near(SurfaceRefractivityFromSolver(1.0, 1.21), 2.78e-4 * 1.1, 1.0e-12),
+              "refractivity scales with density and the square root of the Rayleigh composition factor");
+        Check(Near(CriticalGradientRatio(-2.667e-8, 6371000.0), 0.17, 0.01), "ordinary air is far from ducting (ratio 0.17)");
+        Check(CriticalGradientRatio(-1.9e-7, 6371000.0) > 1.0, "a steep inversion trips the ducting ratio");
+    }
+
+    if (failures == 0) std::printf("OpticalTransport: all tests passed\n");
+    return failures;
+}

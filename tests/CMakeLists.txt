@@ -10,11 +10,23 @@ target_link_libraries(OrbitTerrainBenchmark PRIVATE Orbit::TerrainCache)
 target_compile_features(OrbitTerrainBenchmark PRIVATE cxx_std_23)
 orbit_enable_warnings(OrbitTerrainBenchmark)
 
+add_executable(OrbitPhacelleErosionTests PhacelleErosionTests.cpp)
+target_link_libraries(OrbitPhacelleErosionTests PRIVATE Orbit::Terrain)
+target_compile_features(OrbitPhacelleErosionTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitPhacelleErosionTests)
+add_test(NAME Orbit.PhacelleErosion COMMAND OrbitPhacelleErosionTests)
+
 add_executable(OrbitTerrainMountainTests TerrainMountainTests.cpp)
 target_link_libraries(OrbitTerrainMountainTests PRIVATE Orbit::Terrain)
 target_compile_features(OrbitTerrainMountainTests PRIVATE cxx_std_23)
 orbit_enable_warnings(OrbitTerrainMountainTests)
 add_test(NAME Orbit.TerrainMountains COMMAND OrbitTerrainMountainTests)
+
+add_executable(OrbitTectonicStructureTests TectonicStructureTests.cpp)
+target_link_libraries(OrbitTectonicStructureTests PRIVATE Orbit::Terrain)
+target_compile_features(OrbitTectonicStructureTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTectonicStructureTests)
+add_test(NAME Orbit.TectonicStructure COMMAND OrbitTectonicStructureTests)
 
 target_link_libraries(OrbitWorldTests
     PRIVATE
@@ -123,7 +135,6 @@ add_test(
     COMMAND OrbitShaderCompilerTests
 )
 
-
 add_executable(OrbitRhiComputeTests
     RhiComputeTests.cpp
 )
@@ -150,6 +161,75 @@ add_test(
     COMMAND OrbitRhiComputeTests
 )
 
+add_executable(OrbitRhiHostHazardTests
+    RhiHostHazardTests.cpp
+)
+
+target_link_libraries(OrbitRhiHostHazardTests
+    PRIVATE
+        Orbit::RhiVulkan
+)
+
+target_compile_features(OrbitRhiHostHazardTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitRhiHostHazardTests)
+
+add_test(
+    NAME Orbit.RhiHostHazard
+    COMMAND OrbitRhiHostHazardTests
+)
+
+# Proves the cloud light-volume refresh skip is bit-identical to refreshing every frame. It lives
+# here rather than in engine/celestial_clouds because the DXC runtime copy needs variables that
+# engine/shader/dxc defines, and engine/ configures celestial_clouds before it.
+add_executable(OrbitCloudLightVolumeTests
+    CloudLightVolumeTests.cpp
+)
+
+add_executable(OrbitTerrainSunShadowGpuTests TerrainSunShadowGpuTests.cpp)
+target_link_libraries(OrbitTerrainSunShadowGpuTests PRIVATE
+    Orbit::Lighting Orbit::RhiVulkan Orbit::ShaderDxc)
+target_compile_features(OrbitTerrainSunShadowGpuTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainSunShadowGpuTests)
+add_custom_command(TARGET OrbitTerrainSunShadowGpuTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitTerrainSunShadowGpuTests>")
+add_test(NAME Orbit.TerrainSunShadowGpu COMMAND OrbitTerrainSunShadowGpuTests)
+set_tests_properties(Orbit.TerrainSunShadowGpu PROPERTIES LABELS "gpu")
+
+add_executable(OrbitTerrainAmbientGpuTests TerrainAmbientGpuTests.cpp)
+target_link_libraries(OrbitTerrainAmbientGpuTests PRIVATE
+    Orbit::TerrainGpu Orbit::RhiVulkan Orbit::ShaderDxc)
+target_compile_features(OrbitTerrainAmbientGpuTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainAmbientGpuTests)
+add_custom_command(TARGET OrbitTerrainAmbientGpuTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitTerrainAmbientGpuTests>")
+add_test(NAME Orbit.TerrainAmbientGpu COMMAND OrbitTerrainAmbientGpuTests)
+set_tests_properties(Orbit.TerrainAmbientGpu PROPERTIES LABELS "gpu")
+
+
+target_link_libraries(OrbitCloudLightVolumeTests
+    PRIVATE
+        Orbit::CelestialClouds
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+)
+
+target_compile_features(OrbitCloudLightVolumeTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitCloudLightVolumeTests)
+
+# dxcompiler.dll is loaded at runtime, not just link time -- see the identical comment on
+# OrbitShaderCompilerTests above.
+add_custom_command(TARGET OrbitCloudLightVolumeTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitCloudLightVolumeTests>"
+)
+
+add_test(
+    NAME Orbit.CloudLightVolume
+    COMMAND OrbitCloudLightVolumeTests
+)
 
 add_executable(OrbitTerrainGpuFieldTests
     TerrainGpuFieldTests.cpp
@@ -160,6 +240,7 @@ target_link_libraries(OrbitTerrainGpuFieldTests
         Orbit::RhiVulkan
         Orbit::ShaderDxc
         Orbit::Terrain
+        Orbit::TerrainBake
         Orbit::TerrainGpu
 )
 
@@ -177,6 +258,30 @@ add_test(
     COMMAND OrbitTerrainGpuFieldTests
 )
 
+add_executable(OrbitTerrainGpuGeologyCompilerTests
+    TerrainGpuGeologyCompilerTests.cpp
+)
+
+target_link_libraries(OrbitTerrainGpuGeologyCompilerTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::TerrainGpu
+)
+
+target_compile_features(OrbitTerrainGpuGeologyCompilerTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainGpuGeologyCompilerTests)
+
+add_custom_command(TARGET OrbitTerrainGpuGeologyCompilerTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitTerrainGpuGeologyCompilerTests>"
+)
+
+add_test(
+    NAME Orbit.TerrainGpuGeologyCompiler
+    COMMAND OrbitTerrainGpuGeologyCompilerTests
+)
 
 add_executable(OrbitTerrainGpuRegionDeltaTests
     TerrainGpuRegionDeltaTests.cpp
@@ -205,34 +310,6 @@ add_test(
     COMMAND OrbitTerrainGpuRegionDeltaTests
 )
 
-
-add_executable(OrbitTerrainGpuElevationQueryTests
-    TerrainGpuElevationQueryTests.cpp
-)
-
-target_link_libraries(OrbitTerrainGpuElevationQueryTests
-    PRIVATE
-        Orbit::RhiVulkan
-        Orbit::ShaderDxc
-        Orbit::Terrain
-        Orbit::TerrainGpu
-)
-
-target_compile_features(OrbitTerrainGpuElevationQueryTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitTerrainGpuElevationQueryTests)
-
-add_custom_command(TARGET OrbitTerrainGpuElevationQueryTests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ORBIT_DXCOMPILER_DLL}"
-        "$<TARGET_FILE_DIR:OrbitTerrainGpuElevationQueryTests>"
-)
-
-add_test(
-    NAME Orbit.TerrainGpuElevationQuery
-    COMMAND OrbitTerrainGpuElevationQueryTests
-)
-
-
 add_executable(OrbitHydrologyGpuDepressionFillTests
     HydrologyGpuDepressionFillTests.cpp
 )
@@ -257,7 +334,6 @@ add_test(
     NAME Orbit.HydrologyGpuDepressionFill
     COMMAND OrbitHydrologyGpuDepressionFillTests
 )
-
 
 add_executable(OrbitHydrologyGpuFlowAccumulationTests
     HydrologyGpuFlowAccumulationTests.cpp
@@ -284,7 +360,6 @@ add_test(
     COMMAND OrbitHydrologyGpuFlowAccumulationTests
 )
 
-
 add_executable(OrbitHydrologyGpuErosionTests
     HydrologyGpuErosionTests.cpp
 )
@@ -310,59 +385,6 @@ add_test(
     COMMAND OrbitHydrologyGpuErosionTests
 )
 
-
-add_executable(OrbitHydrologyGpuRiverGeometryTests
-    HydrologyGpuRiverGeometryTests.cpp
-)
-
-target_link_libraries(OrbitHydrologyGpuRiverGeometryTests
-    PRIVATE
-        Orbit::RhiVulkan
-        Orbit::ShaderDxc
-        Orbit::TerrainGpu
-)
-
-target_compile_features(OrbitHydrologyGpuRiverGeometryTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitHydrologyGpuRiverGeometryTests)
-
-add_custom_command(TARGET OrbitHydrologyGpuRiverGeometryTests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ORBIT_DXCOMPILER_DLL}"
-        "$<TARGET_FILE_DIR:OrbitHydrologyGpuRiverGeometryTests>"
-)
-
-add_test(
-    NAME Orbit.HydrologyGpuRiverGeometry
-    COMMAND OrbitHydrologyGpuRiverGeometryTests
-)
-
-
-add_executable(OrbitHydrologyGpuLakeBasinsTests
-    HydrologyGpuLakeBasinsTests.cpp
-)
-
-target_link_libraries(OrbitHydrologyGpuLakeBasinsTests
-    PRIVATE
-        Orbit::RhiVulkan
-        Orbit::ShaderDxc
-        Orbit::TerrainGpu
-)
-
-target_compile_features(OrbitHydrologyGpuLakeBasinsTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitHydrologyGpuLakeBasinsTests)
-
-add_custom_command(TARGET OrbitHydrologyGpuLakeBasinsTests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ORBIT_DXCOMPILER_DLL}"
-        "$<TARGET_FILE_DIR:OrbitHydrologyGpuLakeBasinsTests>"
-)
-
-add_test(
-    NAME Orbit.HydrologyGpuLakeBasins
-    COMMAND OrbitHydrologyGpuLakeBasinsTests
-)
-
-
 add_executable(OrbitTerrainStreamTests
     TerrainStreamTests.cpp
 )
@@ -379,7 +401,6 @@ add_test(
     NAME Orbit.TerrainStream
     COMMAND OrbitTerrainStreamTests
 )
-
 
 add_executable(OrbitTerrainSampleStreamerTests
     TerrainSampleStreamerTests.cpp
@@ -414,7 +435,6 @@ add_test(
     COMMAND OrbitTerrainMorphRefreshTests
 )
 
-
 add_executable(OrbitCameraTests
     CameraTests.cpp
 )
@@ -431,7 +451,6 @@ add_test(
     NAME Orbit.Camera
     COMMAND OrbitCameraTests
 )
-
 
 add_executable(OrbitTerrainFieldsTests
     TerrainFieldsTests.cpp
@@ -450,7 +469,6 @@ add_test(
     COMMAND OrbitTerrainFieldsTests
 )
 
-
 add_executable(OrbitTerrainHydrologyTests
     TerrainHydrologyTests.cpp
 )
@@ -467,7 +485,6 @@ add_test(
     NAME Orbit.TerrainHydrology
     COMMAND OrbitTerrainHydrologyTests
 )
-
 
 add_executable(OrbitTerrainErosionTests
     TerrainErosionTests.cpp
@@ -486,7 +503,6 @@ add_test(
     COMMAND OrbitTerrainErosionTests
 )
 
-
 add_executable(OrbitTerrainSedimentTests
     TerrainSedimentTests.cpp
 )
@@ -503,7 +519,6 @@ add_test(
     NAME Orbit.TerrainSediment
     COMMAND OrbitTerrainSedimentTests
 )
-
 
 add_executable(OrbitHydrologyRefinementTests
     HydrologyRefinementTests.cpp
@@ -522,7 +537,6 @@ add_test(
     COMMAND OrbitHydrologyRefinementTests
 )
 
-
 add_executable(OrbitRegionalElevationDeltaTests
     RegionalElevationDeltaTests.cpp
 )
@@ -540,7 +554,6 @@ add_test(
     COMMAND OrbitRegionalElevationDeltaTests
 )
 
-
 add_executable(OrbitDerivedTerrainRegionTests
     DerivedTerrainRegionTests.cpp
 )
@@ -557,7 +570,6 @@ add_test(
     NAME Orbit.DerivedTerrainRegion
     COMMAND OrbitDerivedTerrainRegionTests
 )
-
 
 add_executable(OrbitDerivedTerrainRegionGpuTests
     DerivedTerrainRegionGpuTests.cpp
@@ -586,7 +598,6 @@ add_test(
     COMMAND OrbitDerivedTerrainRegionGpuTests
 )
 
-
 add_executable(OrbitPlanetTileNeighborhoodTests
     PlanetTileNeighborhoodTests.cpp
 )
@@ -603,7 +614,6 @@ add_test(
     NAME Orbit.PlanetTileNeighborhood
     COMMAND OrbitPlanetTileNeighborhoodTests
 )
-
 
 add_executable(OrbitDerivedTerrainStreamingTests
     DerivedTerrainStreamingTests.cpp
@@ -622,7 +632,6 @@ add_test(
     COMMAND OrbitDerivedTerrainStreamingTests
 )
 
-
 add_executable(OrbitRiverWaterTests
     RiverWaterTests.cpp
 )
@@ -639,7 +648,6 @@ add_test(
     NAME Orbit.RiverWater
     COMMAND OrbitRiverWaterTests
 )
-
 
 add_executable(OrbitLakeWaterTests
     LakeWaterTests.cpp
@@ -658,30 +666,11 @@ add_test(
     COMMAND OrbitLakeWaterTests
 )
 
-
-add_executable(OrbitOceanMeshTests
-    OceanMeshTests.cpp
-)
-
-target_link_libraries(OrbitOceanMeshTests
-    PRIVATE
-        Orbit::WaterRender
-)
-
-target_compile_features(OrbitOceanMeshTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitOceanMeshTests)
-
-add_test(
-    NAME Orbit.OceanMesh
-    COMMAND OrbitOceanMeshTests
-)
-
 add_executable(OrbitStandingWaterTests StandingWaterTests.cpp)
 target_link_libraries(OrbitStandingWaterTests PRIVATE Orbit::TerrainRegion Orbit::TerrainCache Orbit::TerrainStream)
 target_compile_features(OrbitStandingWaterTests PRIVATE cxx_std_23)
 orbit_enable_warnings(OrbitStandingWaterTests)
 add_test(NAME Orbit.StandingWater COMMAND OrbitStandingWaterTests)
-
 
 # These are real Vulkan execution tests, not compile-only tests. GitHub's
 # hosted Windows runners do not expose a Vulkan physical device, so CI builds
@@ -689,19 +678,18 @@ add_test(NAME Orbit.StandingWater COMMAND OrbitStandingWaterTests)
 # ctest runs still execute them normally on Vulkan-capable hardware.
 set_tests_properties(
     Orbit.RhiCompute
+    Orbit.RhiHostHazard
+    Orbit.CloudLightVolume
     Orbit.TerrainGpuField
+    Orbit.TerrainGpuGeologyCompiler
     Orbit.TerrainGpuRegionDelta
-    Orbit.TerrainGpuElevationQuery
     Orbit.HydrologyGpuDepressionFill
     Orbit.HydrologyGpuFlowAccumulation
     Orbit.HydrologyGpuErosion
-    Orbit.HydrologyGpuRiverGeometry
-    Orbit.HydrologyGpuLakeBasins
     Orbit.DerivedTerrainRegionGpu
     PROPERTIES
         LABELS "gpu"
 )
-
 
 add_executable(OrbitTimeAndIdTests
     TimeAndIdTests.cpp
@@ -721,7 +709,6 @@ add_test(
     COMMAND OrbitTimeAndIdTests
 )
 
-
 add_executable(OrbitFrameGraphTests
     FrameGraphTests.cpp
 )
@@ -738,7 +725,6 @@ add_test(
     NAME Orbit.FrameGraph
     COMMAND OrbitFrameGraphTests
 )
-
 
 add_executable(OrbitBodyRegistryTests
     BodyRegistryTests.cpp
@@ -757,7 +743,6 @@ add_test(
     COMMAND OrbitBodyRegistryTests
 )
 
-
 add_executable(OrbitSurfaceRegistryTests
     SurfaceRegistryTests.cpp
 )
@@ -774,7 +759,6 @@ add_test(
     NAME Orbit.SurfaceRegistry
     COMMAND OrbitSurfaceRegistryTests
 )
-
 
 add_executable(OrbitFieldRegistryTests
     FieldRegistryTests.cpp
@@ -793,7 +777,6 @@ add_test(
     COMMAND OrbitFieldRegistryTests
 )
 
-
 add_executable(OrbitProceduralGraphTests
     ProceduralGraphTests.cpp
 )
@@ -810,7 +793,6 @@ add_test(
     NAME Orbit.ProceduralGraph
     COMMAND OrbitProceduralGraphTests
 )
-
 
 add_executable(OrbitDocumentsTests
     DocumentsTests.cpp
@@ -829,7 +811,6 @@ add_test(
     NAME Orbit.Documents
     COMMAND OrbitDocumentsTests
 )
-
 
 add_executable(OrbitAuthoringModelTests
     AuthoringModelTests.cpp
@@ -852,7 +833,6 @@ add_test(
     COMMAND OrbitAuthoringModelTests
 )
 
-
 add_executable(OrbitRenderGraphTests
     RenderGraphTests.cpp
 )
@@ -871,7 +851,6 @@ add_test(
     COMMAND OrbitRenderGraphTests
 )
 
-
 add_executable(OrbitEditorModelTests
     EditorModelTests.cpp
 )
@@ -889,7 +868,6 @@ add_test(
     NAME Orbit.EditorModel
     COMMAND OrbitEditorModelTests
 )
-
 
 add_executable(OrbitExplorerInspectorTests
     ExplorerInspectorTests.cpp
@@ -913,7 +891,6 @@ add_test(
     COMMAND OrbitExplorerInspectorTests
 )
 
-
 add_executable(OrbitCommandSurfaceTests
     CommandSurfaceTests.cpp
 )
@@ -936,12 +913,11 @@ add_test(
     COMMAND OrbitCommandSurfaceTests
 )
 
-
-add_executable(OrbitV003ScaffoldIntegrationTests
-    V003ScaffoldIntegrationTests.cpp
+add_executable(OrbitEditorServicesIntegrationTests
+    EditorServicesIntegrationTests.cpp
 )
 
-target_link_libraries(OrbitV003ScaffoldIntegrationTests
+target_link_libraries(OrbitEditorServicesIntegrationTests
     PRIVATE
         Orbit::Build
         Orbit::Content
@@ -957,25 +933,24 @@ target_link_libraries(OrbitV003ScaffoldIntegrationTests
         Orbit::Universe
 )
 
-target_compile_features(OrbitV003ScaffoldIntegrationTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitV003ScaffoldIntegrationTests)
-add_dependencies(OrbitV003ScaffoldIntegrationTests OrbitPlayer)
-orbit_copy_dxc_runtime(OrbitV003ScaffoldIntegrationTests)
+target_compile_features(OrbitEditorServicesIntegrationTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitEditorServicesIntegrationTests)
+add_dependencies(OrbitEditorServicesIntegrationTests OrbitPlayer)
+orbit_copy_dxc_runtime(OrbitEditorServicesIntegrationTests)
 
 add_test(
-    NAME Orbit.V003ScaffoldIntegration
-    COMMAND OrbitV003ScaffoldIntegrationTests $<TARGET_FILE:OrbitPlayer>
+    NAME Orbit.EditorServicesIntegration
+    COMMAND OrbitEditorServicesIntegrationTests $<TARGET_FILE:OrbitPlayer>
 )
-
 
 # V0.0.4 M30 deterministic cross-system validation suite. Keep the twenty
 # mandatory cases in this single acceptance target so milestone status cannot
 # be inferred from unrelated unit tests.
-add_executable(OrbitV004ValidationTests
-    V004TerrainValidationTests.cpp
+add_executable(OrbitTerrainCrossSystemRegressionTests
+    TerrainCrossSystemRegressionTests.cpp
 )
 
-target_link_libraries(OrbitV004ValidationTests
+target_link_libraries(OrbitTerrainCrossSystemRegressionTests
     PRIVATE
         Orbit::EditorModel
         Orbit::SurfaceAuthoring
@@ -997,97 +972,29 @@ target_link_libraries(OrbitV004ValidationTests
         Orbit::TerrainView
 )
 
-target_compile_definitions(OrbitV004ValidationTests
+target_compile_definitions(OrbitTerrainCrossSystemRegressionTests
     PRIVATE
         ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR="${CMAKE_SOURCE_DIR}/engine/terrain_geology/assets/reference"
 )
 
-target_compile_features(OrbitV004ValidationTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitV004ValidationTests)
+target_compile_features(OrbitTerrainCrossSystemRegressionTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainCrossSystemRegressionTests)
 
 add_test(
-    NAME Orbit.V004Validation
-    COMMAND OrbitV004ValidationTests
+    NAME Orbit.TerrainCrossSystemRegression
+    COMMAND OrbitTerrainCrossSystemRegressionTests
 )
 
-# M30 performance measurement is intentionally a hardware diagnostic rather
-# than a CTest pass/fail gate. It uses real Vulkan timestamps and reports
-# adapter-specific timing while exact terrain-owned memory bytes remain
-# comparable across machines.
-add_executable(OrbitV004TerrainPerformance
-    V004TerrainPerformance.cpp
-)
-
-target_link_libraries(OrbitV004TerrainPerformance
-    PRIVATE
-        Orbit::RhiVulkan
-        Orbit::ShaderDxc
-        Orbit::TerrainGpu
-)
-
-target_compile_features(
-    OrbitV004TerrainPerformance PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitV004TerrainPerformance)
-orbit_copy_dxc_runtime(OrbitV004TerrainPerformance)
-
-# V0.0.4 M31 integration acceptance is compiled continuously but is not
-# registered as an executable CTest until the validated M30 hardware capture
-# opens the final integration gate.
-option(
-    ORBIT_ENABLE_V004_M31_GATE
-    "Register the V0.0.4 M31 final integration acceptance"
-    OFF
-)
-
-add_executable(OrbitV004IntegrationGateTests
-    V004IntegrationGateTests.cpp
-)
-
-target_link_libraries(OrbitV004IntegrationGateTests
-    PRIVATE
-        Orbit::Commands
-        Orbit::Documents
-        Orbit::EditorModel
-        Orbit::Jobs
-        Orbit::Scene
-        Orbit::Schema
-        Orbit::Selection
-        Orbit::SurfaceAuthoring
-        Orbit::SurfaceModel
-        Orbit::Terrain
-        Orbit::TerrainBiome
-        Orbit::TerrainDebug
-        Orbit::TerrainDependency
-        Orbit::TerrainErosion
-        Orbit::TerrainGeology
-        Orbit::TerrainGpu
-        Orbit::TerrainHydrology
-        Orbit::TerrainMacroGeology
-        Orbit::TerrainMaterialColumn
-        Orbit::TerrainRender
-        Orbit::TerrainScatter
-        Orbit::WorldModel
-        SQLiteCpp
-)
-
-target_compile_features(
-    OrbitV004IntegrationGateTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitV004IntegrationGateTests)
-
-if(ORBIT_ENABLE_V004_M31_GATE)
-    add_test(
-        NAME Orbit.V004IntegrationGate
-        COMMAND OrbitV004IntegrationGateTests
-    )
+option(ORBIT_BUILD_HISTORICAL_TESTS "Build retired milestone acceptance gates" OFF)
+if(ORBIT_BUILD_HISTORICAL_TESTS)
+    add_subdirectory(historical)
 endif()
-
-
 
 # V0.0.5 M17 Studio terrain validation suite. The implementation-specific
 # tests remain owned by their modules; this named gate makes the release
 # contract explicit and runnable as one target without duplicating those
 # production-path scenarios.
-set(ORBIT_V005_VALIDATION_TESTS
+set(ORBIT_STUDIO_TERRAIN_VALIDATION_TESTS
     Orbit.StudioSession
     Orbit.RockyPlanetAuthoring
     Orbit.SurfaceAuthoringModel
@@ -1102,17 +1009,17 @@ set(ORBIT_V005_VALIDATION_TESTS
     Orbit.StudioViewportNavigation
 )
 
-list(JOIN ORBIT_V005_VALIDATION_TESTS "|" ORBIT_V005_VALIDATION_ALTERNATION)
-set(ORBIT_V005_VALIDATION_REGEX
-    "^(${ORBIT_V005_VALIDATION_ALTERNATION})$"
+list(JOIN ORBIT_STUDIO_TERRAIN_VALIDATION_TESTS "|" ORBIT_STUDIO_TERRAIN_VALIDATION_ALTERNATION)
+set(ORBIT_STUDIO_TERRAIN_VALIDATION_REGEX
+    "^(${ORBIT_STUDIO_TERRAIN_VALIDATION_ALTERNATION})$"
 )
 
-add_custom_target(OrbitV005Validation
+add_custom_target(OrbitStudioTerrainValidation
     COMMAND
         ${CMAKE_CTEST_COMMAND}
         --test-dir ${CMAKE_BINARY_DIR}
         -C $<CONFIG>
-        -R "${ORBIT_V005_VALIDATION_REGEX}"
+        -R "${ORBIT_STUDIO_TERRAIN_VALIDATION_REGEX}"
         --output-on-failure
     DEPENDS
         OrbitStudioSessionTests
@@ -1131,42 +1038,42 @@ add_custom_target(OrbitV005Validation
     USES_TERMINAL
 )
 
-
 # V0.0.5 M18 final editor integration gate. GPU execution of the real Studio
 # viewport remains a workstation check on Vulkan hardware, while this target
 # compiles OrbitStudio and validates the full production session/authoring/
 # physical-page/save-reopen path on hosted CI.
-add_executable(OrbitV005IntegrationGateTests
-    V005IntegrationGateTests.cpp
+add_executable(OrbitStudioTerrainLifecycleIntegrationTests
+    StudioTerrainLifecycleIntegrationTests.cpp
 )
 
-target_link_libraries(OrbitV005IntegrationGateTests
+target_link_libraries(OrbitStudioTerrainLifecycleIntegrationTests
     PRIVATE
+        OrbitTerrainValidationSupport
         Orbit::StudioSession
         Orbit::StudioUi
 )
 
 target_compile_features(
-    OrbitV005IntegrationGateTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitV005IntegrationGateTests)
+    OrbitStudioTerrainLifecycleIntegrationTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitStudioTerrainLifecycleIntegrationTests)
 
 add_test(
-    NAME Orbit.V005IntegrationGate
-    COMMAND OrbitV005IntegrationGateTests
+    NAME Orbit.StudioTerrainLifecycleIntegration
+    COMMAND OrbitStudioTerrainLifecycleIntegrationTests
 )
 
 set_tests_properties(
-    Orbit.V005IntegrationGate
+    Orbit.StudioTerrainLifecycleIntegration
     PROPERTIES
-        LABELS "v005"
+        LABELS "regression;terrain"
 )
 
-add_custom_target(OrbitV005IntegrationGate
+add_custom_target(OrbitStudioTerrainLifecycleIntegration
     COMMAND
         ${CMAKE_CTEST_COMMAND}
         --test-dir ${CMAKE_BINARY_DIR}
         -C $<CONFIG>
-        -R "^(${ORBIT_V005_VALIDATION_ALTERNATION}|Orbit.V005IntegrationGate)$"
+        -R "^(${ORBIT_STUDIO_TERRAIN_VALIDATION_ALTERNATION}|Orbit.StudioTerrainLifecycleIntegration)$"
         --output-on-failure
     DEPENDS
         OrbitStudio
@@ -1182,21 +1089,20 @@ add_custom_target(OrbitV005IntegrationGate
         OrbitStudioTerrainPerformanceDiagnosticsTests
         OrbitStudioSurfacePickingTests
         OrbitStudioViewportNavigationTests
-        OrbitV005IntegrationGateTests
+        OrbitStudioTerrainLifecycleIntegrationTests
     VERBATIM
     USES_TERMINAL
 )
-
 
 # V0.0.6 M34 deterministic celestial cross-module reference cases.
 # Module-owned tests remain authoritative for detailed behavior; this target
 # locks a small set of numerical, representation and scheduler invariants in
 # one release-level contract.
-add_executable(OrbitV006CelestialValidationTests
-    V006CelestialValidationTests.cpp
+add_executable(OrbitCelestialCrossSystemRegressionTests
+    CelestialCrossSystemRegressionTests.cpp
 )
 
-target_link_libraries(OrbitV006CelestialValidationTests
+target_link_libraries(OrbitCelestialCrossSystemRegressionTests
     PRIVATE
         Orbit::CelestialCompactObjects
         Orbit::CelestialGiants
@@ -1207,26 +1113,21 @@ target_link_libraries(OrbitV006CelestialValidationTests
 )
 
 target_compile_features(
-    OrbitV006CelestialValidationTests PRIVATE cxx_std_23)
+    OrbitCelestialCrossSystemRegressionTests PRIVATE cxx_std_23)
 orbit_enable_warnings(
-    OrbitV006CelestialValidationTests)
+    OrbitCelestialCrossSystemRegressionTests)
 
 add_test(
-    NAME Orbit.V006CelestialValidation
-    COMMAND OrbitV006CelestialValidationTests
+    NAME Orbit.CelestialCrossSystemRegression
+    COMMAND OrbitCelestialCrossSystemRegressionTests
 )
-
 
 # V0.0.6 M35 headless final integration gate. Pixel/device acceptance remains
 # the responsibility of the self-hosted Orbit Studio Real Device Smoke workflow.
-add_custom_target(OrbitV006FinalIntegrationGate
-    COMMAND $<TARGET_FILE:OrbitV006CelestialValidationTests>
-    COMMAND $<TARGET_FILE:OrbitStudioCelestialRoundTripVerifierTests>
-    COMMAND $<TARGET_FILE:OrbitStudioCelestialValidationScenarioTests>
+add_custom_target(OrbitCelestialIntegration
+    COMMAND $<TARGET_FILE:OrbitCelestialCrossSystemRegressionTests>
     DEPENDS
-        OrbitV006CelestialValidationTests
-        OrbitStudioCelestialRoundTripVerifierTests
-        OrbitStudioCelestialValidationScenarioTests
+        OrbitCelestialCrossSystemRegressionTests
     USES_TERMINAL
 )
 

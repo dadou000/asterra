@@ -260,8 +260,13 @@ private:
         const f32 scale =
             CurrentUiScale();
 
-        for (const ShellBandDefinition& band :
-             g_shellBands)
+        // A band's draw callback may add, replace or remove bands (the workspace
+        // tabs remove the mode toolbar when a click switches workspace). Iterating
+        // the live vector then erased the element being drawn and left the next
+        // band with a moved-from (empty) callback: std::bad_function_call. Draw a
+        // snapshot; the edit takes effect next frame.
+        const std::vector<ShellBandDefinition> bands = g_shellBands;
+        for (const ShellBandDefinition& band : bands)
         {
             const std::string windowName =
                 "##orbit-shell-band-" + band.id;
@@ -278,14 +283,23 @@ private:
                 ImGuiStyleVar_WindowPadding,
                 ImVec2(
                     12.0F * scale,
-                    5.0F * scale));
+                    (band.emphasized ? 7.0F : 5.0F) * scale));
             ImGui::PushStyleVar(
                 ImGuiStyleVar_WindowBorderSize,
                 0.0F);
-            ImGui::PushStyleColor(
-                ImGuiCol_WindowBg,
-                ImGui::GetStyle().Colors[
-                    ImGuiCol_MenuBarBg]);
+            ImVec4 bandBackground =
+                ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg];
+            if (band.emphasized)
+            {
+                const ImVec4 surface =
+                    ImGui::GetStyle().Colors[ImGuiCol_TitleBgActive];
+                bandBackground = ImVec4(
+                    surface.x + 0.018F,
+                    surface.y + 0.018F,
+                    surface.z + 0.018F,
+                    1.0F);
+            }
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, bandBackground);
 
             const ImGuiDir direction =
                 band.edge == ShellBandEdge::Bottom
@@ -303,6 +317,21 @@ private:
             if (visible)
             {
                 band.draw(panelContext);
+                if (band.emphasized)
+                {
+                    const ImVec2 position = ImGui::GetWindowPos();
+                    const ImVec2 size = ImGui::GetWindowSize();
+                    const f32 gutterHeight = 6.0F * scale;
+                    const f32 edge = position.y + size.y - gutterHeight;
+                    ImGui::GetWindowDrawList()->AddRectFilled(
+                        ImVec2(position.x, edge),
+                        ImVec2(position.x + size.x, position.y + size.y),
+                        IM_COL32(7, 10, 18, 255));
+                    ImGui::GetWindowDrawList()->AddLine(
+                        ImVec2(position.x, edge),
+                        ImVec2(position.x + size.x, edge),
+                        IM_COL32(255, 255, 255, 28), scale);
+                }
             }
 
             ImGui::End();

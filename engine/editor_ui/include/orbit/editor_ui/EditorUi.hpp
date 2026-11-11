@@ -9,7 +9,9 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <array>
 #include <optional>
 #include <span>
 #include <functional>
@@ -33,6 +35,15 @@ using PanelId = core::StrongId<PanelIdTag>;
 
 struct UiSize
 {
+    f32 width{0.0F};
+    f32 height{0.0F};
+};
+
+// A rectangle in the window's client pixels (the units ImGui draws in).
+struct UiRect
+{
+    f32 x{0.0F};
+    f32 y{0.0F};
     f32 width{0.0F};
     f32 height{0.0F};
 };
@@ -97,10 +108,111 @@ enum class UiKey : u8
     Up,
     Down,
     Enter,
-    Escape
+    Escape,
+    Delete,
+    A
+};
+
+// Drawing and pointer helpers for overlays on the item submitted just before
+// (typically the viewport Image). Positions are pixels from that item's
+// top-left corner.
+struct OverlaySegment
+{
+    math::Float2 a{};
+    math::Float2 b{};
+    math::Float4 color{1.0F, 1.0F, 1.0F, 1.0F};
+    f32 thickness{2.0F};
+};
+
+struct OverlayDisc
+{
+    math::Float2 center{};
+    f32 radiusPixels{5.0F};
+    math::Float4 color{1.0F, 1.0F, 1.0F, 1.0F};
+    bool filled{true};
+};
+
+// Screen-space information for drag selection within a dock panel.
+struct PanelMarqueePointer
+{
+    bool hoveredWindow{false};
+    bool overItem{false};
+    bool pressed{false};
+    bool down{false};
+    bool released{false};
+    bool shift{false};
+    bool ctrl{false};
+    bool alt{false};
+    math::Float2 screen{};
+};
+
+struct ItemPointer
+{
+    bool hovered{false};
+    // Left button went down this frame while the item was hovered.
+    bool pressed{false};
+    // Left button is held (stays true when the pointer leaves the item).
+    bool down{false};
+    bool released{false};
+    math::Float2 position{};
 };
 
 class ShellBandRegistry;
+
+// Code-native line icons; no font glyph or external asset dependency.
+enum class NavigationIcon : u8
+{
+    Build,
+    Planet,
+    Universe,
+    Simulation,
+    Shading,
+    Planning,
+    Plugins
+};
+
+// Shared semantic tints for element and workspace icons. These colors never
+// encode selection, validation, or enabled state.
+enum class ElementCategory : u8
+{
+    Neutral,
+    Meshes,
+    Procedurals,
+    Lighting,
+    Simulation,
+    Vfx,
+    Sfx,
+    Shading,
+    Celestial,
+    Plugins,
+    Planning
+};
+
+[[nodiscard]] math::Float4 ElementCategoryColor(
+    ElementCategory category) noexcept;
+
+struct NavigationTab
+{
+    std::string_view label;
+    NavigationIcon icon;
+};
+
+enum class ToolbarIcon : u8
+{
+    Select, Move, Rotate, Scale, World, Local, Snap,
+    PointLight, SpotLight, Box, Sphere, Frame, Duplicate, Delete,
+    Undo, Redo, Properties, Atmosphere, Clouds, Ocean, Rings, Aurora, Surface, More, Procedural, Vfx, Sfx, Asset,
+      Decal, Visibility, Layers, Planet, Camera, Renderer,
+      GlobalIllumination, AntiAliasing
+};
+
+enum class ToolbarStyle : u8 { Action, Modifier, Menu, ModifierMenu };
+
+struct ToolbarChoice
+{
+    std::string_view label;
+    ToolbarIcon icon;
+};
 
 class PanelContext
 {
@@ -115,8 +227,17 @@ public:
     // "Label   value" row with the label muted and the value wrapped.
     void KeyValue(std::string_view label, std::string_view value);
     [[nodiscard]] bool Button(std::string_view label);
+    // Native button template with a caller-provided status fill color.
+    [[nodiscard]] bool StateButton(
+        std::string_view label,
+        math::Float4 color,
+        f32 width);
     [[nodiscard]] bool PrimaryButton(std::string_view label);
     [[nodiscard]] bool InputText(std::string_view label, std::string& value);
+    [[nodiscard]] bool InputText(
+        std::string_view label,
+        std::string& value,
+        f32 extraVerticalPadding);
     // Focuses the next widget submitted through this context.
     void FocusNextItem();
     [[nodiscard]] bool KeyPressed(
@@ -132,13 +253,26 @@ public:
     [[nodiscard]] bool Combo(
         std::string_view label,
         std::span<const std::string_view> items,
-        i32& index);
+        i32& index,
+        f32 width = 0.0F);
     // Equal-width one-row choice surface for a small mutually exclusive set.
     // `id` is an automation/ImGui identity and is not rendered as a label.
     [[nodiscard]] bool SegmentedControl(
         std::string_view id,
         std::span<const std::string_view> items,
         i32& index);
+    [[nodiscard]] bool NavigationTabs(
+        std::string_view id,
+        std::span<const NavigationTab> items,
+        i32& index);
+    [[nodiscard]] bool ToolbarButton(std::string_view label, ToolbarIcon icon,
+        bool selected = false, bool enabled = true, bool compact = false,
+        ToolbarStyle style = ToolbarStyle::Action);
+    [[nodiscard]] bool ToolbarChoices(std::string_view id,
+        std::span<const ToolbarChoice> items, i32& index, bool compact = false,
+        ToolbarStyle style = ToolbarStyle::Action);
+    // Inserts an inline separator and spacing before the next tool group.
+    void ToolbarDivider();
     [[nodiscard]] bool SliderDouble(
         std::string_view label,
         f64& value,
@@ -155,13 +289,44 @@ public:
         bool border = false);
     void EndChild();
     [[nodiscard]] UiSize ContentAvailable() const;
-    [[nodiscard]] bool Selectable(std::string_view label, bool selected);
+    // The rest of the panel's content area from the cursor, in window client
+    // pixels. A native child window (an HTML panel's web view) is placed here.
+    [[nodiscard]] UiRect ContentScreenRect() const;
+      [[nodiscard]] bool Selectable(std::string_view label, bool selected);
+      [[nodiscard]] bool SelectableWithIcon(
+          std::string_view label, bool selected, ToolbarIcon icon);
+      [[nodiscard]] bool SelectableWithIcon(
+          std::string_view label,
+          bool selected,
+          ToolbarIcon icon,
+          f32 extraVerticalPadding);
+    // Draws a toolbar-family vector icon inside the immediately preceding row.
+    // Call after Selectable or TreeItem to keep the row's native hit target.
+    void DecorateLastRow(
+        ToolbarIcon icon,
+        bool muted = false,
+        f32 inset = 7.0F);
     [[nodiscard]] TreeItemInteraction TreeItem(std::string_view label, bool selected);
+    [[nodiscard]] TreeItemInteraction TreeItemWithIcon(
+        std::string_view label,
+        bool selected,
+        ToolbarIcon icon,
+        f32 iconInset = 24.0F);
+    [[nodiscard]] TreeItemInteraction TreeItemWithIcon(
+        std::string_view label,
+        bool selected,
+        ToolbarIcon icon,
+        f32 iconInset,
+        f32 extraVerticalPadding);
     // Sets the first-appearance open state for the next TreeItem without
     // overriding user expansion state on later frames.
     void SetNextTreeItemOpen(bool open);
     void TreePop();
     [[nodiscard]] ImageInteraction Image(rhi::Texture& texture, UiSize size);
+    [[nodiscard]] ImageInteraction ImageFit(
+        rhi::Texture& texture,
+        UiSize available,
+        UiSize sourceSize);
     // An image that captures drags and the mouse wheel (for orbiting a
     // preview). `id` must be unique in the panel.
     [[nodiscard]] ImageInteraction InteractiveImage(
@@ -172,12 +337,40 @@ public:
     // before (typically the viewport Image) on a translucent plate, clipped to
     // that item. For HUD-style readouts; it takes no input.
     void OverlayTextOnLastItem(std::string_view text);
+    // Lines and discs over the last item, clipped to it. No input.
+    void OverlayShapesOnLastItem(
+        std::span<const OverlaySegment> segments,
+        std::span<const OverlayDisc> discs);
+    // A short text label at `position` (pixels from the last item's
+    // top-left) on a small translucent plate.
+    void OverlayLabelOnLastItem(
+        math::Float2 position,
+        math::Float4 color,
+        std::string_view text);
+    // Left-button state relative to the last item, for gizmos that need to
+    // keep tracking a drag after the pointer leaves it.
+    [[nodiscard]] ItemPointer LastItemPointer() const;
+    [[nodiscard]] PanelMarqueePointer PanelMarqueeInput() const noexcept;
+    // Screen rectangle [left, top, right, bottom] of the last submitted row.
+    [[nodiscard]] std::array<f32,4> LastItemScreenRect() const noexcept;
+    // Screen-space overlay, clipped to the containing Explorer panel.
+    void DrawPanelMarquee(math::Float2 a, math::Float2 b) const;
     [[nodiscard]] CanvasInteraction Canvas(std::string_view id, UiSize size);
     void CanvasLine(math::Float2 a, math::Float2 b, math::Float4 color, f32 thickness = 1.0F);
     void CanvasCircle(math::Float2 center, f32 radiusPixels, math::Float4 color, bool filled = true, f32 thickness = 1.0F);
     void CanvasText(math::Float2 position, math::Float4 color, std::string_view text);
     // Rectangle between two canvas positions (0..1 on both axes).
-    void CanvasRect(math::Float2 a, math::Float2 b, math::Float4 color, bool filled = true, f32 thickness = 1.0F);
+    void CanvasRect(
+        math::Float2 a,
+        math::Float2 b,
+        math::Float4 color,
+        bool filled = true,
+        f32 thickness = 1.0F);
+    void CanvasGradientRect(
+        math::Float2 a,
+        math::Float2 b,
+        math::Float4 leftColor,
+        math::Float4 rightColor);
     // Text that is cut off at `clipRight` (canvas x, 0..1), for labels inside
     // bars. Positions are canvas fractions like CanvasText.
     void CanvasTextClipped(math::Float2 position, f32 clipRight, math::Float4 color, std::string_view text);
@@ -186,10 +379,18 @@ public:
     [[nodiscard]] f32 TextWidthPixels(std::string_view text) const;
     [[nodiscard]] f32 TextHeightPixels() const;
     [[nodiscard]] bool Checkbox(std::string_view label, bool& value);
-    [[nodiscard]] bool InputDouble(std::string_view label, f64& value);
+    [[nodiscard]] bool InputDouble(
+        std::string_view label,
+        f64& value,
+        f32 width = 0.0F);
     [[nodiscard]] bool InputInteger(std::string_view label, i64& value);
     [[nodiscard]] bool InputDouble3(std::string_view label, math::Double3& value);
     [[nodiscard]] bool ControlDown() const noexcept;
+    [[nodiscard]] bool ShiftDown() const noexcept;
+    [[nodiscard]] bool AltDown() const noexcept;
+    // Used for contextual keyboard commands without stealing input from
+    // another dock panel or a focused text field.
+    [[nodiscard]] bool WindowFocusedForShortcuts() const noexcept;
     [[nodiscard]] bool BeginDragSource();
     void SetDragPayload(std::string_view type, std::span<const std::byte> bytes);
     void EndDragSource();
@@ -351,6 +552,9 @@ struct ShellBandDefinition
     std::string id;
     i32 order{0};
     f32 height{40.0F};
+    // Use the stronger card surface and a shadow gutter to separate this band
+    // from adjacent editor chrome.
+    bool emphasized{false};
     ShellBandEdge edge{ShellBandEdge::Top};
     std::function<void(PanelContext&)> draw;
 };
@@ -408,6 +612,13 @@ public:
     [[nodiscard]] bool SetPanelOpen(PanelId id, bool open) noexcept;
     [[nodiscard]] bool PanelOpen(PanelId id) const noexcept;
     [[nodiscard]] bool PanelVisible(PanelId id) const noexcept;
+    // Screen rectangle {x, y, width, height} of a docked panel as it was last drawn by DrawStudioShell, if it was.
+    [[nodiscard]] std::optional<std::array<f32, 4>> PanelScreenRect(PanelId id) const;
+    // Screen rectangle {x, y, width, height} of the whole window's work area.
+    [[nodiscard]] std::array<f32, 4> MainViewportRect() const;
+    // Draws the texture over everything else in `rect`, centre-cropped to keep its aspect. Used for the viewport's
+    // animated transition to and from full screen; carries no interaction.
+    void DrawImageOverlay(rhi::Texture& texture, const std::array<f32, 4>& rect);
     // Opens the panel if needed and brings it to the front of its tab group.
     [[nodiscard]] bool FocusPanel(PanelId id) noexcept;
 
@@ -474,6 +685,32 @@ public:
     };
     void SetProjectIndicator(ProjectIndicator indicator);
 
+    // One compact, global action immediately before the project chip.
+    // Presentation/status only; the hot-iteration service owns Git/build.
+    struct UpdateIndicator
+    {
+        std::string label;
+        std::string tooltip;
+        bool enabled{true};
+        bool available{false};
+        // Update and check are separate operations. Clicking the chip opens
+        // details, never triggers a surprise rebuild or restart.
+        std::string stage;
+        std::string detail;
+        std::string branch{"0.1.1-Harmony"};
+        std::string localCommit;
+        std::string remoteCommit;
+        std::uint64_t lastCheckedUnixSeconds{0};
+        std::uint64_t pendingCommits{0};
+        bool rebuildPending{false};
+        bool busy{false};
+        std::function<void()> onClick;
+        std::function<void()> onCheck;
+        bool hasLog{false};
+        std::function<void()> onOpenLog;
+    };
+    void SetUpdateIndicator(UpdateIndicator indicator);
+
     // Transient, non-modal, click-through popup stacked in the lower-right of
     // the main viewport. Presentation only: it never gates the operation it
     // reports. Safe to call any time on the UI thread; the toast is created on
@@ -494,6 +731,10 @@ public:
 
     void BeginFrame(platform::Window& window, f64 deltaSeconds);
     void DrawStudioShell();
+    // Draw only the requested panel as a borderless, full-window surface.
+    // Used while capturing viewport performance so the rest of the shell and
+    // its panels do not run, while the viewport's normal draw callback stays live.
+    [[nodiscard]] bool DrawPanelFullscreen(PanelId panel);
     void Render(rhi::CommandList& commands, rhi::Texture& target, u32 targetWidth, u32 targetHeight);
     [[nodiscard]] bool WantsMouse() const noexcept;
     [[nodiscard]] bool WantsKeyboard() const noexcept;

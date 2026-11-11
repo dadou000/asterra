@@ -14,12 +14,12 @@ add_library(OrbitWorldModel STATIC
     src/PropertyProvenanceSchema.cpp
     src/PropertyProvenanceStore.cpp
     src/PropertyProvenance.cpp
-    src/PhysicalPropertySolver.cpp
     src/WorldSchemas.cpp
     src/VolumeSchemas.cpp
     src/LocalLightBinding.cpp
     src/VisibilityProxyBinding.cpp
     src/PrimitiveBinding.cpp
+    src/StaticMeshBinding.cpp
     src/MaterialAssignmentBinding.cpp
     src/UniverseComposition.cpp
 )
@@ -91,6 +91,25 @@ if(BUILD_TESTING)
 
     add_executable(OrbitPrimitiveBindingTests
         tests/PrimitiveBindingTests.cpp
+    )
+
+    add_executable(OrbitStaticMeshBindingTests
+        tests/StaticMeshBindingTests.cpp
+    )
+
+    target_link_libraries(OrbitStaticMeshBindingTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+    target_compile_features(
+        OrbitStaticMeshBindingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStaticMeshBindingTests)
+
+    add_test(
+        NAME Orbit.StaticMeshBinding
+        COMMAND OrbitStaticMeshBindingTests
     )
 
     add_executable(OrbitMaterialAssignmentBindingTests
@@ -211,24 +230,6 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.PropertyProvenance
         COMMAND OrbitPropertyProvenanceTests
-    )
-
-    add_executable(OrbitPhysicalPropertySolverTests
-        tests/PhysicalPropertySolverTests.cpp
-    )
-
-    target_link_libraries(OrbitPhysicalPropertySolverTests
-        PRIVATE
-            Orbit::WorldModel
-    )
-
-    target_compile_features(
-        OrbitPhysicalPropertySolverTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitPhysicalPropertySolverTests)
-
-    add_test(
-        NAME Orbit.PhysicalPropertySolver
-        COMMAND OrbitPhysicalPropertySolverTests
     )
 
     add_executable(OrbitReferenceNodeCompositionTests
@@ -376,7 +377,6 @@ if(BUILD_TESTING)
 
 endif()
 
-
 if(BUILD_TESTING)
     add_executable(
         OrbitCelestialLightingCompositionTests
@@ -401,7 +401,6 @@ if(BUILD_TESTING)
         COMMAND OrbitCelestialLightingCompositionTests
     )
 endif()
-
 
 if(BUILD_TESTING)
     add_executable(
@@ -428,7 +427,6 @@ if(BUILD_TESTING)
     )
 endif()
 
-
 if(BUILD_TESTING)
     add_executable(
         OrbitCelestialCloudCompositionTests
@@ -453,7 +451,6 @@ if(BUILD_TESTING)
         COMMAND OrbitCelestialCloudCompositionTests
     )
 endif()
-
 
 if(BUILD_TESTING)
     add_executable(
@@ -480,7 +477,6 @@ if(BUILD_TESTING)
     )
 endif()
 
-
 if(BUILD_TESTING)
     add_executable(
         OrbitCelestialRingBindingTests
@@ -505,7 +501,6 @@ if(BUILD_TESTING)
         COMMAND OrbitCelestialRingBindingTests
     )
 endif()
-
 
 if(BUILD_TESTING)
     add_executable(
@@ -532,7 +527,6 @@ if(BUILD_TESTING)
     )
 endif()
 
-
 if(BUILD_TESTING)
     add_executable(
         OrbitCelestialGiantBindingTests
@@ -557,7 +551,6 @@ if(BUILD_TESTING)
         COMMAND OrbitCelestialGiantBindingTests
     )
 endif()
-
 
 if(BUILD_TESTING)
     add_executable(
@@ -584,7 +577,6 @@ if(BUILD_TESTING)
     )
 endif()
 
-
 if(BUILD_TESTING)
     add_executable(
         OrbitCelestialMagnetosphereBindingTests
@@ -610,7 +602,6 @@ if(BUILD_TESTING)
     )
 endif()
 
-
 if(BUILD_TESTING)
     add_executable(
         OrbitCelestialCompactObjectBindingTests
@@ -635,7 +626,6 @@ if(BUILD_TESTING)
         COMMAND OrbitCelestialCompactObjectBindingTests
     )
 endif()
-
 
 if(BUILD_TESTING)
     add_executable(

@@ -357,6 +357,20 @@ bool EditorWorldSession::RefreshUniverseIfChanged()
     return true;
 }
 
+void EditorWorldSession::AcknowledgeViewportTransformCommit() noexcept
+{
+    if (state_ == nullptr ||
+        state_->objects.TransactionActive())
+    {
+        return;
+    }
+
+    const u64 revision = state_->objects.Revision();
+    state_->universe.AdoptSourceRevision(revision);
+    state_->surfaceStats.sourceRevision = revision;
+}
+
+
 const world_model::UniverseCompositionStats&
 EditorWorldSession::UniverseStats() const
 {

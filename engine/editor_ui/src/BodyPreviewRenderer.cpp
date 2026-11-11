@@ -117,7 +117,7 @@ float4 main(VSOutput input) : SV_Target0
     {
         if (g_pc.forward.w < 0.5)
         {
-            return float4(0.0, 0.0, 0.0, 1.0);
+            discard;
         }
 
         const float glow =

@@ -8,6 +8,8 @@
 
 #include <orbit/math/Matrix.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/terrain/TerrainAmbientLayout.hpp>
+#include <orbit/terrain_gpu/GpuTerrainAmbient.hpp>
 #include <orbit/terrain_stream/TerrainMorphRefresh.hpp>
 #include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
 #include <orbit/terrain_stream/ToroidalResidency.hpp>
@@ -167,6 +169,7 @@ public:
           planet_(planet),
           gpuFieldGenerator_(gpuFieldGenerator),
           physicalPageComposite_(device, shaderCompiler),
+          ambientCompute_(device, shaderCompiler),
           regionDeltaComposite_(regionDeltaComposite),
           hydrologyRegionCache_(hydrologyRegionCache),
           config_(std::move(config)),
@@ -177,9 +180,9 @@ public:
           residency_(config_.clipmap),
           levels_(terrain_view::ClipmapLevelCount(config_.clipmap))
     {
-        if (math::Length(observer.meters) <= planet_.radiusMeters)
+        if (!(math::Length(observer.meters) > 1.0))
             throw std::invalid_argument(
-                "Orbit terrain preview observer must be above the planet surface.");
+                "Orbit terrain preview observer must be away from the planet centre.");
         if (config_.framesInFlight == 0)
             throw std::invalid_argument(
                 "Orbit terrain preview requires at least one frame in flight.");
@@ -204,6 +207,7 @@ public:
 
         CreateSharedTopology();
         CreateLevelBuffers();
+        CreateAmbientResources();
         CreateWaterOpticsBuffers();
         CreatePipeline(shaderCompiler);
         CreateWaterPipeline(shaderCompiler);
@@ -869,6 +873,7 @@ public:
             ++stats_.drawCallsLastFrame;
         }
 
+        UpdateTerrainAmbient(commandList, frameIndex);
         stats_.cumulativeUploadedBytes += stats_.uploadedBytesLastFrame;
     }
 
@@ -886,6 +891,11 @@ public:
     [[nodiscard]] const TerrainStreamingStats& StreamingStats() const noexcept
     {
         return stats_;
+    }
+
+    [[nodiscard]] TerrainAmbientView AmbientVisibility(const u32 frameIndex) const noexcept
+    {
+        return AmbientViewFor(frameIndex);
     }
 
 private:
@@ -952,6 +962,157 @@ private:
                 .initialState = rhi::ResourceState::ShaderResource
             });
         }
+    }
+
+    // One ambient texel per clipmap sample, in a single buffer so lighting binds
+    // one resource; each level owns a contiguous block with the level's own
+    // toroidal addressing (see orbit/terrain/TerrainAmbientLayout.hpp).
+    void CreateAmbientResources()
+    {
+        const u32 levelCount = static_cast<u32>(levels_.size());
+        ambientFirstSample_.assign(levelCount, 0U);
+        u64 total = 0U;
+        for (u32 levelIndex = 0; levelIndex < levelCount; ++levelIndex)
+        {
+            ambientFirstSample_[levelIndex] = static_cast<u32>(total);
+            const u64 resolution = terrain_view::ClipmapLevelGridResolution(
+                config_.clipmap, levelIndex);
+            total += resolution * resolution;
+        }
+        ambientTotalSamples_ = static_cast<u32>(total);
+        ambientBuffer_ = device_.CreateBuffer({
+            .sizeBytes = total * terrain::kTerrainAmbientTexelBytes,
+            .usage = rhi::BufferUsage::Structured,
+            .memory = rhi::MemoryUsage::GpuOnly,
+            .initialState = rhi::ResourceState::ShaderResource
+        });
+        const u64 infoBytes = static_cast<u64>(std::max<u32>(levelCount, 1U)) *
+            terrain::kTerrainAmbientLevelInfoBytes;
+        for (u32 frame = 0; frame < config_.framesInFlight; ++frame)
+        {
+            auto info = device_.CreateBuffer({
+                .sizeBytes = infoBytes,
+                .usage = rhi::BufferUsage::Structured,
+                .memory = rhi::MemoryUsage::HostVisible,
+                .initialState = rhi::ResourceState::ShaderResource
+            });
+            std::memset(info->Map(), 0, static_cast<std::size_t>(infoBytes));
+            info->Unmap();
+            ambientLevelInfoBuffers_.push_back(std::move(info));
+        }
+        ambientDirty_.assign(levelCount, 0U);
+        ambientValid_.assign(levelCount, 0U);
+    }
+
+    [[nodiscard]] terrain_gpu::GpuTerrainAmbientLevel AmbientLevelFor(
+        const u32 levelIndex) const
+    {
+        const auto& layoutLevel = layout_.levels[levelIndex];
+        return {
+            .resolution = layoutLevel.gridResolution,
+            .spacingMeters = layoutLevel.sampleSpacingMeters,
+            .centerOffsetMeters = motion_.levels[levelIndex].centerOffsetMeters,
+            .originX = residencyUpdate_.levels[levelIndex].originX,
+            .originY = residencyUpdate_.levels[levelIndex].originY,
+            .surfaceFrame = motion_.levels[levelIndex].surfaceFrame,
+            .firstSample = ambientFirstSample_[levelIndex]
+        };
+    }
+
+    // Recomputes the sky-visibility channel of every level whose samples
+    // changed this frame (coarse to fine, so a finer level can take the horizon
+    // beyond its own reach from the coarser one), then publishes the level
+    // table for this frame slot. The terrain draws and lighting run after.
+    void UpdateTerrainAmbient(
+        rhi::CommandList& commandList,
+        const u32 frameIndex)
+    {
+        if (ambientBuffer_ == nullptr ||
+            motion_.levels.size() != levels_.size() ||
+            residencyUpdate_.levels.size() != levels_.size() ||
+            layout_.levels.size() != levels_.size())
+            return;
+        const u32 levelCount = static_cast<u32>(levels_.size());
+        bool anyDirty = !ambientCleared_;
+        for (u32 levelIndex = 0; levelIndex < levelCount; ++levelIndex)
+            anyDirty = anyDirty ||
+                (layout_.levels[levelIndex].active && ambientDirty_[levelIndex] != 0U);
+
+        if (anyDirty)
+        {
+            commandList.Transition(
+                *ambientBuffer_,
+                rhi::ResourceState::ShaderResource,
+                rhi::ResourceState::UnorderedAccess);
+            if (!ambientCleared_)
+            {
+                ambientCompute_.Clear(commandList, ambientTotalSamples_, *ambientBuffer_);
+                commandList.UavBarrier(*ambientBuffer_);
+                ambientCleared_ = true;
+            }
+            for (u32 index = levelCount; index-- > 0U;)
+            {
+                if (!layout_.levels[index].active || ambientDirty_[index] == 0U)
+                    continue;
+                terrain_gpu::GpuTerrainAmbientRequest request{
+                    .level = AmbientLevelFor(index),
+                    .planetRadiusMeters = planet_.radiusMeters
+                };
+                const u32 coarser = index + 1U;
+                if (!baseClipmapConfig_.Banded() && coarser < levelCount &&
+                    layout_.levels[coarser].active && ambientValid_[coarser] != 0U)
+                    request.coarser = AmbientLevelFor(coarser);
+                ambientCompute_.Dispatch(
+                    commandList, request, *levels_[index].gpuSampleBuffer, *ambientBuffer_);
+                commandList.UavBarrier(*ambientBuffer_);
+                ambientDirty_[index] = 0U;
+                ambientValid_[index] = 1U;
+            }
+            commandList.Transition(
+                *ambientBuffer_,
+                rhi::ResourceState::UnorderedAccess,
+                rhi::ResourceState::ShaderResource);
+        }
+
+        if (frameIndex >= ambientLevelInfoBuffers_.size())
+            return;
+        auto* bytes = static_cast<std::byte*>(ambientLevelInfoBuffers_[frameIndex]->Map());
+        for (u32 levelIndex = 0; levelIndex < levelCount; ++levelIndex)
+        {
+            const auto level = AmbientLevelFor(levelIndex);
+            const bool usable = layout_.levels[levelIndex].active &&
+                levelValid_[levelIndex] != 0U && ambientValid_[levelIndex] != 0U;
+            const auto& frame = level.surfaceFrame;
+            const std::array<f32, 12> floats{
+                static_cast<f32>(frame.up.x), static_cast<f32>(frame.up.y),
+                static_cast<f32>(frame.up.z), static_cast<f32>(planet_.radiusMeters),
+                static_cast<f32>(frame.east.x), static_cast<f32>(frame.east.y),
+                static_cast<f32>(frame.east.z), static_cast<f32>(level.spacingMeters),
+                static_cast<f32>(frame.north.x), static_cast<f32>(frame.north.y),
+                static_cast<f32>(frame.north.z),
+                (static_cast<f32>(level.resolution) - 1.0F) * 0.5F};
+            const std::array<u32, 8> tail{
+                std::bit_cast<u32>(static_cast<f32>(level.centerOffsetMeters.x)),
+                std::bit_cast<u32>(static_cast<f32>(level.centerOffsetMeters.y)),
+                level.originX, level.originY,
+                level.resolution, level.firstSample, usable ? 1U : 0U, 0U};
+            std::byte* const record =
+                bytes + static_cast<std::size_t>(levelIndex) * terrain::kTerrainAmbientLevelInfoBytes;
+            std::memcpy(record, floats.data(), sizeof(floats));
+            std::memcpy(record + sizeof(floats), tail.data(), sizeof(tail));
+        }
+        ambientLevelInfoBuffers_[frameIndex]->Unmap();
+    }
+
+    [[nodiscard]] TerrainAmbientView AmbientViewFor(const u32 frameIndex) const noexcept
+    {
+        if (ambientBuffer_ == nullptr || frameIndex >= ambientLevelInfoBuffers_.size())
+            return {};
+        return {
+            .ambient = ambientBuffer_.get(),
+            .levels = ambientLevelInfoBuffers_[frameIndex].get(),
+            .levelCount = static_cast<u32>(levels_.size())
+        };
     }
 
     // One small host-visible optics buffer per frame in flight, bound at SRV
@@ -1126,9 +1287,9 @@ private:
     void SetObserverView(const world::WorldPosition& observer)
     {
         const f64 observerRadius = math::Length(observer.meters);
-        if (observerRadius <= planet_.radiusMeters)
+        if (!(observerRadius > 1.0))
             throw std::invalid_argument(
-                "Orbit terrain preview observer must be above the planet surface.");
+                "Orbit terrain preview observer must be away from the planet centre.");
 
         observer_ = observer;
         if (!observerFrameInitialized_)
@@ -1554,6 +1715,8 @@ private:
                 gpuBuffer,
                 rhi::ResourceState::UnorderedAccess,
                 rhi::ResourceState::ShaderResource);
+            // New heights: this level's sky visibility must be recomputed.
+            ambientDirty_[levelIndex] = 1U;
         }
 
         state.appliedSerial = state.currentSerial;
@@ -1652,6 +1815,7 @@ private:
     world::PlanetDefinition planet_;
     terrain_gpu::GpuFieldGenerator& gpuFieldGenerator_;
     terrain_gpu::GpuPhysicalPageComposite physicalPageComposite_;
+    terrain_gpu::GpuTerrainAmbient ambientCompute_;
     std::vector<terrain_gpu::GpuPhysicalSurfacePage> physicalPages_;
     u64 physicalPageGeneration_{0U};
     terrain_gpu::GpuRegionDelta* regionDeltaComposite_{nullptr};
@@ -1731,6 +1895,14 @@ private:
     f64 groundElevationHintMeters_{0.0};
     // Per level: 1 when its sample buffer holds current data for the layout.
     std::vector<u8> levelValid_;
+    // Terrain sky-visibility channel (see UpdateTerrainAmbient).
+    std::unique_ptr<rhi::Buffer> ambientBuffer_;
+    std::vector<std::unique_ptr<rhi::Buffer>> ambientLevelInfoBuffers_;
+    std::vector<u32> ambientFirstSample_;
+    std::vector<u8> ambientDirty_;
+    std::vector<u8> ambientValid_;
+    u32 ambientTotalSamples_{0U};
+    bool ambientCleared_{false};
     TerrainStreamingStats stats_{};
     std::chrono::steady_clock::time_point lastRebaseTime_{};
     std::vector<u32> patchVertexCounts_;
@@ -1898,6 +2070,11 @@ u32 TerrainPreviewRenderer::VertexCount() const noexcept
 u32 TerrainPreviewRenderer::IndexCount() const noexcept
 {
     return impl_->IndexCount();
+}
+
+TerrainAmbientView TerrainPreviewRenderer::AmbientVisibility(const u32 frameIndex) const noexcept
+{
+    return impl_->AmbientVisibility(frameIndex);
 }
 
 const TerrainStreamingStats& TerrainPreviewRenderer::StreamingStats() const noexcept

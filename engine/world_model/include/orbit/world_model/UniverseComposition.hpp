@@ -46,6 +46,8 @@ public:
     [[nodiscard]] bool RebuildIfChanged(
         const scene::ObjectStore& objects);
 
+    // Refreshes transaction previews without publishing a new committed
+    // source revision to the caller.
     [[nodiscard]] frames::FrameGraph&
     Frames() noexcept;
     [[nodiscard]] const frames::FrameGraph&
@@ -79,6 +81,7 @@ public:
     ObjectForBody(universe::BodyId body) const noexcept;
 
     [[nodiscard]] u64 SourceRevision() const noexcept;
+    void AdoptSourceRevision(u64 revision) noexcept;
 
 private:
     std::unique_ptr<frames::FrameGraph> frames_;

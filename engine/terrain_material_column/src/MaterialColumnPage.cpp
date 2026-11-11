@@ -481,7 +481,20 @@ MaterialRemoval MaterialColumnPage::ApplyImpact(
         impact.excavationDepthMeters < 0.0 ||
         !std::isfinite(impact.ejectaThicknessMeters) ||
         impact.ejectaThicknessMeters < 0.0 ||
-        !std::isfinite(impact.rayField))
+        !std::isfinite(impact.rayField) ||
+        !std::isfinite(impact.meltThicknessMeters) ||
+        impact.meltThicknessMeters < 0.0 ||
+        !std::isfinite(impact.brecciaField) ||
+        impact.brecciaField < 0.0 || impact.brecciaField > 1.0 ||
+        !std::isfinite(impact.microImpactRoughnessMeters) ||
+        impact.microImpactRoughnessMeters < 0.0 ||
+        !std::isfinite(impact.microImpactCoverage) ||
+        impact.microImpactCoverage < 0.0 || impact.microImpactCoverage > 1.0 ||
+        !std::isfinite(impact.resurfacingThicknessMeters) ||
+        impact.resurfacingThicknessMeters < 0.0 ||
+        !std::isfinite(impact.resurfacedMaterialFraction) ||
+        impact.resurfacedMaterialFraction < 0.0 ||
+        impact.resurfacedMaterialFraction > 1.0)
     {
         throw std::invalid_argument(
             "M08 received invalid M07 crater process channels.");
@@ -494,14 +507,19 @@ MaterialRemoval MaterialColumnPage::ApplyImpact(
             impact.excavationDepthMeters,
             geology);
 
-    if (impact.ejectaThicknessMeters > 0.0)
+    const f64 brecciaDepth = impact.brecciaField *
+        std::min(impact.excavationDepthMeters * 0.08, 1.0);
+    const f64 looseImpactDeposit = impact.ejectaThicknessMeters +
+        impact.meltThicknessMeters + brecciaDepth +
+        impact.resurfacingThicknessMeters;
+    if (looseImpactDeposit > 0.0)
     {
         static_cast<void>(
             Deposit(
                 x,
                 y,
                 LooseMaterialKind::Debris,
-                impact.ejectaThicknessMeters));
+                looseImpactDeposit));
     }
 
     MaterialColumnCell& cell = At(x, y);

@@ -65,6 +65,9 @@ constexpr i64 kInvalid = 1090;
         {"window_ms", options.windowMs},
         {"grouping", GroupingName(options.grouping)},
         {"freeze_on_hitch", options.freezeOnHitch},
+        {"viewport_capture_duration_ms", options.viewportCaptureDurationMs},
+        {"viewport_capture_resolution", options.viewportCaptureResolution},
+        {"viewport_capture_scenario", options.viewportCaptureScenario},
         {"min_slice_ms", options.minSliceMs},
         {"filter", options.filter},
         {"lanes", static_cast<i64>(snapshot.lanes.size())},
@@ -118,7 +121,8 @@ void RegisterProfilerPanelRpc(rpc::Dispatcher& dispatcher, ProfilerModel& model)
             .description =
                 "State of the Studio Profiler panel: paused or live, where the "
                 "snapshot came from (live or a loaded hitch file), options "
-                "(history window, grouping, freeze on hitch, minimum slice, "
+                "(history window, viewport-only capture duration and resolution, "
+                "grouping, freeze on hitch, minimum slice, "
                 "highlight filter), the visible time range and the selected slice.",
             .mutating = false
         },
@@ -135,6 +139,10 @@ void RegisterProfilerPanelRpc(rpc::Dispatcher& dispatcher, ProfilerModel& model)
                 "Drives the Profiler panel like its controls. Fields (all "
                 "optional): paused (Pause / Resume live), window_ms, grouping "
                 "('threads' | 'cores'), freeze_on_hitch, min_slice_ms, filter, "
+                "viewport_capture_duration_ms (1000-30000) and "
+                "viewport_capture_resolution ('720p' | '1080p' | '1440p' | '2160p'), "
+                "viewport_capture_scenario ('static' | 'walk_1_94_mps' | "
+                "'surface_200_kmh' | 'flight_2000_mps_5000m' | 'ground_to_orbit_20s'), "
                 "reset_view, view_begin_ms + view_span_ms (relative to the "
                 "snapshot start; pauses), zoom_frame (frame index in the "
                 "snapshot, -1 for the longest), select {thread, time_ms} "
@@ -182,6 +190,44 @@ void RegisterProfilerPanelRpc(rpc::Dispatcher& dispatcher, ProfilerModel& model)
             if (const auto value = Number(values, "min_slice_ms"))
             {
                 options.minSliceMs = *value;
+                optionsChanged = true;
+            }
+            if (const auto value = Number(values, "viewport_capture_duration_ms"))
+            {
+                options.viewportCaptureDurationMs = *value;
+                optionsChanged = true;
+            }
+            if (const auto found = values.find("viewport_capture_resolution"); found != values.end())
+            {
+                if (!found->second.IsString())
+                {
+                    throw rpc::Error(-32602, "viewport_capture_resolution must be a preset string.");
+                }
+                if (found->second.AsString() != "720p" &&
+                    found->second.AsString() != "1080p" &&
+                    found->second.AsString() != "1440p" &&
+                    found->second.AsString() != "2160p")
+                {
+                    throw rpc::Error(-32602, "viewport_capture_resolution must be 720p, 1080p, 1440p, or 2160p.");
+                }
+                options.viewportCaptureResolution = found->second.AsString();
+                optionsChanged = true;
+            }
+            if (const auto found = values.find("viewport_capture_scenario"); found != values.end())
+            {
+                if (!found->second.IsString())
+                {
+                    throw rpc::Error(-32602, "viewport_capture_scenario must be a scenario string.");
+                }
+                options.viewportCaptureScenario = found->second.AsString();
+                if (options.viewportCaptureScenario != "static" &&
+                    options.viewportCaptureScenario != "walk_1_94_mps" &&
+                    options.viewportCaptureScenario != "surface_200_kmh" &&
+                    options.viewportCaptureScenario != "flight_2000_mps_5000m" &&
+                    options.viewportCaptureScenario != "ground_to_orbit_20s")
+                {
+                    throw rpc::Error(-32602, "unsupported viewport_capture_scenario.");
+                }
                 optionsChanged = true;
             }
             if (const auto found = values.find("filter"); found != values.end())

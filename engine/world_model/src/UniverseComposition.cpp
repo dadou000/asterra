@@ -1327,4 +1327,11 @@ u64 UniverseComposition::SourceRevision() const noexcept
 {
     return sourceRevision_;
 }
+
+void UniverseComposition::AdoptSourceRevision(
+    const u64 revision) noexcept
+{
+    sourceRevision_ = revision;
+}
+
 } // namespace orbit::world_model

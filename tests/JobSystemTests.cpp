@@ -181,6 +181,15 @@ int main()
         true,
         std::memory_order_release);
 
+    // Wait() runs queued jobs on the calling thread, which would let this thread and the
+    // worker race for the two jobs and make the order unobservable. Let the single worker
+    // drain them, and only then use Wait()/WaitIdle() to synchronise.
+    while (executionOrder.load(
+               std::memory_order_acquire) < 2U)
+    {
+        std::this_thread::yield();
+    }
+
     priorityJobs.Wait(priorityGroup);
     priorityJobs.WaitIdle();
 

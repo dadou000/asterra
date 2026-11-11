@@ -45,4 +45,22 @@ void OpenInFileBrowser(const std::filesystem::path& path)
             "The file browser could not be opened for " + path.generic_string());
     }
 }
+
+void OpenWithDefaultApplication(const std::filesystem::path& path)
+{
+    std::error_code error;
+    const std::filesystem::path absolute = std::filesystem::absolute(path, error);
+    if (error || !std::filesystem::exists(absolute, error))
+    {
+        throw std::runtime_error(
+            "Cannot open a path that does not exist: " + path.generic_string());
+    }
+    const HINSTANCE result = ShellExecuteW(
+        nullptr, L"open", absolute.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(result) <= 32)
+    {
+        throw std::runtime_error(
+            "No application could open " + path.generic_string());
+    }
+}
 } // namespace orbit::platform

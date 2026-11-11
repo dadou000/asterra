@@ -1,0 +1,616 @@
+{
+ "id": "R-20261011-193506-2857c34e",
+ "rubric": "v1",
+ "council": {
+  "title": "Where the Clouds pass spends its time: attribution by stubs, step heat map and empty-column threshold",
+  "question": "What accounts for the 8.6 to 12.1 ms the Clouds march takes in sky views, and can a cheaper empty-space test recover it?",
+  "chosen": "shipped",
+  "verdict": "The cost is the number of march steps on empty sky, and no per-column or per-stage change recovers it. (1) Stubbing the sun optical depth, the multi-scatter octaves and the aerial perspective, alone or in any combination of three, frees 0.0 to 0.5 ms (8.81 vs 8.76 ms for all three together), so none of those stages matters. (2) A step-count heat map (CLOUD_PROF_STEPVIS) shows every sky pixel, including ones whose ray meets no cloud, running 110 to 224 of the 224-step budget, while the pixels on a cloud end early (about 56 steps) because the cloud turns opaque; orbit pixels use 56 to 112. (3) Treating columns with coverage up to 0.02, 0.05 or 0.10 as empty for the leap, even with a leap of 8x, leaves the Clouds pass unchanged (8.61 vs 8.62 / 8.85 / 8.78 / 8.92 ms): in this world the column coverage is above 0.1 almost everywhere while the noise forms cloud in a few percent of the volume, so a coverage test cannot see clear sky. (4) The only variants that cut time (steps160, base120, from the earlier review) do it by thinning distant cloud. What is missing is the spec's optical hierarchy: an occupancy test on the noise itself (a conservative empty-distance field over the base noise, indexed by coverage) so that clear-sky rays leap by kilometres instead of marching about 140 steps. A first estimate is that clear sky is most of the 8.6 ms in the sky views, so a working skip could cut the Clouds pass by a half or more; that is untested.",
+  "lenses": [
+   {
+    "name": "GPU Engineer",
+    "findings": "Per-pass Clouds time (mean of two interleaved rounds, one launch): sky_cumulus 9.23 ms shipped, no_sun_depth 9.21, no_octaves 8.81, no_aerial 8.70; the combination of those three 8.81 vs 8.76; cheap_noise 10.55 (a sine hash costs more than the cached buffer fetches it replaced, so noise fetches are not the bottleneck, and the earlier all-stubbed 3.96 ms was an artefact of that expensive hash multiplying the sun march). The cost scales with the step budget (steps160 -33 percent) and is flat in every per-sample stage, which is what a loop of about 140 cheap steps per pixel looks like."
+   },
+   {
+    "name": "Architectural Skeptic",
+    "findings": "The shader already has a leap with a safety net (it backs up to where the leap began and marches that stretch finely if the leap lands inside cloud), so a conservative occupancy distance is the right extension of an existing owner, not a second march. The occupancy data would be static (the base noise is baked and periodic) and indexed by the weather coverage, so it fits the spec's rule that the physical medium is shared and the camera only presents it."
+   },
+   {
+    "name": "Minimalist / Anti-Overengineering Guardian",
+    "findings": "The coverage threshold is the cheap test and it fails; stop tuning knobs. The occupancy distance field is worth building because it is the one change that attacks the measured cost (empty-sky steps) without removing cloud, but it must be validated by changed-pixel counts first: any missed cloud is a loss."
+   },
+   {
+    "name": "Ruthless Shader Artist",
+    "findings": "The heat map is the useful image of this review: the sky is a uniform red wash with the clouds as cool islands, which is to say the renderer pays most for the part of the picture with nothing in it. The coverage variants are visually identical to the shipped frames (changed-pixel counts at the noise floor).",
+    "ratings": {
+     "shipped": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "reference"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "reference"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "reference"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "reference"
+      ],
+      "scale_depth": [
+       8,
+       "medium",
+       "reference"
+      ]
+     },
+     "cov05": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "identical within noise"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "same"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "same"
+      ],
+      "scale_depth": [
+       8,
+       "medium",
+       "same"
+      ]
+     }
+    }
+   }
+  ],
+  "disagreements": [],
+  "hypotheses": [
+   "Clear sky accounts for most of the sky-view cost (the heat map suggests it; not measured as a fraction of GPU time).",
+   "A conservative empty-distance field over the base noise, indexed by quantised coverage, lets those rays leap kilometres and keeps every cloud (untested)."
+  ],
+  "verified_facts": [
+   "Stubbing sun depth, octaves and aerial perspective together changes the Clouds pass by +0.05 ms (8.81 vs 8.76) in sky_cumulus.",
+   "CLOUD_EMPTY_COVERAGE up to 0.10 with CLOUD_EMPTY_SKIP 8 changes the Clouds pass by at most +0.3 ms and the image by no more than the noise floor.",
+   "The step heat map: sky pixels 110 to 224 of 224 steps, cloud pixels about 56, orbit 56 to 112.",
+   "A sine-hash noise stub is slower than the buffer fetches (+1.1 to +3.0 ms)."
+  ],
+  "open_issues": [
+   "Whole-pass GPU time only; the fraction spent on empty-sky pixels is inferred from the heat map.",
+   "Stills only; no temporal assessment.",
+   "The occupancy field is not built."
+  ],
+  "recommended_changes": [
+   "Build a static empty-distance field over the base noise per quantised coverage level and use it for the leap (keep the existing back-up safety net); validate with tools/ab_specs/cloud_empty_coverage.json style runs: changed pixels at the noise floor and the Clouds pass cut.",
+   "Keep CLOUD_PROF_* stubs and CLOUD_EMPTY_COVERAGE as diagnostics (defaults unchanged)."
+  ],
+  "completed_changes": [
+   "CLOUD_PROF_STEPVIS, CLOUD_PROF_CHEAPNOISE, CLOUD_PROF_NOSUNDEPTH, CLOUD_PROF_NOOCTAVES, CLOUD_PROF_NOAERIAL and CLOUD_EMPTY_COVERAGE (all default to the shipped shader).",
+   "tools/ab_specs/cloud_attribution.json, cloud_occupancy.json, cloud_stepvis.json, cloud_empty_coverage.json."
+  ]
+ },
+ "run": {
+  "baseline": "shipped",
+  "seconds": 307.3,
+  "provenance": {
+   "commit": "2857c34eee107a223b8e71c1e3cdc41b8602f6f8",
+   "branch": "0.1.1-Harmony",
+   "dirty_files": [
+    "ngine/celestial_clouds/src/CloudRenderer.cpp",
+    "tools/ab_specs/cloud_attribution.json",
+    "tools/ab_specs/cloud_empty_coverage.json",
+    "tools/ab_specs/cloud_occupancy.json",
+    "tools/ab_specs/cloud_stepvis.json"
+   ],
+   "exe": "C:\\Users\\david\\Documents\\GitHub\\asterra\\Orbit.exe",
+   "exe_sha256": "d999f00a85c38e3bda3c087ba9552105c34eab5dd4aa869a6c0308fa19ea2fd9",
+   "exe_mtime": "2026-10-11 19:28:56",
+   "gpu": "NVIDIA GeForce RTX 4090",
+   "date": "2026-10-11 19:34:04"
+  },
+  "variants": {
+   "shipped": {
+    "ORBIT_CLOUD_DEFINES": ""
+   },
+   "cov02": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.02"
+   },
+   "cov05": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.05"
+   },
+   "cov10": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.10"
+   },
+   "cov05_skip8": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.05;CLOUD_EMPTY_SKIP=8.0"
+   }
+  },
+  "spec": {
+   "_comment": "Empty-space skipping: the leap treats a column as empty only when its coverage is <= CLOUD_EMPTY_COVERAGE (shipped 1e-4 = exactly empty). Empty sky pixels burn most of the step budget (see cloud_stepvis.json); a realistic threshold lets them leap. Must keep the image (changed-pixel count) and cut the Clouds pass.",
+   "mode": "in_process",
+   "rounds": 2,
+   "world": "Worlds/Main.orbitworld",
+   "body": "Earth",
+   "baseline": "shipped",
+   "gpu_passes": [
+    "Clouds"
+   ],
+   "gpu_window_ms": 1500,
+   "variants": {
+    "shipped": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": ""
+     }
+    },
+    "cov02": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.02"
+     }
+    },
+    "cov05": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.05"
+     }
+    },
+    "cov10": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.10"
+     }
+    },
+    "cov05_skip8": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_EMPTY_COVERAGE=0.05;CLOUD_EMPTY_SKIP=8.0"
+     }
+    }
+   },
+   "scenes": [
+    {
+     "name": "sky_cumulus",
+     "time_microseconds": 18070405751,
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 42,
+      "yaw_deg": 0,
+      "pitch_deg": 20
+     }
+    },
+    {
+     "name": "horizon_bank",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 42,
+      "yaw_deg": 0,
+      "pitch_deg": 3
+     }
+    },
+    {
+     "name": "cumulus_far",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 1200,
+      "yaw_deg": 0,
+      "pitch_deg": 8
+     }
+    },
+    {
+     "name": "cumulus_near",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.05157,
+      "lon_deg": 0.03666,
+      "alt_m": 2600,
+      "yaw_deg": 35.3,
+      "pitch_deg": 21.74
+     }
+    },
+    {
+     "name": "orbit_deck",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "approach",
+      "target": {
+       "lat_deg": 5.3045,
+       "lon_deg": 0.0
+      },
+      "origin": {
+       "lat_deg": 0,
+       "lon_deg": 0,
+       "alt_km": 1590.95
+      },
+      "alt_km": 1500
+     }
+    }
+   ],
+   "project": "C:/Users/david/AppData/Local/Temp/claude/C--Users-david-Documents-GitHub-asterra/8929e869-7edf-4e5e-9d35-85da2894e8c6/scratchpad/proj"
+  },
+  "scenes": {
+   "sky_cumulus": {
+    "noise": [
+     {
+      "mean": 0.0574,
+      "max": 45.0,
+      "px_over": 89
+     }
+    ],
+    "variants": {
+     "cov02": {
+      "mean": 0.0618,
+      "max": 39.0,
+      "px_over": 216
+     },
+     "cov05": {
+      "mean": 0.0692,
+      "max": 46.0,
+      "px_over": 276
+     },
+     "cov10": {
+      "mean": 0.0655,
+      "max": 52.0,
+      "px_over": 184
+     },
+     "cov05_skip8": {
+      "mean": 0.0621,
+      "max": 38.0,
+      "px_over": 129
+     }
+    },
+    "frame_ms": {
+     "shipped": 12.59,
+     "cov02": 12.54,
+     "cov05": 12.56,
+     "cov10": 12.55,
+     "cov05_skip8": 12.68
+    },
+    "gpu_pass_ms": {
+     "shipped": {
+      "Clouds": 8.605
+     },
+     "cov02": {
+      "Clouds": 8.624
+     },
+     "cov05": {
+      "Clouds": 8.848
+     },
+     "cov10": {
+      "Clouds": 8.78
+     },
+     "cov05_skip8": {
+      "Clouds": 8.921
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {}
+    ],
+    "frame_ms_drift": [
+     0.25
+    ],
+    "image_sha256": {
+     "shipped": "2ba0ff9e056ed8f38632e40cb4eae56b31b5992957172ce2024d297fc7b1c740",
+     "cov02": "6b6476502a5e8352b3651a18d00a41453ccf587a8e3426c5fe32c92b23d6de79",
+     "cov05": "c4b6c9fb84ad28494465c9bc19ec168dcd23e73000d0e9c588e29b326cfda36e",
+     "cov10": "461587ea2ba832095d32bd10b27daf4c2b45dfa470661740935f80ba33b342bb",
+     "cov05_skip8": "7a3017799551285cd31334a669d34d0693e1c5bad4d1c769a8e60180f6ba0c33"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "horizon_bank": {
+    "noise": [
+     {
+      "mean": 0.0383,
+      "max": 59.0,
+      "px_over": 278
+     }
+    ],
+    "variants": {
+     "cov02": {
+      "mean": 0.0492,
+      "max": 36.0,
+      "px_over": 2209
+     },
+     "cov05": {
+      "mean": 0.0383,
+      "max": 54.0,
+      "px_over": 313
+     },
+     "cov10": {
+      "mean": 0.0536,
+      "max": 70.0,
+      "px_over": 1949
+     },
+     "cov05_skip8": {
+      "mean": 0.06,
+      "max": 58.0,
+      "px_over": 3266
+     }
+    },
+    "frame_ms": {
+     "shipped": 10.78,
+     "cov02": 10.94,
+     "cov05": 10.66,
+     "cov10": 11.12,
+     "cov05_skip8": 11.1
+    },
+    "gpu_pass_ms": {
+     "shipped": {
+      "Clouds": 6.504
+     },
+     "cov02": {
+      "Clouds": 6.148
+     },
+     "cov05": {
+      "Clouds": 6.566
+     },
+     "cov10": {
+      "Clouds": 6.309
+     },
+     "cov05_skip8": {
+      "Clouds": 6.555
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {}
+    ],
+    "frame_ms_drift": [
+     0.73
+    ],
+    "image_sha256": {
+     "shipped": "1d43a7db2180c062ca9584ed9448809d4992c233dbc191e153e9993e6591a942",
+     "cov02": "7dac4a0d26458ddffab204263208f7ec11ea1682f06bb4aecb68025ed45a3034",
+     "cov05": "b1d89fbb8f708ed34204f193ad9dde931632d1cf412b860798c32f405bfc5c65",
+     "cov10": "f24d9f0cd0a524e732a9d9afd6d5ac48d7a146dae05dd29ca829dd80a57b153b",
+     "cov05_skip8": "522017ae02b1131675a5a0423eaa142e215da82f42f9ded6210816d3c20bf5be"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_far": {
+    "noise": [
+     {
+      "mean": 0.0604,
+      "max": 21.0,
+      "px_over": 103
+     }
+    ],
+    "variants": {
+     "cov02": {
+      "mean": 0.0717,
+      "max": 30.0,
+      "px_over": 397
+     },
+     "cov05": {
+      "mean": 0.0605,
+      "max": 25.0,
+      "px_over": 169
+     },
+     "cov10": {
+      "mean": 0.0699,
+      "max": 33.0,
+      "px_over": 296
+     },
+     "cov05_skip8": {
+      "mean": 0.0665,
+      "max": 27.0,
+      "px_over": 277
+     }
+    },
+    "frame_ms": {
+     "shipped": 14.17,
+     "cov02": 14.0,
+     "cov05": 14.46,
+     "cov10": 14.52,
+     "cov05_skip8": 14.66
+    },
+    "gpu_pass_ms": {
+     "shipped": {
+      "Clouds": 8.748
+     },
+     "cov02": {
+      "Clouds": 8.625
+     },
+     "cov05": {
+      "Clouds": 8.998
+     },
+     "cov10": {
+      "Clouds": 8.985
+     },
+     "cov05_skip8": {
+      "Clouds": 9.508
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {}
+    ],
+    "frame_ms_drift": [
+     0.02
+    ],
+    "image_sha256": {
+     "shipped": "766d7af2dd1edbb92134545e3b3260b8368325000301f7f1246f34a9455d6e32",
+     "cov02": "5ed725dac6e85a57ede445eafd96e0310c7317c2f3aa5e8469cab58501ae8ea3",
+     "cov05": "72d571b47027007fd10bba627c6fe50705444bbac290101f806e7c55752abd62",
+     "cov10": "0fd4881b79c5fabc56c16e994ff5d46579756cb3f39fe85624e745acf0a56898",
+     "cov05_skip8": "a5554e33e8b366005298af2970ef4484e1580a400d9883e0cbcd83f55c06e8ea"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_near": {
+    "noise": [
+     {
+      "mean": 0.0345,
+      "max": 28.0,
+      "px_over": 174
+     }
+    ],
+    "variants": {
+     "cov02": {
+      "mean": 0.0274,
+      "max": 25.0,
+      "px_over": 82
+     },
+     "cov05": {
+      "mean": 0.0308,
+      "max": 25.0,
+      "px_over": 99
+     },
+     "cov10": {
+      "mean": 0.032,
+      "max": 26.0,
+      "px_over": 102
+     },
+     "cov05_skip8": {
+      "mean": 0.032,
+      "max": 26.0,
+      "px_over": 103
+     }
+    },
+    "frame_ms": {
+     "shipped": 17.66,
+     "cov02": 17.42,
+     "cov05": 18.13,
+     "cov10": 17.99,
+     "cov05_skip8": 18.01
+    },
+    "gpu_pass_ms": {
+     "shipped": {
+      "Clouds": 12.134
+     },
+     "cov02": {
+      "Clouds": 12.231
+     },
+     "cov05": {
+      "Clouds": 12.451
+     },
+     "cov10": {
+      "Clouds": 12.245
+     },
+     "cov05_skip8": {
+      "Clouds": 12.621
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {}
+    ],
+    "frame_ms_drift": [
+     0.03
+    ],
+    "image_sha256": {
+     "shipped": "0adab9a6ccf4a6cf7deb5d59c06c31b2eb7caabd863a595a63e10d75a94f228d",
+     "cov02": "03bfe867e018a1ef0861b52ce0d48db016d953b6b78491ae05efe291c107cd4d",
+     "cov05": "138ba0aae078baee1c47f1e6ca949c6de2c48195b8da1af16ed627c53646a5fa",
+     "cov10": "76d70be30e2bb608cbc9f34b814c21b349b830eb5e371b1d422aebbcf8c01af2",
+     "cov05_skip8": "579754684d634bce7ecdb891d329b6535939e534ec5e1412a4536bb544a69ba8"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "orbit_deck": {
+    "noise": [
+     {
+      "mean": 0.0334,
+      "max": 31.0,
+      "px_over": 174
+     }
+    ],
+    "variants": {
+     "cov02": {
+      "mean": 0.0281,
+      "max": 34.0,
+      "px_over": 65
+     },
+     "cov05": {
+      "mean": 0.0431,
+      "max": 41.0,
+      "px_over": 334
+     },
+     "cov10": {
+      "mean": 0.0528,
+      "max": 41.0,
+      "px_over": 333
+     },
+     "cov05_skip8": {
+      "mean": 0.0373,
+      "max": 30.0,
+      "px_over": 176
+     }
+    },
+    "frame_ms": {
+     "shipped": 8.91,
+     "cov02": 9.02,
+     "cov05": 8.93,
+     "cov10": 9.03,
+     "cov05_skip8": 9.0
+    },
+    "gpu_pass_ms": {
+     "shipped": {
+      "Clouds": 1.274
+     },
+     "cov02": {
+      "Clouds": 1.246
+     },
+     "cov05": {
+      "Clouds": 1.246
+     },
+     "cov10": {
+      "Clouds": 1.262
+     },
+     "cov05_skip8": {
+      "Clouds": 1.297
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {}
+    ],
+    "frame_ms_drift": [
+     0.01
+    ],
+    "image_sha256": {
+     "shipped": "a0a37076bb1f1aa1052472cddbac9919305116acf5165b55c2d373303b1959c0",
+     "cov02": "f7b5ac2fae4987952e29d511ed86ce4f95457dc7eb294e687068eb867ec2618a",
+     "cov05": "bd374677ac3d2a9d55204e07364fc03bc05ade7d6ec867a7193346312b518d5e",
+     "cov10": "e0c4b06335c79b00c566fe680875e36705776b112dd7fc0e3e43a9e249b1a475",
+     "cov05_skip8": "10f16220bb495ca17b073354c82831458be673e8cf0bfe752dd031e90f4257e0"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   }
+  }
+ },
+ "images": "full-resolution PNGs stay outside git (see run.scenes[*].image_sha256 and the capture folder at C:\\Users\\david\\AppData\\Local\\Temp\\claude\\C--Users-david-Documents-GitHub-asterra\\8929e869-7edf-4e5e-9d35-85da2894e8c6\\scratchpad\\ab_cov); sheet.png here is a downscaled contact sheet (top row variants, bottom row 5x difference vs baseline)"
+}
