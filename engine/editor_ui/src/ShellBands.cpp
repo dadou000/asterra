@@ -260,8 +260,13 @@ private:
         const f32 scale =
             CurrentUiScale();
 
-        for (const ShellBandDefinition& band :
-             g_shellBands)
+        // A band's draw callback may add, replace or remove bands (the workspace
+        // tabs remove the mode toolbar when a click switches workspace). Iterating
+        // the live vector then erased the element being drawn and left the next
+        // band with a moved-from (empty) callback: std::bad_function_call. Draw a
+        // snapshot; the edit takes effect next frame.
+        const std::vector<ShellBandDefinition> bands = g_shellBands;
+        for (const ShellBandDefinition& band : bands)
         {
             const std::string windowName =
                 "##orbit-shell-band-" + band.id;
