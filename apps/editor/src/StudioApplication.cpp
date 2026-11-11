@@ -67,6 +67,7 @@
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/DebugViewUi.hpp>
 #include <orbit/studio_ui/ProfilerUi.hpp>
+#include <orbit/studio_ui/HtmlPanelsUi.hpp>
 #include <orbit/studio_ui/ImplementationPlan.hpp>
 #include <orbit/studio_ui/PlanningUi.hpp>
 #include <orbit/studio_ui/ReportThumbnailCache.hpp>
@@ -1609,6 +1610,41 @@ int orbit::editor_app::StudioApplication::Run(
         orbit::studio_ui::PlanningUi planningUi(implementationPlan);
         planningUi.Register(ui);
         planningUi.RegisterRpc(rpcHost.Dispatcher());
+
+        // HTML panels (WebView2) with the page bridge onto the same RPC surface. Pages are hot:
+        // saving a web asset reloads the panel (ChangeKind::WebAsset), no Studio rebuild.
+        orbit::studio_ui::HtmlPanelsUi htmlPanels;
+        {
+            std::filesystem::path webRoot;
+            if (const std::string configured = orbit::platform::EnvironmentVariable("ORBIT_WEB_ROOT");
+                !configured.empty())
+            {
+                webRoot = configured;
+            }
+            else
+            {
+                webRoot = std::filesystem::path(ORBIT_SOURCE_ROOT) / "apps" / "editor" / "web";
+            }
+            htmlPanels.Attach(ui, window.NativeHandle(), rpcHost.Dispatcher(), webRoot);
+            htmlPanels.RegisterRpc(rpcHost.Dispatcher());
+            htmlPanels.SetOpenExternalHandler(
+                [](const std::filesystem::path& page)
+                { orbit::platform::OpenWithDefaultApplication(page); });
+            const std::filesystem::path graphFolder =
+                std::filesystem::path(ORBIT_SOURCE_ROOT) / "docs" / "tree" / "rendering" / "lighting-inventory";
+            htmlPanels.Define({
+                .id = "architecture",
+                .title = "Architecture",
+                .folder = webRoot,
+                .page = "architecture_canvas.html",
+                .mounts = {{"data", graphFolder}, {"docs", std::filesystem::path(ORBIT_SOURCE_ROOT) / "docs"}},
+                .dock = orbit::editor_ui::DockRegion::Center,
+                .dockOrder = 60});
+        }
+        [[maybe_unused]] const auto webAssetHandler = orbit::hot_reload::AddHotIterationHandler(
+            orbit::hot_reload::ChangeKind::WebAsset,
+            [&htmlPanels](const orbit::hot_reload::HotIterationEvent& event)
+            { htmlPanels.ReloadForPath(event.path); });
 
         orbit::studio_ui::RegisterStudioRenderViewRpc(
             rpcHost.Dispatcher(),
@@ -3491,11 +3527,13 @@ int orbit::editor_app::StudioApplication::Run(
             {
                 static_cast<void>(ui.DrawPanelFullscreen(
                     orbit::studio_ui::kPrimaryViewportPanel));
+                htmlPanels.EndFrame();
                 studioViews.SetCompositionEnabled("studio.map", false);
             }
             else
             {
                 ui.DrawStudioShell();
+                htmlPanels.EndFrame();
                 studioViews.SetCompositionEnabled(
                     "studio.map",
                     ui.PanelVisible(

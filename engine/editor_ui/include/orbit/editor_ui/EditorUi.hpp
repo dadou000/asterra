@@ -39,6 +39,15 @@ struct UiSize
     f32 height{0.0F};
 };
 
+// A rectangle in the window's client pixels (the units ImGui draws in).
+struct UiRect
+{
+    f32 x{0.0F};
+    f32 y{0.0F};
+    f32 width{0.0F};
+    f32 height{0.0F};
+};
+
 struct TreeItemInteraction
 {
     bool open{false};
@@ -280,6 +289,9 @@ public:
         bool border = false);
     void EndChild();
     [[nodiscard]] UiSize ContentAvailable() const;
+    // The rest of the panel's content area from the cursor, in window client
+    // pixels. A native child window (an HTML panel's web view) is placed here.
+    [[nodiscard]] UiRect ContentScreenRect() const;
       [[nodiscard]] bool Selectable(std::string_view label, bool selected);
       [[nodiscard]] bool SelectableWithIcon(
           std::string_view label, bool selected, ToolbarIcon icon);

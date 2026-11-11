@@ -121,6 +121,21 @@ add_custom_command(TARGET OrbitStudio POST_BUILD
     COMMENT "Publishing unified Orbit Studio to repository root"
 )
 
+# The WebView2 loader is loaded at run time (Studio HTML panels). It sits beside
+# every Studio executable, like dxcompiler.dll; without it panels fall back to
+# "open in browser".
+if(ORBIT_WEBVIEW2_LOADER_DLL AND EXISTS "${ORBIT_WEBVIEW2_LOADER_DLL}")
+    add_custom_command(TARGET OrbitStudio POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ORBIT_WEBVIEW2_LOADER_DLL}"
+            "$<TARGET_FILE_DIR:OrbitStudio>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ORBIT_WEBVIEW2_LOADER_DLL}"
+            "${CMAKE_SOURCE_DIR}/WebView2Loader.dll"
+        COMMENT "Publishing the WebView2 loader beside Studio"
+    )
+endif()
+
 # Real-device Studio smoke gate. This is intentionally an explicit target
 # rather than an unconditional CTest because it creates a native window and
 # requires a working Vulkan graphics device.

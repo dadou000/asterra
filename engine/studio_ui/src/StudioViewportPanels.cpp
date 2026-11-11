@@ -1628,6 +1628,7 @@ void CloseSpecialistPanels(editor_ui::EditorUi& ui)
             "World Documents",
             "Project Settings",
             "Planning",
+            "Architecture",
             "Plugins"
         });
 }
@@ -1703,7 +1704,7 @@ void ActivateWorkspace(
         OpenCanonicalBrowser(ui, BrowserMode::World);
         // Last focus wins: Planning must come after Properties, otherwise the
         // centre dock keeps showing Project Browser and Planning looks closed.
-        OpenPanels(ui, {"Properties", "Planning"});
+        OpenPanels(ui, {"Properties", "Planning", "Architecture"});
         break;
 
     case WorkspaceMode::Debug:

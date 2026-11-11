@@ -2820,6 +2820,68 @@ def orbit_viewport_pose_set(
 
 
 @mcp.tool()
+def orbit_html_panel_list() -> dict[str, Any]:
+    """List Studio HTML panels (WebView2 pages): id, title, page, folder, open, hosted, ready, url, mounts,
+    and whether the WebView2 runtime is available."""
+    return _rpc("html.panel_list")
+
+
+@mcp.tool()
+def orbit_html_panel_open(
+    id: str,
+    page: str | None = None,
+    title: str | None = None,
+    folder: str | None = None,
+    mounts_json: str | None = None,
+) -> dict[str, Any]:
+    """Open and focus an HTML panel. The built-in 'architecture' panel needs only its id. To define a new one
+    pass page (relative to folder, default apps/editor/web) and optionally title/folder; mounts_json is a JSON
+    array of {name, folder} data folders the page can read through orbit_html_panel_read. Pages call
+    window.orbit.rpc(method, params) to reach the same RPC surface as these tools, and reload when saved."""
+    params: dict[str, Any] = {"id": id}
+    if page is not None:
+        params["page"] = page
+    if title is not None:
+        params["title"] = title
+    if folder is not None:
+        params["folder"] = folder
+    if mounts_json is not None:
+        mounts = json.loads(mounts_json)
+        if not isinstance(mounts, list):
+            raise ValueError("mounts_json must decode to a JSON array.")
+        params["mounts"] = mounts
+    return _rpc("html.panel_open", params)
+
+
+@mcp.tool()
+def orbit_html_panel_close(id: str) -> dict[str, Any]:
+    """Close an HTML panel."""
+    return _rpc("html.panel_close", {"id": id})
+
+
+@mcp.tool()
+def orbit_html_panel_reload(id: str) -> dict[str, Any]:
+    """Reload an HTML panel's page from disk (pages also reload automatically when saved)."""
+    return _rpc("html.panel_reload", {"id": id})
+
+
+@mcp.tool()
+def orbit_html_panel_read(id: str, path: str, mount: str | None = None) -> dict[str, Any]:
+    """Read a UTF-8 text file (at most 8 MiB) from an HTML panel's data mount (or its own folder when mount is
+    omitted). Returns text, size and mtime. Paths cannot leave the mount."""
+    params: dict[str, Any] = {"id": id, "path": path}
+    if mount is not None:
+        params["mount"] = mount
+    return _rpc("html.panel_read", params)
+
+
+@mcp.tool()
+def orbit_html_panel_emit(id: str, event: str, data_json: str = "null") -> dict[str, Any]:
+    """Push an event to an HTML panel's page (delivered to orbit.on(event, fn)); data_json is JSON text."""
+    return _rpc("html.panel_emit", {"id": id, "event": event, "data": json.loads(data_json)})
+
+
+@mcp.tool()
 def orbit_planning_list() -> dict[str, Any]:
     """List project implementation-plan bubbles, statuses, canvas positions, and schedule links."""
     return _rpc("planning.list")

@@ -1568,6 +1568,17 @@ ImageInteraction PanelContext::InteractiveImage(
     return result;
 }
 
+UiRect PanelContext::ContentScreenRect() const
+{
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const ImVec2 size = ImGui::GetContentRegionAvail();
+    return {
+        .x = origin.x,
+        .y = origin.y,
+        .width = std::max(size.x, 0.0F),
+        .height = std::max(size.y, 0.0F)};
+}
+
 UiSize PanelContext::ContentAvailable() const
 {
     const ImVec2 size =

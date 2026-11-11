@@ -4,6 +4,7 @@ add_library(OrbitStudioUi STATIC
     src/DebugTestRegistry.cpp
     src/DisplayDiagnosticsUi.cpp
     src/DisplayEyeRpc.cpp
+    src/HtmlPanelsUi.cpp
     src/ImplementationPlan.cpp
     src/ProfilerModel.cpp
     src/ProfilerPanelRpc.cpp
@@ -111,6 +112,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::RenderGraph
         Orbit::RenderView
         Orbit::Rpc
+        Orbit::WebView
         Orbit::Shading
         Orbit::StudioReports
         Orbit::StudioSession

@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script>
+// Show script errors on the page itself: the panel has no devtools console.
+window.addEventListener("error", e => {
+  const d = document.createElement("pre");
+  d.style.cssText = "position:fixed;z-index:99;left:0;top:46px;right:0;margin:0;background:#4a1212;color:#fff;padding:8px 12px;font:12px Consolas,monospace;white-space:pre-wrap";
+  d.textContent = "Script error: " + (e.message || "") + "  @ " + String(e.filename || "").split("/").pop() + ":" + (e.lineno || "?");
+  (document.body || document.documentElement).appendChild(d);
+});
+</script>
+
+<title>Architecture</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #12141a; --panel: #1a1d24; --line: #2a2f3a; --text: #dde1ea; --muted: #8e97a8; --accent: #6ea8ff;
+    --font: "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 var(--font); overflow: hidden; }
+  #bar { position: absolute; left: 0; right: 0; top: 0; height: 44px; display: flex; gap: 8px; align-items: center;
+         padding: 0 12px; overflow: hidden; white-space: nowrap; background: var(--panel); border-bottom: 1px solid var(--line); z-index: 3; }
+  #bar .title { font-weight: 600; font-size: 14px; margin-right: 4px; }
+  input[type=search] { background: #0e1015; border: 1px solid var(--line); color: var(--text); border-radius: 6px;
+                       padding: 5px 9px; width: 200px; font: inherit; }
+  button, .chip { background: #232833; border: 1px solid var(--line); color: var(--text); border-radius: 6px;
+                  padding: 5px 10px; font: inherit; cursor: pointer; }
+  button:hover, .chip:hover { border-color: var(--accent); }
+  .chip.off { opacity: .35; }
+  .chip i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .sep { width: 1px; height: 22px; background: var(--line); }
+  #stage { position: absolute; inset: 44px 0 0 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  #side { position: absolute; top: 44px; right: 0; bottom: 0; width: 360px; background: var(--panel);
+          border-left: 1px solid var(--line); padding: 14px 16px; overflow: auto; z-index: 2; transform: translateX(100%);
+          transition: transform .12s; }
+  #side.open { transform: none; }
+  #side h2 { margin: 0 0 2px; font-size: 16px; }
+  #side .mod { color: var(--muted); margin-bottom: 10px; }
+  #side h3 { margin: 14px 0 5px; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+  #side ul { margin: 0; padding-left: 0; list-style: none; }
+  #side li { margin: 5px 0; padding: 6px 8px; background: #20242d; border-radius: 6px; border-left: 3px solid var(--line); }
+  #side a { color: var(--accent); cursor: pointer; text-decoration: none; font-weight: 600; }
+  #side a:hover { text-decoration: underline; }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 3px 8px; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  code { font-family: Consolas, monospace; font-size: 11.5px; color: #b7c3d9; word-break: break-all; }
+  #tip { position: absolute; z-index: 4; pointer-events: none; background: #0a0c10; border: 1px solid var(--line);
+         border-radius: 8px; padding: 8px 11px; max-width: 340px; display: none; }
+  #tip b { display: block; font-size: 14px; }
+  #legend { position: absolute; left: 12px; bottom: 12px; z-index: 2; background: rgba(26,29,36,.94);
+            border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font-size: 12px; }
+  #legend div { margin: 3px 0; white-space: nowrap; }
+  #legend s { display: inline-block; width: 24px; height: 0; border-top: 2.5px solid; vertical-align: 3px; margin-right: 8px; }
+  #legend .pill { display: inline-block; font-size: 10px; font-weight: 700; padding: 0 6px; border-radius: 8px; margin-right: 8px; color: #0d0f14; }
+  #status { position: absolute; left: 12px; top: 52px; z-index: 2; color: var(--muted); font-size: 12px; }
+  #empty { position: absolute; inset: 44px 0 0 0; display: none; align-items: center; justify-content: center;
+           text-align: center; color: var(--muted); z-index: 1; }
+</style>
+<link rel="stylesheet" href="arch/views.css">
+</head>
+<body>
+<div id="tabs">
+  <button class="tab" data-tab="start">Start here<span class="sub">new to this?</span></button>
+  <button class="tab" data-tab="residency">Residency<span class="sub">CPU vs GPU</span></button>
+  <button class="tab" data-tab="timeline">Timeline<span class="sub">what happens when</span></button>
+  <button class="tab" data-tab="map">Map<span class="sub">everything connected</span></button>
+  <span class="grow"></span>
+  <label class="switch" title="Show everyday names instead of technical ones"><input type="checkbox" id="plainToggle"> Everyday words</label>
+</div>
+<div class="view" id="v-start"></div>
+<div class="view" id="v-residency"></div>
+<div class="view" id="v-timeline"></div>
+<div class="view" id="v-map">
+<div id="bar">
+  <span class="title">Architecture</span>
+  <input id="search" type="search" placeholder="Search systems (/)" autocomplete="off">
+  <button id="fit" title="Fit all (F)">Fit</button>
+  <button id="relayout" title="Reset node positions">Re-layout</button>
+  <span class="sep"></span>
+  <span id="resChips"></span>
+  <span class="sep"></span>
+  <span id="layerChips"></span>
+</div>
+<div id="stage"><canvas id="cv"></canvas></div>
+<div id="status"></div>
+<div id="empty"><div><b>No graph loaded</b><br>Drop a graph.json here, or open this panel inside Studio.</div></div>
+<div id="legend"></div>
+<div id="tip"></div>
+<div id="side"></div>
+</div>
+
+<script src="arch/common.js"></script>
+<script src="arch/plain.js"></script>
+<script src="arch/start.js"></script>
+<script src="arch/residency.js"></script>
+<script src="arch/timeline.js"></script>
+<script>
+"use strict";
+// ---- configuration -------------------------------------------------------
+const PANEL_ID = "architecture", MOUNT = "data", GRAPH_FILE = "graph.json";
+const LAYER_ORDER = ["source", "medium", "weather", "cloud", "control", "terrain", "lighting", "output"];
+const LAYER_TITLES = { source: "Sources", medium: "Atmosphere & medium", weather: "Weather", cloud: "Clouds", control: "Scheduling & control",
+                       terrain: "Terrain", lighting: "Lighting", output: "Output" };
+const LAYER_COLORS = { source: "#e8c25c", medium: "#6fb5e8", weather: "#6fd6c0", cloud: "#b9a7f2", control: "#f09a7a",
+                       terrain: "#9bcf6a", lighting: "#f4e27a", output: "#ef7fb0" };
+const RES_COLORS = { cpu: "#e0a84a", gpu: "#5aa9ff", "cpu->gpu": "#d46bd0", "cpu+gpu": "#7fd29a", offline: "#8b93a3" };
+const RES_LABEL = { cpu: "CPU", gpu: "GPU", "cpu->gpu": "CPU→GPU", "cpu+gpu": "CPU+GPU", offline: "OFFLINE" };
+const NODE_W = 250, NODE_H = 116, LANE_GAP = 74, ROW_GAP = 22, LANE_PAD = 16, LANE_HEAD = 50;
+const POLL_MS = 2000;
+
+// ---- state ---------------------------------------------------------------
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+let graph = null, nodes = new Map(), edges = [], out = new Map(), inc = new Map(), laneOf = new Map();
+let view = { x: 40, y: 40, k: 0.7 };
+let selected = null, hover = null, dragNode = null, panning = false, last = { x: 0, y: 0 }, moved = false, userMoved = false;
+let resOff = new Set(), layerOff = new Set(), query = "";
+let mtime = null, saved = {};
+let closure = null;   // { up:Set, down:Set } of the selected node
+const storeKey = "architecture.positions.v2";
+try { saved = JSON.parse(localStorage.getItem(storeKey) || "{}"); } catch { saved = {}; }
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const hasBridge = () => typeof window.orbit !== "undefined" && window.orbit.available;
+
+// ---- data ----------------------------------------------------------------
+async function loadText() {
+  if (hasBridge()) {
+    const r = await orbit.rpc("html.panel_read", { id: PANEL_ID, mount: MOUNT, path: GRAPH_FILE });
+    return { text: r.text, mtime: r.mtime };
+  }
+  const r = await fetch(GRAPH_FILE, { cache: "no-store" });
+  if (!r.ok) throw new Error("graph.json not found");
+  return { text: await r.text(), mtime: r.headers.get("last-modified") };
+}
+
+function setGraph(g) {
+  graph = g; nodes = new Map(); out = new Map(); inc = new Map();
+  for (const n of g.nodes) { const m = { ...n, x: 0, y: 0, w: NODE_W, h: NODE_H, tech: n.label }; m.label = Arch.name(m); nodes.set(n.id, m); }
+  edges = g.edges.filter(e => nodes.has(e.source) && nodes.has(e.target));
+  for (const n of nodes.keys()) { out.set(n, []); inc.set(n, []); }
+  for (const e of edges) { out.get(e.source).push(e); inc.get(e.target).push(e); }
+  layout(false);
+  buildChips(); buildLegend();
+  $("empty").style.display = "none";
+  $("status").textContent = `${nodes.size} systems · ${edges.length} flows — click a system to trace what feeds it and what it feeds`;
+  if (selected && !nodes.has(selected)) { selected = null; closure = null; closeSide(); }
+  else if (selected) { computeClosure(); openSide(selected); }
+  Arch.data = { graph, nodes, edges, out, inc };
+  draw();
+  Arch.notify();
+}
+
+function laneName(n) { return LAYER_ORDER.includes(n.layer) ? n.layer : "other"; }
+
+// Order the nodes inside each lane by the average position of their neighbours (barycentre sweeps)
+// so that connected systems sit near each other and edges cross less.
+function orderLanes() {
+  const lanes = new Map();
+  for (const n of nodes.values()) { const l = laneName(n); if (!lanes.has(l)) lanes.set(l, []); lanes.get(l).push(n); }
+  const names = [...LAYER_ORDER, "other"].filter(l => lanes.has(l));
+  const pos = new Map();
+  const reindex = () => { for (const l of names) lanes.get(l).forEach((n, i, a) => pos.set(n.id, a.length > 1 ? i / (a.length - 1) : 0.5)); };
+  reindex();
+  const bary = n => {
+    let s = 0, c = 0;
+    for (const e of out.get(n.id)) { s += pos.get(e.target); c++; }
+    for (const e of inc.get(n.id)) { s += pos.get(e.source); c++; }
+    return c ? s / c : pos.get(n.id);
+  };
+  for (let pass = 0; pass < 8; pass++) {
+    const seq = pass % 2 ? [...names].reverse() : names;
+    for (const l of seq) {
+      const arr = lanes.get(l), key = new Map(arr.map(n => [n.id, bary(n)]));
+      arr.sort((a, b) => key.get(a.id) - key.get(b.id));
+      reindex();
+    }
+  }
+  return { lanes, names };
+}
+
+function layout(force) {
+  const { lanes, names } = orderLanes();
+  laneOf = new Map();
+  let tallest = 0;
+  for (const l of names) tallest = Math.max(tallest, lanes.get(l).length * (NODE_H + ROW_GAP) - ROW_GAP);
+  let cx = 0;
+  for (const l of names) {
+    const arr = lanes.get(l), h = arr.length * (NODE_H + ROW_GAP) - ROW_GAP;
+    let cy = LANE_HEAD + (tallest - h) / 2;
+    for (const n of arr) {
+      const s = !force && saved[n.id];
+      n.x = s ? s.x : cx + LANE_PAD; n.y = s ? s.y : cy;
+      cy += NODE_H + ROW_GAP; laneOf.set(n.id, l);
+    }
+    cx += NODE_W + LANE_PAD * 2 + LANE_GAP;
+  }
+}
+
+function persist() {
+  const o = {};
+  for (const n of nodes.values()) o[n.id] = { x: Math.round(n.x), y: Math.round(n.y) };
+  saved = o;
+  try { localStorage.setItem(storeKey, JSON.stringify(o)); } catch {}
+}
+
+async function refresh(first) {
+  try {
+    const { text, mtime: m } = await loadText();
+    if (!first && m === mtime) return;
+    mtime = m;
+    setGraph(JSON.parse(text));
+    if (first) fit();
+  } catch (e) {
+    if (first) { $("empty").style.display = "flex"; $("status").textContent = String(e.message || e); }
+  }
+}
+
+// ---- helpers ---------------------------------------------------------------
+const visible = n => !resOff.has(n.residency) && !layerOff.has(n.layer);
+function matches(n) {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return (n.label + " " + n.module + " " + n.summary + " " + n.id).toLowerCase().includes(q);
+}
+function edgeColor(e) {
+  const t = e.transport || "";
+  if (t.startsWith("gpu->cpu")) return "#ee6b6b";
+  if (t.startsWith("cpu->gpu")) return RES_COLORS["cpu->gpu"];
+  if (t.startsWith("gpu")) return RES_COLORS.gpu;
+  if (t.startsWith("cpu")) return RES_COLORS.cpu;
+  return "#8a93a6";
+}
+function computeClosure() {
+  closure = null; if (!selected) return;
+  const walk = (start, adj, pick) => {
+    const seen = new Set([start]), stack = [start];
+    while (stack.length) { const id = stack.pop(); for (const e of adj.get(id) || []) { const o = pick(e); if (!seen.has(o)) { seen.add(o); stack.push(o); } } }
+    return seen;
+  };
+  closure = { up: walk(selected, inc, e => e.source), down: walk(selected, out, e => e.target) };
+}
+function focusId() { return selected || hover; }
+
+// ---- geometry ----------------------------------------------------------------
+function w2s(x, y) { return [x * view.k + view.x, y * view.k + view.y]; }
+function s2w(x, y) { return [(x - view.x) / view.k, (y - view.y) / view.k]; }
+
+// Edge path: leaves the side of the source that faces the target and enters the side of the target that faces
+// the source (horizontal tangents), with ports spread along the node so edges do not pile up on one point.
+function edgePath(e) {
+  const a = nodes.get(e.source), b = nodes.get(e.target);
+  const la = LAYER_ORDER.indexOf(laneName(a)), lb = LAYER_ORDER.indexOf(laneName(b));
+  const portY = (n, list, edge) => {
+    const i = list.indexOf(edge), c = list.length, span = Math.min(n.h - 26, 9 * (c - 1));
+    return n.y + n.h / 2 + (c > 1 ? (i / (c - 1) - 0.5) * span : 0);
+  };
+  const outs = out.get(a.id).slice().sort((p, q) => nodes.get(p.target).y - nodes.get(q.target).y);
+  const ins = inc.get(b.id).slice().sort((p, q) => nodes.get(p.source).y - nodes.get(q.source).y);
+  const y1 = portY(a, outs, e), y2 = portY(b, ins, e);
+  let x1, x2, c1, c2;
+  if (la === lb) {                       // same lane: loop around the right gutter
+    x1 = a.x + a.w; x2 = b.x + b.w; const bulge = 46;
+    c1 = [x1 + bulge, y1]; c2 = [x2 + bulge, y2];
+  } else if (a.x + a.w <= b.x) {         // forward: right side to left side
+    x1 = a.x + a.w; x2 = b.x; const d = Math.max(50, (x2 - x1) * 0.5);
+    c1 = [x1 + d, y1]; c2 = [x2 - d, y2];
+  } else {                               // backward: left side to right side
+    x1 = a.x; x2 = b.x + b.w; const d = Math.max(50, (x1 - x2) * 0.5);
+    c1 = [x1 - d, y1]; c2 = [x2 + d, y2];
+  }
+  return { p0: [x1, y1], c1, c2, p1: [x2, y2] };
+}
+function bez(p, t) {
+  const u = 1 - t, a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+  return [a * p.p0[0] + b * p.c1[0] + c * p.c2[0] + d * p.p1[0], a * p.p0[1] + b * p.c1[1] + c * p.c2[1] + d * p.p1[1]];
+}
+
+// ---- drawing -----------------------------------------------------------------
+function resize() {
+  const r = cv.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+  cv.width = Math.max(1, Math.round(r.width * d)); cv.height = Math.max(1, Math.round(r.height * d));
+  if (!userMoved && graph) fit(); else draw();
+}
+function rrect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function wrap(text, maxW, maxLines) {
+  const words = String(text).split(/\s+/), lines = []; let cur = "";
+  for (const w of words) {
+    const t = cur ? cur + " " + w : w;
+    if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t;
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > maxLines) { lines.length = maxLines; lines[maxLines - 1] = lines[maxLines - 1].replace(/.{0,2}$/, "…"); }
+  return lines;
+}
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// How strongly a node takes part in the current focus: 3 = focus, 2 = direct neighbour, 1 = transitive, 0 = unrelated.
+function relation(id) {
+  const f = focusId(); if (!f) return 3;
+  if (id === f) return 3;
+  const direct = (out.get(f) || []).some(e => e.target === id) || (inc.get(f) || []).some(e => e.source === id);
+  if (direct) return 2;
+  if (selected && closure && (closure.up.has(id) || closure.down.has(id))) return 1;
+  return 0;
+}
+
+function draw() {
+  const d = window.devicePixelRatio || 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#12141a"; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+  drawGrid();
+  if (!graph) return;
+  ctx.save(); ctx.translate(view.x, view.y); ctx.scale(view.k, view.k);
+  const focus = focusId();
+
+  // lane panels
+  const byLane = new Map();
+  for (const n of nodes.values()) { if (layerOff.has(n.layer)) continue; const l = laneName(n); if (!byLane.has(l)) byLane.set(l, []); byLane.get(l).push(n); }
+  for (const [l, arr] of byLane) {
+    const x1 = Math.min(...arr.map(n => n.x)) - LANE_PAD, y1 = Math.min(...arr.map(n => n.y)) - LANE_HEAD;
+    const x2 = Math.max(...arr.map(n => n.x + n.w)) + LANE_PAD, y2 = Math.max(...arr.map(n => n.y + n.h)) + LANE_PAD;
+    const col = LAYER_COLORS[l] || "#999";
+    rrect(x1, y1, x2 - x1, y2 - y1, 14); ctx.fillStyle = hexA(col, 0.055); ctx.fill();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = hexA(col, 0.28); ctx.stroke();
+    ctx.fillStyle = col; ctx.font = "700 19px Segoe UI, sans-serif"; ctx.textBaseline = "alphabetic";
+    ctx.fillText(LAYER_TITLES[l] || l, x1 + 16, y1 + 30);
+    ctx.fillStyle = hexA(col, 0.6); ctx.font = "13px Segoe UI, sans-serif";
+    const w = ctx.measureText(String(arr.length)).width; ctx.fillText(String(arr.length), x2 - 16 - w, y1 + 30);
+  }
+
+  // edges: quiet by default, vivid for the focus
+  for (const e of edges) {
+    const a = nodes.get(e.source), b = nodes.get(e.target);
+    if (!visible(a) || !visible(b)) continue;
+    const direct = focus && (e.source === focus || e.target === focus);
+    const chain = !direct && selected && closure &&
+      ((closure.down.has(e.source) && closure.down.has(e.target)) || (closure.up.has(e.source) && closure.up.has(e.target)));
+    const searchDim = query && !matches(a) && !matches(b);
+    let alpha, width, color = direct ? edgeColor(e) : "#6d788f";
+    if (direct) { alpha = 1; width = 2.8; }
+    else if (chain) { alpha = 0.55; width = 1.8; color = edgeColor(e); }
+    else if (focus) { alpha = 0.05; width = 1.2; }
+    else { alpha = 0.4; width = 1.4; }
+    if (searchDim) alpha *= 0.3;
+    const p = edgePath(e);
+    ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineWidth = width;
+    ctx.setLineDash(e.kind === "data" ? [] : e.kind === "invalidates" ? [3, 5] : [9, 6]);
+    ctx.beginPath(); ctx.moveTo(...p.p0); ctx.bezierCurveTo(...p.c1, ...p.c2, ...p.p1); ctx.stroke(); ctx.setLineDash([]);
+    // arrow head along the final tangent
+    const ang = Math.atan2(p.p1[1] - p.c2[1], p.p1[0] - p.c2[0]), s = direct ? 12 : 9;
+    ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(...p.p1);
+    ctx.lineTo(p.p1[0] - s * Math.cos(ang - .4), p.p1[1] - s * Math.sin(ang - .4));
+    ctx.lineTo(p.p1[0] - s * Math.cos(ang + .4), p.p1[1] - s * Math.sin(ang + .4)); ctx.closePath(); ctx.fill();
+    if (direct && e.label) {
+      const [mx, my] = bez(p, 0.5);
+      ctx.globalAlpha = 1; ctx.font = "600 13px Segoe UI, sans-serif";
+      const lines = [e.label, (e.transport || "") + (e.size ? " · " + e.size : "")].filter(Boolean);
+      const tw = Math.max(...lines.map(t => ctx.measureText(t).width)), th = lines.length * 16 + 8;
+      rrect(mx - tw / 2 - 8, my - th / 2, tw + 16, th, 6); ctx.fillStyle = "#0a0c10"; ctx.fill();
+      ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = "#eef1f7"; lines.forEach((t, i) => { ctx.font = (i ? "12px" : "600 13px") + " Segoe UI, sans-serif"; ctx.fillStyle = i ? "#9aa4b8" : "#eef1f7"; ctx.fillText(t, mx - tw / 2, my - th / 2 + 18 + i * 16); });
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // nodes
+  const full = view.k > 0.42;
+  for (const n of nodes.values()) {
+    if (!visible(n)) continue;
+    const rel = relation(n.id), isSel = n.id === selected, isHot = n.id === hover;
+    const dim = (rel === 0) || !matches(n);
+    ctx.globalAlpha = dim ? 0.16 : rel === 1 ? 0.7 : 1;
+    const lc = LAYER_COLORS[laneName(n)] || "#999";
+    rrect(n.x, n.y, n.w, n.h, 10);
+    ctx.fillStyle = "#222733"; ctx.fill();
+    ctx.lineWidth = isSel ? 3 : 1.4;
+    ctx.strokeStyle = isSel ? "#ffffff" : isHot ? "#6ea8ff" : rel === 2 ? hexA(lc, 0.9) : "#3a4252"; ctx.stroke();
+    ctx.fillStyle = lc; ctx.beginPath(); ctx.roundRect(n.x, n.y, 6, n.h, [10, 0, 0, 10]); ctx.fill();
+
+    if (full) {
+      // residency pill (top right)
+      const pill = RES_LABEL[n.residency] || n.residency, pc = RES_COLORS[n.residency] || "#777";
+      ctx.font = "700 11px Segoe UI, sans-serif"; const pw = ctx.measureText(pill).width + 14;
+      rrect(n.x + n.w - pw - 10, n.y + 9, pw, 18, 9); ctx.fillStyle = pc; ctx.fill();
+      ctx.fillStyle = "#0d0f14"; ctx.fillText(pill, n.x + n.w - pw - 3, n.y + 22);
+      // title
+      ctx.fillStyle = "#eef1f7"; ctx.font = "600 15.5px Segoe UI, sans-serif";
+      wrap(n.label, n.w - 26 - (n.residency ? 0 : 0), 3).forEach((t, i) => ctx.fillText(t, n.x + 16, n.y + 46 + i * 18 - (i === 0 ? 0 : 0)));
+      // footer: update rate + status
+      ctx.fillStyle = "#8e97a8"; ctx.font = "12px Segoe UI, sans-serif";
+      const sub = [n.update_rate, n.status === "experimental" ? "experimental" : ""].filter(Boolean).join("  ·  ");
+      if (sub) ctx.fillText(sub, n.x + 16, n.y + n.h - 12);
+    } else {
+      ctx.fillStyle = "#eef1f7"; ctx.font = "600 24px Segoe UI, sans-serif";
+      wrap(n.label, n.w - 26, 2).forEach((t, i) => ctx.fillText(t, n.x + 16, n.y + 40 + i * 28));
+    }
+    // residency strip along the bottom edge
+    drawResidency(n);
+  }
+  ctx.globalAlpha = 1; ctx.restore();
+  drawMinimap();
+}
+
+function drawResidency(n) {
+  const y = n.y + n.h - 4, x = n.x + 14, w = n.w - 28, h = 3, r = n.residency;
+  if (r === "cpu->gpu") { const g = ctx.createLinearGradient(x, 0, x + w, 0); g.addColorStop(0, RES_COLORS.cpu); g.addColorStop(1, RES_COLORS.gpu); ctx.fillStyle = g; ctx.fillRect(x, y, w, h); }
+  else if (r === "cpu+gpu") { ctx.fillStyle = RES_COLORS.cpu; ctx.fillRect(x, y, w / 2, h); ctx.fillStyle = RES_COLORS.gpu; ctx.fillRect(x + w / 2, y, w / 2, h); }
+  else { ctx.fillStyle = RES_COLORS[r] || "#777"; ctx.fillRect(x, y, w, h); }
+}
+function drawGrid() {
+  const step = 48 * view.k; if (step < 10) return;
+  const r = cv.getBoundingClientRect(); ctx.fillStyle = "rgba(255,255,255,.04)";
+  const ox = ((view.x % step) + step) % step, oy = ((view.y % step) + step) % step;
+  for (let x = ox; x < r.width; x += step) for (let y = oy; y < r.height; y += step) ctx.fillRect(x, y, 1.5, 1.5);
+}
+
+let mini = null;
+function drawMinimap() {
+  const vis = [...nodes.values()].filter(visible); if (!vis.length) return;
+  const r = cv.getBoundingClientRect(), W = 190, H = 96, px = r.width - W - 14 - ($("side").classList.contains("open") ? 360 : 0), py = r.height - H - 12;
+  const b = bounds(vis), s = Math.min(W / (b.w || 1), H / (b.h || 1));
+  mini = { px, py, W, H, s, b };
+  ctx.save(); ctx.globalAlpha = .94; ctx.fillStyle = "#1a1d24"; ctx.strokeStyle = "#2a2f3a"; ctx.fillRect(px, py, W, H); ctx.strokeRect(px, py, W, H);
+  for (const n of vis) { ctx.fillStyle = LAYER_COLORS[laneName(n)] || "#999"; ctx.fillRect(px + (n.x - b.x) * s, py + (n.y - b.y) * s, Math.max(2, n.w * s), Math.max(2, n.h * s)); }
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 1;
+  const [vx, vy] = s2w(0, 0), [vx2, vy2] = s2w(r.width, r.height);
+  ctx.strokeRect(px + (vx - b.x) * s, py + (vy - b.y) * s, (vx2 - vx) * s, (vy2 - vy) * s);
+  ctx.restore();
+}
+function bounds(list) {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const n of list) { x1 = Math.min(x1, n.x); y1 = Math.min(y1, n.y - LANE_HEAD); x2 = Math.max(x2, n.x + n.w); y2 = Math.max(y2, n.y + n.h); }
+  return { x: x1 - LANE_PAD, y: y1, w: x2 - x1 + LANE_PAD * 2, h: y2 - y1 + LANE_PAD };
+}
+function fit() {
+  userMoved = false;
+  const vis = [...nodes.values()].filter(visible); if (!vis.length) { draw(); return; }
+  const b = bounds(vis), r = cv.getBoundingClientRect(), pad = 24, top = 30;
+  const side = $("side").classList.contains("open") ? 360 : 0;
+  const k = Math.min((r.width - side - pad * 2) / b.w, (r.height - top - pad * 2) / b.h, 1.4);
+  view.k = Math.max(0.1, k);
+  view.x = pad + (r.width - side - pad * 2 - b.w * view.k) / 2 - b.x * view.k;
+  view.y = top + pad + (r.height - top - pad * 2 - b.h * view.k) / 2 - b.y * view.k;
+  draw();
+}
+
+// ---- interaction -------------------------------------------------------------
+function pick(sx, sy) {
+  const [x, y] = s2w(sx, sy), arr = [...nodes.values()];
+  for (let i = arr.length - 1; i >= 0; i--) { const n = arr[i]; if (visible(n) && x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h) return n; }
+  return null;
+}
+function local(e) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+let dragMini = false;
+cv.addEventListener("pointerdown", e => {
+  cv.setPointerCapture(e.pointerId);
+  const [x, y] = local(e); last = { x, y }; moved = false;
+  if (mini && x >= mini.px && x <= mini.px + mini.W && y >= mini.py && y <= mini.py + mini.H) { miniJump(x, y); dragMini = true; return; }
+  const n = pick(x, y);
+  if (n) dragNode = n; else panning = true;
+  cv.classList.add("dragging");
+});
+function miniJump(x, y) {
+  const r = cv.getBoundingClientRect(), wx = (x - mini.px) / mini.s + mini.b.x, wy = (y - mini.py) / mini.s + mini.b.y;
+  userMoved = true; view.x = r.width / 2 - wx * view.k; view.y = r.height / 2 - wy * view.k; draw();
+}
+cv.addEventListener("pointermove", e => {
+  const [x, y] = local(e);
+  if (dragMini) { miniJump(x, y); return; }
+  if (dragNode) {
+    if (Math.abs(x - last.x) + Math.abs(y - last.y) > 3) moved = true;
+    if (moved) { dragNode.x += (x - last.x) / view.k; dragNode.y += (y - last.y) / view.k; last = { x, y }; draw(); }
+    return;
+  }
+  if (panning) { userMoved = true; view.x += x - last.x; view.y += y - last.y; last = { x, y }; moved = true; draw(); return; }
+  const n = pick(x, y), id = n ? n.id : null;
+  if (id !== hover) { hover = id; draw(); }
+  showTip(n, e.clientX, e.clientY);
+});
+cv.addEventListener("pointerup", () => {
+  const wasNode = dragNode, wasPan = panning;
+  if (dragNode && moved) persist();
+  if (!moved) {
+    if (wasNode) { selected = wasNode.id; computeClosure(); revealNode(wasNode); openSide(wasNode.id); }
+    else if (wasPan && !dragMini) { selected = null; closure = null; closeSide(); }
+  }
+  dragNode = null; panning = false; dragMini = false; cv.classList.remove("dragging"); draw();
+});
+cv.addEventListener("pointerleave", () => { hover = null; $("tip").style.display = "none"; draw(); });
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  const [x, y] = local(e), f = Math.exp(-e.deltaY * 0.0015), k = Math.min(3, Math.max(0.1, view.k * f)), s = k / view.k;
+  userMoved = true; view.x = x - (x - view.x) * s; view.y = y - (y - view.y) * s; view.k = k; draw();
+}, { passive: false });
+cv.addEventListener("dblclick", e => { const [x, y] = local(e); if (!pick(x, y)) fit(); });
+
+function showTip(n, cx, cy) {
+  const t = $("tip");
+  if (!n || dragNode || panning) { t.style.display = "none"; return; }
+  t.innerHTML = `<b>${esc(n.label)}</b><span style="color:var(--muted)">${esc(n.module)}</span><div style="margin-top:4px">${esc(n.summary)}</div>`;
+  t.style.display = "block";
+  const r = cv.getBoundingClientRect();
+  t.style.left = Math.min(cx - r.left + 18, r.width - 360) + "px"; t.style.top = Math.min(cy - r.top + 60, r.height - 80) + "px";
+}
+window.addEventListener("keydown", e => {
+  if (Arch.current !== "map") return;
+  if (e.target.tagName === "INPUT") { if (e.key === "Escape") { e.target.value = ""; query = ""; e.target.blur(); draw(); } return; }
+  if (e.key === "/") { e.preventDefault(); $("search").focus(); }
+  else if (e.key === "f" || e.key === "F") fit();
+  else if (e.key === "Escape") { selected = null; closure = null; closeSide(); draw(); }
+});
+$("search").addEventListener("input", e => { query = e.target.value.trim(); draw(); });
+$("fit").onclick = fit;
+$("relayout").onclick = () => { layout(true); persist(); fit(); };
+
+// ---- side panel ----------------------------------------------------------------
+function link(id, text) { return `<a data-id="${esc(id)}">${esc(text)}</a>`; }
+function openSide(id) {
+  const n = nodes.get(id); if (!n) return;
+  const o = out.get(id) || [], i = inc.get(id) || [];
+  const list = (arr, other) => arr.length ? "<ul>" + arr.map(e => {
+    const m = nodes.get(other(e));
+    return `<li style="border-left-color:${edgeColor(e)}">${link(m.id, m.label)}<br>` +
+           `<span style="color:${edgeColor(e)}">${esc(e.transport || e.kind || "")}</span>` +
+           `${e.label ? " · " + esc(e.label) : ""}${e.size ? " · " + esc(e.size) : ""}${e.update_rate ? " · " + esc(e.update_rate) : ""}</li>`;
+  }).join("") + "</ul>" : '<div style="color:var(--muted)">none</div>';
+  $("side").innerHTML = `
+    <h2>${esc(n.label)}</h2><div class="mod">${esc(n.module)}</div>
+    <div>${esc(n.summary)}</div>
+    <h3>Properties</h3>
+    <div class="kv"><span>Layer</span><span>${esc(LAYER_TITLES[n.layer] || n.layer)}</span>
+      <span>Residency</span><span style="color:${RES_COLORS[n.residency] || "inherit"}">${esc(RES_LABEL[n.residency] || n.residency)}</span>
+      <span>Size</span><span>${esc(n.size || "—")}</span><span>Updates</span><span>${esc(n.update_rate || "—")}</span>
+      <span>Status</span><span>${esc(n.status || "—")}</span></div>
+    <h3>Fed by (${i.length})</h3>${list(i, e => e.source)}
+    <h3>Feeds (${o.length})</h3>${list(o, e => e.target)}
+    <h3>Sources</h3><ul>${(n.sources || []).map(s => `<li><code>${esc(s)}</code></li>`).join("") || "<li>—</li>"}</ul>
+    ${n.doc ? `<h3>Doc</h3><code>${esc(n.doc)}</code>` : ""}
+    ${hasBridge() ? `<h3>Plan</h3><button id="toPlan">Add to implementation plan</button> <span id="planMsg" style="color:var(--muted)"></span>` : ""}`;
+  $("side").classList.add("open");
+  $("side").querySelectorAll("a[data-id]").forEach(a => a.onclick = () => focusNode(a.dataset.id));
+  const b = $("toPlan");
+  if (b) b.onclick = async () => {
+    try { await orbit.rpc("planning.create", { title: n.label, description: `${n.module}\n${n.summary}` }); $("planMsg").textContent = "added"; }
+    catch (err) { $("planMsg").textContent = String(err.message || err); }
+  };
+  draw();
+}
+// Keep the selected node clear of the sidebar that is about to open over the right edge.
+function revealNode(n) {
+  const r = cv.getBoundingClientRect(), right = r.width - 360 - 24;
+  const sx2 = n.x * view.k + view.x + n.w * view.k, sx1 = n.x * view.k + view.x;
+  if (sx2 > right) { userMoved = true; view.x -= Math.min(sx2 - right, sx1 - 24); }
+}
+function closeSide() { $("side").classList.remove("open"); draw(); }
+function focusNode(id) {
+  const n = nodes.get(id); if (!n) return;
+  selected = id; computeClosure(); userMoved = true;
+  const r = cv.getBoundingClientRect(), side = 360;
+  view.x = (r.width - side) / 2 - (n.x + n.w / 2) * view.k; view.y = r.height / 2 - (n.y + n.h / 2) * view.k;
+  openSide(id);
+}
+
+// ---- chips and legend ------------------------------------------------------------
+function chip(label, color, off, toggle) {
+  const b = document.createElement("span"); b.className = "chip" + (off ? " off" : "");
+  b.innerHTML = `<i style="background:${color}"></i>${esc(label)}`; b.onclick = () => { toggle(); buildChips(); draw(); };
+  return b;
+}
+function buildChips() {
+  const rc = $("resChips"), lc = $("layerChips"); rc.innerHTML = ""; lc.innerHTML = "";
+  for (const r of [...new Set([...nodes.values()].map(n => n.residency))])
+    rc.appendChild(chip(RES_LABEL[r] || r, RES_COLORS[r] || "#777", resOff.has(r), () => resOff.has(r) ? resOff.delete(r) : resOff.add(r)));
+  for (const l of LAYER_ORDER.filter(l => [...nodes.values()].some(n => n.layer === l)))
+    lc.appendChild(chip(LAYER_TITLES[l] || l, LAYER_COLORS[l], layerOff.has(l), () => layerOff.has(l) ? layerOff.delete(l) : layerOff.add(l)));
+  [...rc.children, ...lc.children].forEach(c => c.style.marginRight = "3px");
+}
+function buildLegend() {
+  const pill = (t, c) => `<span class="pill" style="background:${c}">${t}</span>`;
+  $("legend").innerHTML =
+    `<div style="color:var(--muted);font-weight:600;margin-bottom:2px">Where it lives</div>` +
+    `<div>${pill("CPU", RES_COLORS.cpu)}${pill("GPU", RES_COLORS.gpu)}${pill("CPU→GPU", RES_COLORS["cpu->gpu"])}${pill("CPU+GPU", RES_COLORS["cpu+gpu"])}</div>` +
+    `<div style="color:var(--muted);font-weight:600;margin:6px 0 2px">Flows (shown on selection)</div>` +
+    `<div><s style="border-color:${RES_COLORS.cpu}"></s>cpu</div><div><s style="border-color:${RES_COLORS.gpu}"></s>gpu</div>` +
+    `<div><s style="border-color:${RES_COLORS["cpu->gpu"]}"></s>cpu → gpu upload</div><div><s style="border-color:#ee6b6b"></s>gpu → cpu readback</div>` +
+    `<div><s style="border-color:#8a93a6;border-top-style:dashed"></s>control / invalidation</div>`;
+}
+
+// ---- drop a graph file (browser fallback) --------------------------------------------
+addEventListener("dragover", e => e.preventDefault());
+addEventListener("drop", async e => {
+  e.preventDefault(); const f = e.dataTransfer.files[0]; if (!f) return;
+  try { setGraph(JSON.parse(await f.text())); fit(); } catch (err) { $("status").textContent = "Not a graph file: " + err.message; }
+});
+
+// ---- tabs ----
+document.querySelectorAll("#tabs .tab").forEach(b => b.onclick = () => Arch.show(b.dataset.tab));
+try { Arch.plain = localStorage.getItem("architecture.plain") === "1"; } catch {}
+$("plainToggle").checked = Arch.plain;
+$("plainToggle").onchange = e => {
+  Arch.plain = e.target.checked;
+  try { localStorage.setItem("architecture.plain", Arch.plain ? "1" : "0"); } catch {}
+  for (const n of nodes.values()) n.label = Arch.name(n);
+  draw(); if (selected) openSide(selected); Arch.notify();
+};
+let firstTab = "start";
+try { firstTab = localStorage.getItem("architecture.tab") || "start"; } catch {}
+
+// ---- boot --------------------------------------------------------------------------
+new ResizeObserver(resize).observe(cv);
+if (hasBridge()) orbit.on?.("graph.changed", () => refresh(false));
+Arch.show(firstTab);
+resize(); refresh(true);
+setInterval(() => refresh(false), POLL_MS);
+</script>
+</body>
+</html>

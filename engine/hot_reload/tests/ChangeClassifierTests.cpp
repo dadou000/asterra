@@ -51,6 +51,13 @@ int main()
         !Expect("engine/terrain/src/4913", ChangeKind::Ignored) ||
         !Expect("engine/terrain/src/sedimentation", ChangeKind::RestartRequired) ||
         !Expect("engine/hot_reload_probe/src/HotReloadProbe.cpp", ChangeKind::NativeModule) ||
+        // Studio HTML panel pages reload in place.
+        !Expect("apps/editor/web/architecture_canvas.html", ChangeKind::WebAsset) ||
+        !Expect("C:/work/apps/editor/web/lib/graph.js", ChangeKind::WebAsset) ||
+        !Expect("apps/editor/web/theme.css", ChangeKind::WebAsset) ||
+        !Expect("engine/studio_ui/web/panel.mjs", ChangeKind::WebAsset) ||
+        !Expect("apps/editor/web/architecture_canvas.html.orbit-write.tmp", ChangeKind::Ignored) ||
+        !Expect("docs/web/page.html", ChangeKind::Ignored) ||
         !Expect("README.md", ChangeKind::Ignored))
     {
         return 1;

@@ -152,6 +152,17 @@ ChangeKind ClassifyChange(const std::filesystem::path& path)
         return ChangeKind::Script;
     }
 
+    // Studio HTML panel pages live in a web/ folder (apps/editor/web, engine/<module>/web).
+    if ((generic.starts_with("apps/") || generic.starts_with("engine/") ||
+         generic.find("/apps/") != std::string::npos || generic.find("/engine/") != std::string::npos) &&
+        generic.find("/web/") != std::string::npos &&
+        IsOneOf(
+            extension,
+            {".html", ".htm", ".js", ".mjs", ".css", ".svg", ".json", ".woff2", ".woff", ".png", ".jpg", ".webp"}))
+    {
+        return ChangeKind::WebAsset;
+    }
+
     if (filename.ends_with(".orbitimport.toml") ||
         IsOneOf(
             extension,
@@ -197,6 +208,8 @@ std::string_view ChangeKindName(const ChangeKind kind) noexcept
         return "shader";
     case ChangeKind::EngineShader:
         return "engine-shader";
+    case ChangeKind::WebAsset:
+        return "web-asset";
     case ChangeKind::Script:
         return "script";
     case ChangeKind::Content:
